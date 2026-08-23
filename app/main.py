@@ -54,10 +54,26 @@ from .corpus import (CORPUS_STORE, RESIDENT, canonical_digest, may_read_whole,
                      whole_read_refusal)
 from .corpus import describe as corpus_describe
 from .digest_index import INDEX as DIGEST_INDEX
+from .invites import Invites, invite_store_from_env, offerable, parse_offer
+from .invites import describe as invite_describe
+from .rooms import RoomDescriptor
 from .store import describe as snapshot_describe
+from .store import describe_rooms as room_describe
 from . import ws as _ws
 from .ws import (ACL_STORE, SNAPSHOT_STORE, authorize, groups, load_acl,
                  save_acl, ws_router)
+
+
+#: Where the invitations live. HTTP-only on purpose: the relay never mints or
+#: reads one — a link is how somebody ARRIVES, and by the time a socket opens the
+#: ACL is already the only thing that matters. Kept beside the ACLs by
+#: `invite_store_from_env`, because they are the same room's operational state.
+INVITE_STORE = invite_store_from_env()
+
+
+def invites() -> Invites:
+    """The invitation register, resolved when asked (same reason as `rooms()`)."""
+    return Invites(INVITE_STORE)
 
 
 def rooms():
@@ -205,6 +221,15 @@ class Health(BaseModel):
     #: reads a licence and an embargo out of. An operator who reads "memory" knows
     #: the rights they declared die with the process.
     corpus_store: str = "memory"
+    #: where the DURABLE ROOM RECORDS live — the register that makes a room a
+    #: place instead of a side effect of somebody connecting. An operator who
+    #: reads "memory" knows their room titles and container references die with
+    #: the process.
+    room_store: str = "memory"
+    #: …and where the INVITATIONS live. It holds no usable link (only a digest of
+    #: each secret), but a deployment whose invites die on restart hands people a
+    #: URL that stops working for no visible reason.
+    invite_store: str = "memory"
 
 
 @v1_public.get("/health", response_model=Health, tags=["meta"])
@@ -239,6 +264,8 @@ def health() -> Health:
         asset_store=asset_describe(ASSET_STORE),
         acl_store=acl_describe(ACL_STORE),
         corpus_store=corpus_describe(CORPUS_STORE),
+        room_store=room_describe(rooms().rooms_store),
+        invite_store=invite_describe(INVITE_STORE),
         rooms=len(rooms().rooms()),
     )
 
@@ -1449,6 +1476,355 @@ async def remove_member(room_id: str, orcid: str, request: Request) -> Members:
                    members=[MemberOut(orcid=k, role=v.value)
                             for k, v in sorted(acl.members.items())],
                    your_role=role.value)
+
+
+# ── the room register: a room is a PLACE, and a place can be listed ──────────
+#
+# A room used to exist only as a side effect: somebody connected, and a container
+# with that name was found or invented. You could not name one, list one, or
+# invite anybody to one. The durable record (`rooms.RoomDescriptor`) fixes that
+# and stays THIN — `{room_id, title, container_refs, created_by, created_at}` —
+# with two consequences visible in the API below:
+#
+# * `members` in a response is **projected from the ACL**, never stored in the
+#   record. One membership truth, and it is `access.py`'s;
+# * `container_refs` is a LIST, because a room is a workspace that references
+#   1..N containers, while a *study* is the published unit the Catalog cites. A
+#   room with one reference behaves exactly as it always did.
+
+
+class RoomRefIn(BaseModel):
+    room_id: str = Field(description="the id this room is reachable by")
+    title: str = Field(default="", description="what people call it")
+    container_refs: List[str] = Field(
+        default_factory=list,
+        description="the em.json containers it works on (default: the room id)")
+
+
+class RoomOut(BaseModel):
+    room_id: str
+    title: str
+    container_refs: List[str]
+    created_by: Optional[str] = None
+    created_at: Optional[str] = None
+    archived_at: Optional[str] = None
+    #: True when nobody declared this room: it predates the register and is
+    #: described from its name alone. Said out loud rather than hidden, because
+    #: "this room has no record" is a real state during a migration.
+    implicit: bool = False
+    #: PROJECTED from the ACL. Not stored here — see the note above.
+    owner: Optional[str] = None
+    members: List[MemberOut] = Field(default_factory=list)
+    #: what the CALLER may do here, so a UI draws the right buttons without a
+    #: second request
+    your_role: Optional[str] = None
+    #: containers this room points at that the snapshot store does not have.
+    #: REPORTED, never raised: a workspace whose container was moved still exists,
+    #: and the honest answer is the name of what is missing.
+    missing_refs: List[str] = Field(default_factory=list)
+
+
+def _describe_room(descriptor: RoomDescriptor, *, role: Optional[Role] = None,
+                   with_members: bool = True) -> RoomOut:
+    """One room, described. The ACL is read HERE and projected — the record has
+    no idea who the members are, which is what keeps it from disagreeing."""
+    acl = load_acl(descriptor.room_id)
+    members: List[MemberOut] = []
+    if with_members:
+        members = [MemberOut(orcid=k, role=v.value)
+                   for k, v in sorted(acl.members.items())]
+    return RoomOut(
+        room_id=descriptor.room_id, title=descriptor.title,
+        container_refs=list(descriptor.container_refs),
+        created_by=descriptor.created_by, created_at=descriptor.created_at,
+        archived_at=descriptor.archived_at, implicit=descriptor.implicit,
+        owner=acl.owner, members=members,
+        your_role=getattr(role, "value", None),
+        missing_refs=rooms().missing_refs(descriptor))
+
+
+def _caller_identity(request: Request) -> tuple:
+    """`(orcid, dev_mode)` from the token — the same three-line resolution
+    `_acting_role` uses, factored out for the routes that must NOT materialise a
+    live room just to answer a question about the register.
+
+    NOT called `_caller`: this module already has one of those (further down, the
+    corpus's), which returns just the ORCID. Two functions with one name is a
+    collision the interpreter resolves silently and in whichever order the file
+    happens to be written — caught here before it shipped, by reading the corpus
+    endpoint rather than by a failing test.
+    """
+    principal = authenticator.require_token(request)
+    dev_mode = bool(principal.get("em_dev_mode"))
+    orcid = None if dev_mode else (principal.get("orcid")
+                                   or principal.get("preferred_username")
+                                   or principal.get("sub"))
+    return orcid, dev_mode
+
+
+@v1.get("/rooms", response_model=List[RoomOut], tags=["rooms"])
+async def list_rooms(request: Request) -> List[RoomOut]:
+    """The rooms this caller has a grant in.
+
+    **A listing is not a discovery service.** What comes back is what the ACL
+    grants — owner, member, or a group they are in — and NOT every public room on
+    the instance: a public study is readable by anybody who has its name, which is
+    a different statement from "here is everything this server holds". In dev mode
+    (no OIDC, no identities) everything is listed, for the same reason `authorize`
+    makes dev mode owner: there is nobody to distinguish.
+
+    Declared rooms only. A room that exists as a snapshot and was never declared
+    is reachable by name and absent from here — inventing entries for it would
+    make the register a guess about what somebody meant.
+    """
+    orcid, dev_mode = _caller_identity(request)
+    expander = groups().expander()
+    out: List[RoomOut] = []
+    for descriptor in rooms().declared():
+        if dev_mode:
+            role = Role.OWNER
+        else:
+            role = load_acl(descriptor.room_id).role_for(orcid, groups_of=expander)
+            if role is None:
+                continue
+        # the member list is for admins; a listing shows the room, not the team
+        out.append(_describe_room(descriptor, role=role,
+                                  with_members=bool(role and role.can_manage)))
+    return out
+
+
+@v1.post("/rooms", response_model=RoomOut, status_code=201, tags=["rooms"])
+async def create_room(body: RoomRefIn, request: Request) -> RoomOut:
+    """Declare a room. It exists from here: empty, listable, nobody connected.
+
+    Whoever creates it is its **owner**, written into the ACL — the same place
+    every other grant lives. An identity is required for exactly that reason: a
+    room owned by nobody is a room nobody can hand out access to (which is the
+    hole `access.claim_owner` exists to patch for rooms that predate this).
+    """
+    orcid, dev_mode = _caller_identity(request)
+    room_id = body.room_id.strip()
+    if not room_id or any(c in room_id for c in "/\\ "):
+        raise HTTPException(status_code=400,
+                            detail="a room id is one path segment, no spaces")
+    if not rooms().descriptor(room_id).implicit:
+        raise HTTPException(status_code=409,
+                            detail=f"room {room_id!r} is already declared")
+    if not orcid and not dev_mode:
+        raise HTTPException(
+            status_code=401,
+            detail="creating a room needs an identity: its creator is its owner")
+
+    descriptor = rooms().create(room_id, title=body.title,
+                               container_refs=body.container_refs or None,
+                               created_by=orcid)
+    if orcid:
+        acl = load_acl(room_id)
+        if not acl.owner:
+            acl.owner = orcid
+            save_acl(room_id, acl)
+    return _describe_room(descriptor, role=Role.OWNER)
+
+
+@v1.get("/rooms/{room_id}", response_model=RoomOut, tags=["rooms"])
+async def get_room(room_id: str, request: Request) -> RoomOut:
+    """One room's record. Needs a role — the same door as everything else.
+
+    Note what this does NOT do: it does not open the room. A record can be read
+    without materialising a working copy, which is what makes the register usable
+    from a list view.
+    """
+    _acl, _room, role, _who = await _acting_role(room_id, request)
+    if role is None:
+        raise HTTPException(status_code=403, detail="not a member of this room")
+    return _describe_room(rooms().descriptor(room_id), role=role,
+                          with_members=bool(role.can_manage))
+
+
+class ArchiveIn(BaseModel):
+    archived: bool = Field(default=True,
+                           description="false brings the room back")
+
+
+@v1.post("/rooms/{room_id}/archive", response_model=RoomOut, tags=["rooms"])
+async def archive_room(room_id: str, body: ArchiveIn,
+                       request: Request) -> RoomOut:
+    """Mark a room archived, or bring it back. Owner and admin only.
+
+    **Not a deletion, and there is no deletion.** A room whose container was
+    moved, or whose dig is over for the season, is marked — it stays listed, it
+    keeps its title, its creator and its references, and it says when it was
+    archived. A sweep that removed such rooms would be a policy nobody wrote
+    down, running on a schedule; `GET /v1/rooms` already reports what is
+    dangling (`missing_refs`), and what to do about it is a person's call.
+    """
+    _acl, _room, role, _who = await _acting_role(room_id, request)
+    if role is None or not role.can_manage:
+        raise HTTPException(status_code=403,
+                            detail="archiving a room needs admin or owner")
+    descriptor = rooms().descriptor(room_id)
+    if descriptor.implicit:
+        raise HTTPException(
+            status_code=404,
+            detail=f"room {room_id!r} has no record to archive: it predates the "
+                   f"register (declare it with POST /v1/rooms first)")
+    return _describe_room(rooms().archive(room_id, archived=body.archived),
+                          role=role, with_members=True)
+
+
+# ── the invite link ──────────────────────────────────────────────────────────
+#
+# The link is the invitation, the ORCID is the identity, the ACL is the role.
+# See `app/invites.py` for why each of the three does exactly one job.
+
+
+class InviteIn(BaseModel):
+    role: str = Field(default="viewer", description="viewer or editor")
+    #: how long the link lives. 0 or null = no expiry, which a caller has to ask
+    #: for rather than get by forgetting.
+    ttl_seconds: Optional[int] = Field(default=None)
+    max_uses: Optional[int] = Field(default=None)
+
+
+class InviteOut(BaseModel):
+    token_id: str
+    room_id: str
+    role: str
+    state: str
+    created_by: Optional[str] = None
+    created_at: Optional[str] = None
+    expires_at: Optional[int] = None
+    max_uses: Optional[int] = None
+    uses: int = 0
+    revoked_at: Optional[str] = None
+    accepted_by: List[str] = Field(default_factory=list)
+    #: the token, **only in the answer that created it**. It is not stored (the
+    #: record keeps a sha256), so this is the one moment it exists to be copied.
+    token: Optional[str] = None
+
+
+class JoinIn(BaseModel):
+    token: str
+
+
+class JoinOut(BaseModel):
+    room_id: str
+    title: str
+    role: str
+    #: True when the ACL already granted this person as much or more, and the
+    #: invitation therefore changed nothing. An invite never demotes.
+    already_had: bool = False
+
+
+def _invite_out(invite: Any, *, token: Optional[str] = None) -> InviteOut:
+    return InviteOut(**invite.as_public(), token=token)
+
+
+@v1.post("/rooms/{room_id}/invites", response_model=InviteOut, status_code=201,
+         tags=["rooms"])
+async def create_invite(room_id: str, body: InviteIn,
+                        request: Request) -> InviteOut:
+    """Mint a shareable link that offers a role in this room.
+
+    Who may do it: `may_assign`, unchanged — whoever could not grant the role by
+    hand cannot grant it by URL either (`invites.offerable`). And a link may only
+    ever carry `viewer` or `editor`: an owner or an admin is somebody a person
+    hands the room to.
+    """
+    _acl, _room, role, who = await _acting_role(room_id, request)
+    wanted = parse_offer(body.role)
+    if wanted is None:
+        raise HTTPException(status_code=400,
+                            detail=f"unknown role {body.role!r}: expected "
+                                   f"viewer or editor")
+    refusal = offerable(role, wanted)
+    if refusal:
+        raise HTTPException(status_code=403, detail=refusal)
+    ttl = body.ttl_seconds
+    invite, token = invites().mint(
+        room_id, wanted, created_by=who,
+        ttl_seconds=(ttl if ttl else None) if ttl is not None else None,
+        max_uses=body.max_uses)
+    return _invite_out(invite, token=token)
+
+
+@v1.get("/rooms/{room_id}/invites", response_model=List[InviteOut], tags=["rooms"])
+async def list_invites(room_id: str, request: Request) -> List[InviteOut]:
+    """Which links are out there, and in what state. Admin and owner only — a
+    list of invitations is a list of who was asked to join an unpublished study.
+
+    No secrets in the answer: the store never had them.
+    """
+    _acl, _room, role, _who = await _acting_role(room_id, request)
+    if role is None or not role.can_manage:
+        raise HTTPException(status_code=403,
+                            detail="reading the invitations needs admin or owner")
+    return [_invite_out(invite) for invite in invites().list(room_id)]
+
+
+@v1.delete("/rooms/{room_id}/invites/{token_id}", response_model=InviteOut,
+           tags=["rooms"])
+async def revoke_invite(room_id: str, token_id: str,
+                        request: Request) -> InviteOut:
+    """Stop a link. The record stays, marked `revoked`: an invitation that was
+    live is a thing that happened, and deleting the row would erase the answer."""
+    _acl, _room, role, _who = await _acting_role(room_id, request)
+    if role is None or not role.can_manage:
+        raise HTTPException(status_code=403,
+                            detail="revoking an invitation needs admin or owner")
+    invite = invites().revoke(room_id, token_id)
+    if invite is None:
+        raise HTTPException(status_code=404,
+                            detail=f"no invitation {token_id!r} in this room")
+    return _invite_out(invite)
+
+
+@v1.post("/join", response_model=JoinOut, tags=["rooms"])
+async def join_by_link(body: JoinIn, request: Request) -> JoinOut:
+    """Accept an invitation: the link says which room, the token says who invited
+    you, and **the ORCID has to be yours**.
+
+    The three refusals, and they are three different sentences on purpose:
+
+    * **no identity** → 401. A link is not a credential; it opens a door that
+      still asks who you are. (Dev mode has no identities at all, so there is
+      nobody to write into an ACL — it is refused there too, which is the honest
+      answer rather than granting an anonymous editor.)
+    * **the link is not live** → 403 with the state: not valid, revoked, expired,
+      used up. Not 404: whether a token exists is not something a caller who
+      guessed one should learn.
+    * **it worked** → the role is WRITTEN INTO THE ACL and the answer says what
+      it is. From then on the ACL is the only thing anybody reads.
+
+    And it never demotes: somebody who is already an editor keeps editing after
+    following a viewer link. An invitation is an offer of access, not a statement
+    about what somebody's access should be reduced to.
+    """
+    orcid, dev_mode = _caller_identity(request)
+    if not orcid:
+        raise HTTPException(
+            status_code=401,
+            detail=("an invitation opens the door; you still have to say who you "
+                    "are. Sign in with ORCID and follow the link again."
+                    if not dev_mode else
+                    "this instance has no identities (dev mode, no OIDC): there "
+                    "is nobody to add to the room's access list"))
+    invite, refusal = invites().resolve(body.token)
+    if invite is None:
+        raise HTTPException(status_code=403, detail=refusal or "not a valid invitation")
+
+    offered = parse_offer(invite.role) or Role.VIEWER
+    acl = load_acl(invite.room_id)
+    held = acl.role_for(orcid, groups_of=groups().expander())
+    already = held is not None and held.rank >= offered.rank
+    if not already:
+        acl.members[orcid] = offered
+        save_acl(invite.room_id, acl)
+    invites().record_use(invite, orcid)
+    descriptor = rooms().descriptor(invite.room_id)
+    return JoinOut(room_id=invite.room_id, title=descriptor.title,
+                   role=(held or offered).value if already else offered.value,
+                   already_had=already)
 
 
 # ── groups: a name for a set of people ────────────────────────────────────────

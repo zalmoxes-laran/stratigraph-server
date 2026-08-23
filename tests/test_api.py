@@ -259,7 +259,15 @@ def test_the_openapi_schema_is_served():
                       ("PUT", "/v1/groups/{group_id}"),
                       ("DELETE", "/v1/groups/{group_id}"),
                       ("PUT", "/v1/groups/{group_id}/members/{orcid}"),
-                      ("DELETE", "/v1/groups/{group_id}/members/{orcid}")}, \
+                      ("DELETE", "/v1/groups/{group_id}/members/{orcid}"),
+                      # …and revoking an INVITATION, which is the same kind of
+                      # thing once more: a link that offers a role is operational
+                      # (em-server), not scientific (the em.json), and an
+                      # invitation that could be sent and never withdrawn would be
+                      # a door with no lock. The record survives the revocation —
+                      # the DELETE is of the link's validity, not of the fact that
+                      # somebody was once invited.
+                      ("DELETE", "/v1/rooms/{room_id}/invites/{token_id}")}, \
         f"unexpected write endpoints: {sorted(writes)}"
     assert not [p for p in paths if p.endswith("/study") or p.endswith("/graph")], \
         "no route may take a study away: the deletions are tombstones"

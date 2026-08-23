@@ -128,6 +128,103 @@ class MinioSnapshotStore:
             "InMemorySnapshotStore (tests) or DirectorySnapshotStore (local).")
 
 
+# ── the room's own durable record ────────────────────────────────────────────
+#
+# A room is more than the container it works on: it has a name, a creator, and a
+# list of container references (`rooms.RoomDescriptor`). That record is small and
+# it is *state*, so it belongs here beside the snapshots rather than in the relay
+# — which is fenced off from the filesystem on purpose.
+#
+# Three methods and not two, because a register you cannot enumerate is not a
+# register: `ids()` is what makes "list the rooms" answerable at all.
+
+class RoomStore(Protocol):
+    """Get, put and list room descriptors. Three methods, and the third is the
+    one the snapshot store does not need: a register you cannot enumerate is not
+    a register."""
+
+    def get(self, room_id: str) -> Optional[Dict[str, Any]]: ...
+
+    def put(self, room_id: str, record: Dict[str, Any]) -> None: ...
+
+    def ids(self) -> List[str]: ...
+
+
+class InMemoryRoomStore:
+    """Tests and a single-process laptop. Dies with the process, and says so."""
+
+    def __init__(self) -> None:
+        self._data: Dict[str, str] = {}
+        self._lock = threading.Lock()
+
+    def get(self, room_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            raw = self._data.get(room_id)
+        return json.loads(raw) if raw is not None else None
+
+    def put(self, room_id: str, record: Dict[str, Any]) -> None:
+        blob = json.dumps(record, sort_keys=True, ensure_ascii=False)
+        with self._lock:
+            self._data[room_id] = blob
+
+    def ids(self) -> List[str]:
+        with self._lock:
+            return sorted(self._data)
+
+
+class DirectoryRoomStore:
+    """A directory of `<room>.room.json` files, written atomically.
+
+    Beside the snapshots and the ACLs, for the reason the ACL store gives: they
+    are the same room's state, and an operator who backs one up should not find
+    the others somewhere else.
+    """
+
+    def __init__(self, root: str) -> None:
+        self.root = pathlib.Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def _path(self, room_id: str) -> pathlib.Path:
+        safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in room_id)
+        return self.root / f"{safe}.room.json"
+
+    def get(self, room_id: str) -> Optional[Dict[str, Any]]:
+        path = self._path(room_id)
+        if not path.is_file():
+            return None
+        # Allowed to raise, like the ACL store: a record that will not parse must
+        # not read as "this room was never declared".
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def put(self, room_id: str, record: Dict[str, Any]) -> None:
+        path = self._path(room_id)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(record, ensure_ascii=False, indent=1,
+                                  sort_keys=True), encoding="utf-8")
+        tmp.replace(path)
+
+    def ids(self) -> List[str]:
+        return sorted(p.name[: -len(".room.json")]
+                      for p in self.root.glob("*.room.json"))
+
+
+def room_store_from_env(environ: Optional[Dict[str, str]] = None) -> RoomStore:
+    """`EM_ROOM_DIR`, else beside the snapshots (`EM_SNAPSHOT_DIR`), else memory
+    — the same order and the same honesty as the ACL store."""
+    env = environ if environ is not None else os.environ
+    directory = env.get("EM_ROOM_DIR") or env.get("EM_SNAPSHOT_DIR")
+    if directory:
+        return DirectoryRoomStore(directory)
+    return InMemoryRoomStore()
+
+
+def describe_rooms(store: RoomStore) -> str:
+    return {
+        "InMemoryRoomStore": "memory (not durable — dies with the process)",
+        "DirectoryRoomStore": "directory (beside the snapshots)",
+    }.get(type(store).__name__, type(store).__name__)
+
+
 def store_from_env(environ: Optional[Dict[str, str]] = None) -> SnapshotStore:
     """The store this process should use, chosen by configuration.
 

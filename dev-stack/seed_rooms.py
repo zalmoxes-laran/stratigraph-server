@@ -143,6 +143,37 @@ def exists(room_id: str) -> bool:
          f"{SNAPSHOT_DIR}/{room_id}.em.json"], capture_output=True).returncode == 0
 
 
+def record(room_id: str, title: str) -> dict:
+    """The room's DURABLE record — `rooms.RoomDescriptor`, as JSON.
+
+    Seeded beside the container, because since the register exists a room is a
+    place with a name and not just a document somebody happened to open. Thin on
+    purpose: no members here — the ACL is the one place that says who may work in
+    a room, and a second list in this file would be a second answer.
+
+    `created_by: null` is honest: a seed script is not a person. The first
+    authenticated arrival still becomes the owner (`access.claim_owner`), which is
+    the behaviour these demo rooms had before and keeps having.
+    """
+    return {"room_id": room_id, "title": title,
+            "container_refs": [room_id], "created_by": None,
+            "created_at": "2026-08-23T00:00:00Z", "archived_at": None}
+
+
+def seed_record(room_id: str, title: str) -> bool:
+    """Write `<room>.room.json` next to the snapshot. True when it landed."""
+    target = f"{SNAPSHOT_DIR}/{room_id}.room.json"
+    payload = json.dumps(record(room_id, title), ensure_ascii=False)
+    result = subprocess.run(
+        ["docker", "exec", "-i", "-u", "0", CONTAINER, "sh", "-c",
+         f"cat > {target} && chown --reference={SNAPSHOT_DIR} {target}"],
+        input=payload.encode("utf-8"), capture_output=True)
+    if result.returncode != 0:
+        print(f"[ FAIL ] {room_id} (record): {result.stderr.decode().strip()}")
+        return False
+    return True
+
+
 def main() -> int:
     force = "--force" in sys.argv
     try:
@@ -180,12 +211,22 @@ def main() -> int:
             print(f"[ FAIL ] {room_id}: {result.stderr.decode().strip()}")
             return 1
         print(f"[  ok  ] {room_id} — visibility: {visibility or 'restricted'}")
+        # …and the room's own record, so the room can be LISTED and named before
+        # anybody connects. Same volume as the snapshot and the ACL: an operator
+        # who backs one up finds the others.
+        if not seed_record(room_id, name):
+            return 1
+        print(f"[  ok  ] {room_id} — record: «{name}» → [{room_id}]")
 
     print("\nem-server reads a room's document when the room is first opened, so "
           "a room that was already live in this process keeps what it had.\n"
           "Restart it if you have just changed a seed:\n"
           "  docker-compose --env-file .env.dev -f docker-compose.dev.yml "
           "restart em-server")
+    print("\nLe stanze ora hanno un RECORD durevole (`<room>.room.json`): "
+          "esistono\nanche vuote, si elencano con `GET /v1/rooms`, e "
+          "referenziano 1..N container.\nGli inviti (`POST "
+          "/v1/rooms/<id>/invites`) vivono accanto agli ACL.")
     print("\nPer Tappa 4 (EMStudio come client), da incollare in "
           "Impostazioni ▸ Live sync:")
     print(f"  URL     https://{env_domain()}:{env_https_port()}/em")
