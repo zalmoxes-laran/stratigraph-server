@@ -37,6 +37,7 @@ orchestrator's, and they return the same thing.
 from __future__ import annotations
 
 import os
+import pathlib
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, FastAPI, HTTPException, Query, Response
@@ -56,6 +57,7 @@ from .corpus import describe as corpus_describe
 from .digest_index import INDEX as DIGEST_INDEX
 from .invites import Invites, invite_store_from_env, offerable, parse_offer
 from .invites import describe as invite_describe
+from . import operators as ops
 from .rooms import RoomDescriptor
 from .store import describe as snapshot_describe
 from .store import describe_rooms as room_describe
@@ -230,6 +232,10 @@ class Health(BaseModel):
     #: each secret), but a deployment whose invites die on restart hands people a
     #: URL that stops working for no visible reason.
     invite_store: str = "memory"
+    #: HOW this node recognises an operator — the capability that opens the
+    #: node console. No names: a health endpoint open enough to be a probe is
+    #: open enough to be a screenshot.
+    operators: str = "none"
 
 
 @v1_public.get("/health", response_model=Health, tags=["meta"])
@@ -266,6 +272,7 @@ def health() -> Health:
         corpus_store=corpus_describe(CORPUS_STORE),
         room_store=room_describe(rooms().rooms_store),
         invite_store=invite_describe(INVITE_STORE),
+        operators=ops.describe(),
         rooms=len(rooms().rooms()),
     )
 
@@ -1827,6 +1834,235 @@ async def join_by_link(body: JoinIn, request: Request) -> JoinOut:
                    already_had=already)
 
 
+# ── the NODE's scope: everything, for whoever looks after the node ───────────
+#
+# Two scopes on one contract, and the split is the point:
+#
+#   owner-scope     `/v1/rooms/…`        — my room, gated by my role IN it
+#   operator-scope  `/v1/admin/…`        — every room, gated by a capability
+#                                          granted OUTSIDE every room
+#
+# The endpoints below add no policy of their own: they read the same registry,
+# the same ACLs and the same asset store the room routes read, and they call the
+# same `RoomRegistry.archive`. What they add is REACH — and the price of reach is
+# a capability an owner cannot give themselves (`app/operators.py`).
+#
+# Console-ready on purpose: plain JSON, one request per panel, because both faces
+# consume it — the node console shipped in `app/node_admin/` and whatever an
+# operator writes in a terminal.
+
+
+def _require_operator(request: Request) -> Optional[str]:
+    """The caller, if they may act on the node. 403 with the remedy otherwise."""
+    principal = authenticator.require_token(request)
+    if not ops.is_operator(principal):
+        raise HTTPException(status_code=403, detail=ops.refusal())
+    if principal.get("em_dev_mode"):
+        return None
+    return (principal.get("orcid") or principal.get("preferred_username")
+            or principal.get("sub"))
+
+
+class NodeWhoAmI(BaseModel):
+    operator: bool
+    orcid: Optional[str] = None
+    #: how this node recognises one — so the console can say what is missing
+    #: rather than showing an empty page
+    capability: str = ""
+    auth: str = ""
+
+
+class StorageRoom(BaseModel):
+    room_id: str
+    #: digests this room's document points at
+    assets: int = 0
+    #: …and how many of those the asset store actually holds
+    present: int = 0
+    missing: List[str] = Field(default_factory=list)
+    declared: bool = False
+    archived_at: Optional[str] = None
+    missing_refs: List[str] = Field(default_factory=list)
+
+
+class StorageOut(BaseModel):
+    asset_store: str
+    snapshot_store: str
+    room_store: str
+    #: every digest the store holds that no room's document mentions. An orphan
+    #: is not deleted here: it is NAMED, and what to do about it is a decision.
+    orphan_assets: List[str] = Field(default_factory=list)
+    rooms: List[StorageRoom] = Field(default_factory=list)
+
+
+@v1.get("/admin/whoami", response_model=NodeWhoAmI, tags=["node"])
+async def node_whoami(request: Request) -> NodeWhoAmI:
+    """Am I an operator? Answered WITHOUT a 403, because the console asks this
+    before it draws anything: a page that shows an error where it could show
+    "you are not an operator, here is who grants it" teaches people to reload."""
+    principal = authenticator.require_token(request)
+    is_op = ops.is_operator(principal)
+    who = None if principal.get("em_dev_mode") else (
+        principal.get("orcid") or principal.get("preferred_username")
+        or principal.get("sub"))
+    return NodeWhoAmI(operator=is_op, orcid=who, capability=ops.describe(),
+                      auth=authenticator.settings.describe())
+
+
+@v1.get("/admin/rooms", response_model=List[RoomOut], tags=["node"])
+async def node_rooms(request: Request) -> List[RoomOut]:
+    """EVERY room on this node — declared or not, empty or not, archived or not.
+
+    The difference from `GET /v1/rooms` is only reach: an owner sees the rooms
+    they have a grant in, an operator sees the node. Same shape, so a console and
+    a room panel render the same object.
+
+    Snapshot-only rooms (never declared, from before the register) are included
+    with `implicit: true`: they are exactly what an operator needs to see, since
+    they are the ones nobody has titled or claimed.
+    """
+    _require_operator(request)
+    registry = rooms()
+    ids = set(registry.rooms_store.ids())
+    # `snapshot_store()`, never the imported name: binding it at import is the
+    # footgun this module documents twice (see `rooms()` and `snapshot_store()`),
+    # and I walked into it — a test that replaced the store saw an admin listing
+    # that had never heard of its rooms.
+    snapshots = getattr(snapshot_store(), "rooms", None)
+    if callable(snapshots):
+        ids |= set(snapshots())
+    ids |= set(registry.rooms())          # …and whatever is live right now
+    return [_describe_room(registry.descriptor(room_id), role=Role.OWNER,
+                           with_members=True) for room_id in sorted(ids)]
+
+
+@v1.get("/admin/storage", response_model=StorageOut, tags=["node"])
+async def node_storage(request: Request) -> StorageOut:
+    """What the node is holding, and what does not line up.
+
+    Three questions an operator actually has, and none of them is answerable from
+    inside one room:
+    * which rooms exist and which of their containers are missing;
+    * how many assets each room points at, and how many of those the store has;
+    * which stored digests **no** room mentions — the orphans.
+
+    MinIO is behind em-server here as everywhere else: this reads the store
+    through the same interface the asset route uses, and hands back numbers. No
+    presigned URL, no bucket listing to a browser.
+    """
+    _require_operator(request)
+    registry = rooms()
+    ids = set(registry.rooms_store.ids())
+    # `snapshot_store()`, never the imported name: binding it at import is the
+    # footgun this module documents twice (see `rooms()` and `snapshot_store()`),
+    # and I walked into it — a test that replaced the store saw an admin listing
+    # that had never heard of its rooms.
+    snapshots = getattr(snapshot_store(), "rooms", None)
+    if callable(snapshots):
+        ids |= set(snapshots())
+    ids |= set(registry.rooms())
+
+    seen: set = set()
+    out_rooms: List[StorageRoom] = []
+    for room_id in sorted(ids):
+        descriptor = registry.descriptor(room_id)
+        document = snapshot_store().get(descriptor.primary_ref)
+        digests = _digests_in(document)
+        seen |= digests
+        missing = [d for d in sorted(digests) if ASSET_STORE.head(d) is None]
+        out_rooms.append(StorageRoom(
+            room_id=room_id, assets=len(digests),
+            present=len(digests) - len(missing), missing=missing,
+            declared=not descriptor.implicit,
+            archived_at=descriptor.archived_at,
+            missing_refs=registry.missing_refs(descriptor)))
+
+    return StorageOut(
+        asset_store=asset_describe(ASSET_STORE),
+        snapshot_store=snapshot_describe(snapshot_store()),
+        room_store=room_describe(registry.rooms_store),
+        orphan_assets=sorted(_stored_digests() - seen),
+        rooms=out_rooms)
+
+
+def _digests_in(document: Optional[Dict[str, Any]]) -> set:
+    """Every asset reference a container's nodes point at."""
+    found: set = set()
+    if not isinstance(document, dict):
+        return found
+    graphs = document.get("graphs")
+    sections = list(graphs.values()) if isinstance(graphs, dict) else [document]
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        for node in section.get("nodes") or []:
+            data = node.get("data") if isinstance(node, dict) else None
+            ref = str((data or {}).get("checksum") or "")
+            if asset_ref_valid(ref):
+                found.add(ref)
+    return found
+
+
+def _stored_digests() -> set:
+    """What the asset store holds, when it can say.
+
+    Only the stores that can enumerate answer; MinIO's client can list a bucket
+    but this does not ask it to — a listing of every object on a shared bucket is
+    an expensive question to answer on a page load, and an orphan report that is
+    silently partial is worse than one that says so. When the store cannot
+    enumerate, `orphan_assets` is empty and the console says why.
+    """
+    for name in ("refs", "digests", "keys"):
+        lister = getattr(ASSET_STORE, name, None)
+        if callable(lister):
+            try:
+                return {str(r) for r in lister()}
+            except Exception:      # noqa: BLE001 — a store that will not list
+                return set()
+    data = getattr(ASSET_STORE, "_data", None)
+    if isinstance(data, dict):
+        return {str(k) for k in data}
+    return set()
+
+
+class NodeArchiveIn(BaseModel):
+    archived: bool = True
+    #: the operator has to name the room again. A cross-room console with a
+    #: one-click destructive-looking action on a list is how the wrong row gets
+    #: clicked; the API asks for the name back, and the console asks the person.
+    confirm_room_id: str = Field(default="")
+
+
+@v1.post("/admin/rooms/{room_id}/archive", response_model=RoomOut, tags=["node"])
+async def node_archive_room(room_id: str, body: NodeArchiveIn,
+                            request: Request) -> RoomOut:
+    """Archive (or restore) any room on the node — the lifecycle action.
+
+    Same call the room's own admin makes (`RoomRegistry.archive`), and the same
+    promise: **a mark, never a deletion**. There is no delete here either, and
+    `GET /v1/admin/storage` is the report that tells an operator which rooms are
+    dangling in the first place.
+
+    `confirm_room_id` must match. Typed confirmation on a cross-room console is
+    not ceremony: the operator is looking at a list of somebody else's rooms.
+    """
+    _require_operator(request)
+    if body.confirm_room_id != room_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"confirm the room by name: send confirm_room_id={room_id!r}. "
+                    f"On a console that lists other people's rooms, a single click "
+                    f"is not consent."))
+    registry = rooms()
+    descriptor = registry.descriptor(room_id)
+    if descriptor.implicit:
+        # An undeclared room has no record to mark. Declaring it here would put a
+        # title on somebody's study that nobody chose — so it is declared as
+        # itself, which is what the implicit descriptor already says.
+        registry.declare(descriptor)
+    return _describe_room(registry.archive(room_id, archived=body.archived),
+                          role=Role.OWNER, with_members=True)
+
+
 # ── groups: a name for a set of people ────────────────────────────────────────
 #
 # A room grants a role to a NAME ("the excavation team") instead of to six
@@ -1946,6 +2182,23 @@ def delete_group(group_id: str, request: Request) -> Dict[str, Any]:
             "note": "grants naming this group stay in the rooms' ACLs and now "
                     "resolve to nothing"}
 
+
+# ── the NODE CONSOLE, served by the process it administers ───────────────────
+#
+# Static files, no build step, mounted OUTSIDE `/v1` because it is not the API: it
+# is a face on the API, and the same one an operator opens in a browser.
+#
+# It is deliberately NOT behind the router's auth dependency. A 401 on the HTML
+# would be a blank page with a status code; the page loads, asks the node
+# `GET /v1/admin/whoami`, and then either draws the console or says — in a
+# sentence — that this identity is not an operator and who grants that. The
+# *data* is behind the capability, which is where a gate belongs; the shell is
+# just a shell.
+_CONSOLE = pathlib.Path(__file__).resolve().parent / "node_admin"
+if _CONSOLE.is_dir():
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/admin", StaticFiles(directory=str(_CONSOLE), html=True),
+              name="node-console")
 
 app.include_router(v1_public)
 app.include_router(v1)

@@ -37,6 +37,7 @@ The image both rooms point at is the one `smoke_iiif.py` uploads; run that first
 from __future__ import annotations
 
 import json
+import pathlib
 import subprocess
 import sys
 
@@ -174,6 +175,131 @@ def seed_record(room_id: str, title: str) -> bool:
     return True
 
 
+# ── the part a file cannot seed: roles and an invitation ─────────────────────
+#
+# The documents and the room records go into the volume directly (above): they are
+# state, and writing them is a copy. Roles and invitation links are ACTS — the ACL
+# is written through the door that checks who is asking, and an invite's secret
+# exists exactly once, in the answer to the request that mints it. So this half
+# goes through the API with a real token, and says so when it cannot.
+
+DEMO = "cantiere-demo"
+
+
+def api_pass() -> bool:
+    """Declare the demo room, seat three people in it, and print a link.
+
+    Best-effort by design: no stack, no token, no realm → it says what it skipped
+    and the file-seeded rooms above are still there. A seed that failed loudly
+    over an optional half would stop somebody from getting the part that worked.
+    """
+    import ssl
+    import urllib.error
+    import urllib.request
+
+    base = f"https://{env_domain()}:{env_https_port()}/em/v1"
+    tls = ssl.create_default_context()
+    tls.check_hostname = False
+    tls.verify_mode = ssl.CERT_NONE       # the dev stack's own internal CA
+
+    def token(user: str | None) -> str | None:
+        args = [str(pathlib.Path(__file__).resolve().parent / "token.sh")]
+        if user:
+            args += ["--user", user]
+        try:
+            out = subprocess.run(args, capture_output=True, text=True, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return None
+        lines = [l for l in out.stdout.strip().splitlines() if l.strip()]
+        return lines[-1] if lines else None
+
+    def call(method: str, path: str, body: dict | None = None,
+             bearer: str | None = None) -> tuple[int, dict]:
+        headers = {"Accept": "application/json"}
+        if bearer:
+            headers["Authorization"] = f"Bearer {bearer}"
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(base + path, data=data, headers=headers,
+                                         method=method)
+        try:
+            with urllib.request.urlopen(request, context=tls, timeout=20) as answer:
+                return answer.status, json.loads(answer.read() or b"null")
+        except urllib.error.HTTPError as exc:
+            try:
+                return exc.code, json.loads(exc.read() or b"null")
+            except ValueError:
+                return exc.code, {}
+        except urllib.error.URLError as exc:
+            print(f"[ SKIP ] the API half — {base} not reachable ({exc.reason})")
+            return 0, {}
+
+    def orcid_of(jwt: str) -> str | None:
+        import base64
+        payload = jwt.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        try:
+            claims = json.loads(base64.urlsafe_b64decode(payload))
+        except Exception:                                  # noqa: BLE001
+            return None
+        return (claims.get("orcid") or claims.get("preferred_username")
+                or claims.get("sub"))
+
+    owner = token(None)
+    if not owner:
+        print("[ SKIP ] the API half — no token (is Keycloak up?). The rooms and "
+              "their records are seeded; roles and the invite link are not.")
+        return False
+    guest = token("viewer")
+    who_owner, who_guest = orcid_of(owner), (orcid_of(guest) if guest else None)
+
+    # 1 · the demo WORKSPACE: two containers, because a room references 1..N
+    status, made = call("POST", "/rooms", {
+        "room_id": DEMO, "title": "Cantiere · demo (due container)",
+        "container_refs": ["basilica-demo", "scavo"]}, owner)
+    if status == 409:
+        print(f"[ kept ] {DEMO} — c'era già (i ruoli e il link li rifaccio)")
+    elif status == 201:
+        print(f"[  ok  ] {DEMO} — record + refs "
+              f"{made.get('container_refs')} · owner {who_owner}")
+    else:
+        print(f"[ FAIL ] {DEMO}: {status} {made.get('detail')}")
+        return False
+
+    # 2 · three people, three roles. The viewer is a REAL realm user, so the
+    #     read-only face can be tried by logging in as them.
+    seated = []
+    if who_guest:
+        status, _ = call("PUT", f"/rooms/{DEMO}/members/{who_guest}",
+                         {"role": "viewer"}, owner)
+        seated.append(f"{who_guest} → viewer ({status})")
+    # …and a third identity as editor, so a promotion has somewhere to go
+    editor = "0000-0003-1415-9265"
+    status, _ = call("PUT", f"/rooms/{DEMO}/members/{editor}",
+                     {"role": "editor"}, owner)
+    seated.append(f"{editor} → editor ({status})")
+    print(f"[  ok  ] {DEMO} — ACL: owner {who_owner} · " + " · ".join(seated))
+
+    # 3 · a link, printed. Once — the node keeps a digest, not the link.
+    status, invite = call("POST", f"/rooms/{DEMO}/invites",
+                          {"role": "editor"}, owner)
+    if status == 201 and invite.get("token"):
+        print(f"[  ok  ] {DEMO} — invite link (editor), shown ONCE:")
+        print(f"           token   {invite['token']}")
+        print(f"           EMStudio  <emstudio-url>?join={invite['token']}"
+              f"&room={DEMO}")
+        print(f"           curl      curl -sk -X POST {base}/join "
+              f"-H 'Authorization: Bearer $(./dev-stack/token.sh --user viewer)' "
+              f"-H 'Content-Type: application/json' "
+              f"-d '{{\"token\":\"{invite['token']}\"}}'")
+    else:
+        print(f"[ FAIL ] {DEMO} — no invite link: {status} {invite.get('detail')}")
+        return False
+    return True
+
+
 def main() -> int:
     force = "--force" in sys.argv
     try:
@@ -223,6 +349,9 @@ def main() -> int:
           "Restart it if you have just changed a seed:\n"
           "  docker-compose --env-file .env.dev -f docker-compose.dev.yml "
           "restart em-server")
+    print()
+    api_pass()
+
     print("\nLe stanze ora hanno un RECORD durevole (`<room>.room.json`): "
           "esistono\nanche vuote, si elencano con `GET /v1/rooms`, e "
           "referenziano 1..N container.\nGli inviti (`POST "

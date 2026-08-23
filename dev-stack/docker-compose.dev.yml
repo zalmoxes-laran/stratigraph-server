@@ -231,6 +231,14 @@ services:
       # off by default. Here the dev user is the curator, which is what lets
       # `smoke_corpus_resident.py` measure the whole read as well as the slice.
       EM_CORPUS_CURATORS: "${DEV_CURATOR_ORCID:-0000-0002-1825-0097}"
+      # …and who looks after the NODE, which is a different job from owning a
+      # room in it: the node console (`/admin`) and the cross-room API are behind
+      # this capability, and an owner cannot grant it to themselves (there is no
+      # endpoint that can). Same shape as the curator list above, and the same
+      # default identity, so a laptop stack has one of each without a realm edit.
+      # In a real deployment prefer the realm role: EM_OPERATOR_ROLE (default
+      # `em-operator`), granted in Keycloak by whoever administers the realm.
+      EM_OPERATORS: "${DEV_OPERATOR_ORCID:-0000-0002-1825-0097}"
       # --- images · the URL topology (docs/URL-TOPOLOGY.md) --------------------
       # PUBLIC: what goes into a manifest. Other people's viewers fetch it, so it
       # must name a host they can reach — `localhost` here, the proxy's name in

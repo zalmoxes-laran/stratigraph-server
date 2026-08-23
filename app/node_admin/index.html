@@ -1,0 +1,72 @@
+<!doctype html>
+<!--
+  THE NODE CONSOLE — em-server's own administration face.
+
+  Why it lives in the server and not in EMStudio: EMStudio is a room's *tool*,
+  and everything in it is scoped to the study somebody has open. This is scoped
+  to the NODE: every room, the storage behind them, and the lifecycle of the ones
+  nobody claims. Different question, different reach, different capability.
+
+  Why a SHELL with a module registry and not one page: user management is the
+  first panel and it will not be the last — node health, the DTC corpus, IIIF,
+  the Catalog, datamodel drift. Each of those is "a nav entry plus a fetch", so
+  the shell stays thin (this file, ~one screen of logic) and a module is a small
+  object in `modules/`. Adding one means registering it; it does not mean
+  touching the shell.
+
+  Deliberately no build step and no framework: it is served by the process it
+  administers, and a console that needed npm to change a label would be a console
+  nobody changes. Read-mostly, with a few deliberate actions that ask first.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>em-server · node console</title>
+  <link rel="stylesheet" href="./console.css">
+</head>
+<body>
+  <header class="bar">
+    <span class="wordmark">em-server</span>
+    <span class="sub">node console</span>
+    <span class="spacer"></span>
+    <span id="who" class="who">…</span>
+    <button id="reload" class="ghost" title="Re-read everything from the node">↻</button>
+  </header>
+
+  <div class="shell">
+    <!-- the module registry renders itself here: one entry per module -->
+    <nav id="nav" aria-label="modules"></nav>
+    <main id="panel" tabindex="-1">
+      <p class="muted">Loading…</p>
+    </main>
+  </div>
+
+  <!-- The token. Held in MEMORY only, never in localStorage: a node operator's
+       bearer token in web storage is a credential that survives the tab, and
+       this console is not worth that. Asked for once per session. -->
+  <dialog id="ask-token">
+    <form method="dialog">
+      <h2>Operator token</h2>
+      <p class="muted">
+        This console reads the node's API with your bearer token. It is kept in
+        memory for this tab only — nothing is stored.
+      </p>
+      <p class="muted">
+        Dev stack: <code>./dev-stack/token.sh</code> — the identity in
+        <code>EM_OPERATORS</code> (the seeded <code>dev</code> user, unless the
+        deployment says otherwise).
+      </p>
+      <textarea id="token-input" rows="4" placeholder="eyJhbGciOi…"></textarea>
+      <menu>
+        <button value="ok" id="token-ok">Use it</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <!-- `boot.js` registers the modules and then starts the shell. The shell does
+       not import them: a circular import with a top-level await deadlocks, and
+       the page then loads, says "Loading…", and reports nothing. -->
+  <script type="module" src="./boot.js"></script>
+</body>
+</html>
