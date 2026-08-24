@@ -129,11 +129,23 @@ then asks the node `GET /v1/admin/whoami`. Two outcomes, and both are useful:
 
 * **not an operator** → the page says so, names the capability, and states that
   owning a room does not grant it. That is the fail-closed half;
-* **operator** → two modules in the left nav:
+* **operator** → three modules in the left nav:
   * **Users & Rooms** — every room on the node, including the ones nobody ever
     declared (`implicit`), with members, roles, and the invitation links;
   * **Storage** — the three stores by name, per-room asset counts, containers that
-    are missing, orphan digests, and *archive / restore*.
+    are missing, orphan digests, and *archive / restore*;
+  * **Node Health** — every service this node depends on (itself, MinIO, Keycloak,
+    IIIF, em-catalog) as `ok` · `degraded` · `unreachable` · `not configured`,
+    with latency, what the bucket is holding, and the versions in view.
+
+The console is a shell plus modules, and adding one does not touch the shell:
+the pattern, the four states, and the four panels declared-but-not-built are in
+**[NODE-CONSOLE.md](NODE-CONSOLE.md)**.
+
+A room also holds something that is *not* part of the study and is governed
+differently — the opaque `.blend` safety snapshots people keep on demand. Room
+membership lets you keep one; only their author lists and restores them. See
+**[BLEND-BACKUPS.md](BLEND-BACKUPS.md)**.
 
 Making yourself an operator on the dev stack (it ships with one already):
 

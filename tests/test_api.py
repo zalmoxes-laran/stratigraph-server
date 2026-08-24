@@ -267,7 +267,16 @@ def test_the_openapi_schema_is_served():
                       # a door with no lock. The record survives the revocation —
                       # the DELETE is of the link's validity, not of the fact that
                       # somebody was once invited.
-                      ("DELETE", "/v1/rooms/{room_id}/invites/{token_id}")}, \
+                      ("DELETE", "/v1/rooms/{room_id}/invites/{token_id}"),
+                      # …and keeping an opaque `.blend` SNAPSHOT, which is the
+                      # same kind of write as publishing an asset and for the
+                      # same reason: content-addressed, so the same bytes are the
+                      # same object and a second archive creates nothing. It is
+                      # not a document store either — nothing can modify a
+                      # snapshot, and there is deliberately NO delete (retention
+                      # of backups is a policy nobody has written yet, and a
+                      # sweep that ran without one would eat the safety copies).
+                      ("PUT", "/v1/rooms/{room_id}/blend-backup")}, \
         f"unexpected write endpoints: {sorted(writes)}"
     assert not [p for p in paths if p.endswith("/study") or p.endswith("/graph")], \
         "no route may take a study away: the deletions are tombstones"

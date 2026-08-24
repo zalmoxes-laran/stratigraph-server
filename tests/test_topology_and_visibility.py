@@ -293,10 +293,11 @@ def test_3c_measure_images_refuses_an_unconfigured_base(dialled):
 def test_3d_the_only_outbound_calls_read_their_address_from_config():
     """The audit, kept as a tripwire.
 
-    Two places in this service open a socket to another one: the JWKS fetch and
-    the `info.json` measurement. Both take their address from settings read at
-    startup. A third one arriving is not forbidden — it just has to arrive with
-    this test updated, which is the point.
+    THREE places in this service open a socket to another one: the JWKS fetch,
+    the `info.json` measurement, and — since the node console grew a Health panel
+    — the service probes. All of them take their address from configuration. A
+    fourth one arriving is not forbidden; it just has to arrive with this test
+    updated, which is the point (and is what happened here).
     """
     import re
 
@@ -306,7 +307,7 @@ def test_3d_the_only_outbound_calls_read_their_address_from_config():
         source = path.read_text(encoding="utf-8")
         if re.search(r"urlopen\(|httpx\.|requests\.(get|post)\(", source):
             callers[path.name] = source
-    assert set(callers) == {"auth.py", "main.py"}, \
+    assert set(callers) == {"auth.py", "main.py", "node_health.py"}, \
         f"a new outbound call site appeared: {sorted(callers)}"
 
     # the JWKS URI is a setting, and `kid` (which DOES come from the token)
@@ -321,3 +322,20 @@ def test_3d_the_only_outbound_calls_read_their_address_from_config():
     code = "\n".join(line for line in callers["main.py"].splitlines()
                      if not line.lstrip().startswith("#"))
     assert "IIIF_INTERNAL or base" not in code
+
+    # …and the health probes: every target is read from the environment or from
+    # the store that already holds it, and NOT one of them is a hostname written
+    # in the source. A probe with a baked-in address is a health page that lies
+    # on somebody else's deployment — it would report a service that this node
+    # does not use, or miss the one it does.
+    probes = callers["node_health.py"]
+    body = "\n".join(line for line in probes.splitlines()
+                      if not line.lstrip().startswith("#"))
+    # the docstring is prose and may name a URL; the code may not
+    body = re.sub(r'"""[\s\S]*?"""', "", body)
+    hardcoded = re.findall(r'["\'](https?://[^"\']+)["\']', body)
+    assert not hardcoded, f"a probe carries a literal address: {hardcoded}"
+    for reader in ('env.get("OIDC_JWKS_URI")', 'env.get("EM_IIIF_INTERNAL")',
+                   'env.get("EM_CATALOG_INTERNAL")',
+                   'getattr(store, "endpoint", None)'):
+        assert reader in probes, f"the probe address is not read from config: {reader}"

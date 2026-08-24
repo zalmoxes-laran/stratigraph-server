@@ -278,3 +278,75 @@ def test_the_console_is_served_and_is_a_shell_with_modules(client):
         assert answer.status_code == 200, module
         assert 'from "../console.js"' in answer.text
         assert "register({" in answer.text, "a module registers itself"
+
+
+# ── module 3: Node Health, and the door in front of it ──────────────────────
+
+def test_the_health_report_is_operator_scoped(client, enforcing, operator):
+    """The same door as the rest of the node scope, tested from both sides: no
+    token is 401, a room owner who is not an operator is 403. A health page tells
+    a reader which services this node talks to and where they are — that is a map
+    of the deployment, and a map is not public."""
+    assert client.get("/v1/admin/health").status_code == 401
+    operator(BRUNO)
+    enforcing(ANNA)                                  # owns a room, runs nothing
+    refused = client.get("/v1/admin/health", headers=AUTH)
+    assert refused.status_code == 403
+    assert "em-operator" in refused.json()["detail"]
+    enforcing(BRUNO)
+    assert client.get("/v1/admin/health", headers=AUTH).status_code == 200
+
+
+def test_the_report_answers_about_this_node(client, enforcing, operator):
+    """em-server is asked about itself too — the probe that cannot fail is the one
+    that proves the page is showing this node and not a cached one."""
+    operator(BRUNO)
+    enforcing(BRUNO)
+    report = client.get("/v1/admin/health", headers=AUTH).json()
+    names = [check["name"] for check in report["checks"]]
+    assert names[0] == "em-server"
+    assert {"minio", "keycloak", "iiif", "em-catalog"} <= set(names)
+    assert report["checks"][0]["state"] == "ok"
+    assert report["deadline_s"] > 0, "the page says what bound it ran under"
+    assert report["versions"]["em_server"]
+
+
+# ── the PATTERN, asserted rather than described ─────────────────────────────
+
+def test_a_module_is_admitted_without_the_shell_knowing_its_name(client):
+    """The property the console is built around: a panel is a file in `modules/`
+    plus one line in `boot.js`, and `console.js` never learns it exists.
+
+    This is checked by reading the files rather than by trusting the prose: the
+    shell must not name any module, and every module present must be registered
+    in the ordering file (a module nobody imports is a panel that silently is not
+    there — the failure this test exists for)."""
+    import pathlib
+
+    root = pathlib.Path(main_module.__file__).parent / "node_admin"
+    shell = (root / "console.js").read_text()
+    boot = (root / "boot.js").read_text()
+    modules = sorted(p.name for p in (root / "modules").glob("*.js"))
+    assert modules, "the console has modules"
+    for name in modules:
+        assert name not in shell, f"the shell names {name} — the seam leaked"
+        assert f'"./modules/{name}"' in boot, f"{name} is not imported by boot.js"
+        source = (root / "modules" / name).read_text()
+        assert 'from "../console.js"' in source
+        assert "register({" in source
+
+
+def test_the_next_panels_are_declared_and_not_half_built(client):
+    """Four more panels are wanted (corpus · IIIF · catalog · drift). They are
+    named in `boot.js` with the endpoint each will fetch, and they do NOT exist:
+    a nav entry that opens an empty panel is worse than one that is not there."""
+    import pathlib
+
+    root = pathlib.Path(main_module.__file__).parent / "node_admin"
+    boot = (root / "boot.js").read_text()
+    for planned in ("corpus", "iiif", "catalog", "drift"):
+        assert f"modules/{planned}.js" in boot, f"{planned} is not declared"
+        assert f"/v1/admin/{planned}" in boot, f"{planned}'s endpoint is not named"
+        assert not (root / "modules" / f"{planned}.js").exists(), \
+            f"{planned} is half-built: declared as a seam and shipped as a file"
+        assert client.get(f"/v1/admin/{planned}", headers=AUTH).status_code == 404

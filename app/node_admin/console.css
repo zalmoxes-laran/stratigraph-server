@@ -124,6 +124,11 @@ tr:last-child td { border-bottom: none; }
 }
 .tag.warn { color: var(--warn); border-color: currentColor; }
 .tag.bad { color: var(--bad); border-color: currentColor; }
+.tag.good { color: var(--good); border-color: currentColor; }
+/* «not configured» is not a failure: it reads as quiet, not as red. A health
+   page that paints an absent optional service alarming teaches an operator to
+   ignore the colour that matters. */
+.tag.muted { color: var(--ink-soft); }
 
 button {
   font: inherit;

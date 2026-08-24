@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 
 from smoke_common import (Tally, alive, arguments, body_of, call, detail_of,
                           need, orcid_of, token_for, unique)
@@ -176,6 +177,49 @@ def main() -> int:
     status, _, shell = call("GET", f"{root}/admin/console.js")
     tally.ok(status == 200 and "./modules/" not in shell.decode("utf-8", "replace"),
              "…and the shell does not import its modules (no cycle)")
+
+    # ── 6 · Node Health, on the live node ───────────────────────────────────
+    #
+    # Here the health module is worth more than a unit test: these are the REAL
+    # services, so «ok» means the node can actually reach the realm it verifies
+    # tokens against. The states are read, not assumed.
+    print("\n6 · node health (module 3)")
+    status, _, raw = call("GET", f"{base}/admin/health")
+    tally.ok(status == 401, f"no token → the report is refused ({status})")
+    status, _, raw = call("GET", f"{base}/admin/health", token=owner)
+    tally.ok(status in (403, 200),
+             f"a non-operator gets {status} (403 when auth is enforced)")
+    started = time.monotonic()
+    status, _, raw = call("GET", f"{base}/admin/health", token=operator_token)
+    elapsed = time.monotonic() - started
+    report = body_of(raw) if status == 200 else {}
+    tally.ok(status == 200 and report.get("checks"),
+             f"an operator gets the report ({status})",
+             f"verdict: {report.get('verdict')} in {elapsed:.2f}s")
+    states = {c["name"]: c for c in report.get("checks", [])}
+    for service in ("em-server", "minio", "keycloak", "iiif", "em-catalog"):
+        check = states.get(service, {})
+        tally.ok(check.get("state") in ("ok", "degraded", "unreachable",
+                                       "not configured"),
+                 f"{service}: {check.get('state')}",
+                 f"{check.get('latency_ms')}ms · {check.get('detail', '')[:70]}")
+    tally.ok(states.get("em-server", {}).get("state") == "ok",
+             "the node reports on ITSELF (it answered, so it is ok)")
+    # A stopped service must not read «ok». Measured for real by stopping MinIO —
+    # see docs/NODE-CONSOLE.md; here we assert the weaker property the smoke can
+    # check on a healthy stack: nothing is «ok» without having been asked.
+    for name, check in states.items():
+        if check.get("state") == "ok" and name != "em-server":
+            tally.ok(check.get("latency_ms") is not None and check.get("target"),
+                     f"{name} is «ok» because it ANSWERED (target + latency)",
+                     f"{check.get('target')} · {check.get('latency_ms')}ms")
+    deadline = report.get("deadline_s") or 0
+    tally.ok(0 < deadline and elapsed < deadline * 6 + 2,
+             f"the page came back inside the declared bound ({deadline}s/probe)",
+             f"{elapsed:.2f}s for {len(states)} probes")
+    tally.ok("sup3r" not in raw.decode("utf-8", "replace")
+             and "@" not in str(states.get("minio", {}).get("target") or ""),
+             "no credential in the report (host only, never a URL with userinfo)")
 
     return tally.report("node-admin")
 

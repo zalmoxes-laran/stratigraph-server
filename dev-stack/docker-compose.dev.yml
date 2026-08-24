@@ -249,6 +249,12 @@ services:
       # network `localhost` is em-server. Using the public form here measures
       # nothing and every canvas silently gets a placeholder size.
       EM_IIIF_INTERNAL: "http://cantaloupe:8182/iiif/3"
+      # --- who else this node watches (the Node Health panel) ------------------
+      # em-catalog runs in this stack, so the health panel can report on it. An
+      # INTERNAL address again, for the same reason. Unset on a node with no
+      # Catalog: the panel then says «not configured», which is a fact about the
+      # deployment and not a failure.
+      EM_CATALOG_INTERNAL: "http://em-catalog:8000"
       # The dev stack runs the LIBRARY YOU ARE EDITING: the sibling s3Dgraphy
       # checkout is mounted and put first on the path. If it is not there the
       # mount is an empty directory and the image's pinned wheel is used instead

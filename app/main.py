@@ -58,6 +58,11 @@ from .digest_index import INDEX as DIGEST_INDEX
 from .invites import Invites, invite_store_from_env, offerable, parse_offer
 from .invites import describe as invite_describe
 from . import operators as ops
+from .blend_backups import (BLEND_MEDIA_TYPE, BlendBackups,
+                            blobs_from_env as backup_blobs_from_env,
+                            describe as backup_describe,
+                            register_from_env as backup_register_from_env)
+from .node_health import node_health
 from .rooms import RoomDescriptor
 from .store import describe as snapshot_describe
 from .store import describe_rooms as room_describe
@@ -236,6 +241,18 @@ class Health(BaseModel):
     #: node console. No names: a health endpoint open enough to be a probe is
     #: open enough to be a screenshot.
     operators: str = "none"
+    #: where the OPAQUE `.blend` safety snapshots go — a separate namespace from
+    #: the publishable assets, on purpose. "memory" here means somebody's safety
+    #: copy would die with the process, which is the one place that must not be a
+    #: surprise.
+    blend_backup_store: str = "memory"
+
+
+#: This node's `.blend` safety archive: the opaque snapshots people deliberately
+#: keep, in their own namespace, plus the small register that says whose they are.
+#: Built at import like the other stores, so a misconfigured MinIO refuses to
+#: start rather than failing at somebody's first backup.
+BACKUPS = BlendBackups(backup_blobs_from_env(), backup_register_from_env())
 
 
 @v1_public.get("/health", response_model=Health, tags=["meta"])
@@ -273,6 +290,7 @@ def health() -> Health:
         room_store=room_describe(rooms().rooms_store),
         invite_store=invite_describe(INVITE_STORE),
         operators=ops.describe(),
+        blend_backup_store=backup_describe(BACKUPS.blobs, BACKUPS.register),
         rooms=len(rooms().rooms()),
     )
 
@@ -384,6 +402,131 @@ async def get_asset(room_id: str, ref: str, request: Request) -> Response:
     return Response(content=data,
                     media_type=str(meta.get("media_type") or "application/octet-stream"),
                     headers=headers)
+
+
+# ── the `.blend` safety archive (opaque, on demand, never publishable) ───────
+#
+# A different thing from the assets above, and the difference is the point. An
+# asset is PUBLISHED: content-addressed, citable, served under the rights the
+# graph declares. A `.blend` snapshot is KEPT: opaque, in its own namespace,
+# readable only by the person who kept it, cited by nothing. See
+# `app/blend_backups.py` for why the shared data is not versioned here and why
+# the `backup` note does not go into the resident corpus.
+
+
+class BlendBackupOut(BaseModel):
+    """One snapshot, as its owner sees it."""
+
+    sha256: str
+    size: int
+    label: str = ""
+    #: the `.blend`'s own name, for recognising a snapshot months later
+    filename: str = ""
+    #: whose it is — the TOKEN's identity, never a field the client filled in
+    orcid: Optional[str] = None
+    created_at: str = ""
+    #: when these same bytes were last archived again, and how many times. A
+    #: fact, not a rewrite: `created_at` never moves.
+    last_seen: str = ""
+    seen: int = 1
+    #: False when this snapshot was already kept HERE — dedup, said out loud
+    created: bool = True
+    #: …and whether bytes were actually written. Not the same question: the store
+    #: is node-wide, so the same `.blend` kept in two rooms is two snapshots of
+    #: one object. Conflating the two reported "already kept" for a snapshot
+    #: somebody had just taken (measured).
+    stored_bytes: bool = True
+    detail: str = ""
+    #: the DTC-shaped note: a distinct event («somebody kept a working file»),
+    #: explicitly not a derivation producing a scientific product
+    dtc: Dict[str, Any] = Field(default_factory=dict)
+
+
+async def _backup_door(room_id: str, request: Request) -> tuple:
+    """(orcid, dev_mode) for somebody archiving in this room, or a refusal.
+
+    **Fail-closed, and stricter than an upload.** Publishing an asset needs a
+    token; keeping a backup needs a token AND a role that can write here — a
+    room you may only read is not a room you may store your working files in.
+    Dev mode has no identities, so it reads every author's records and says so
+    (`all_authors`), rather than pretending a nobody owns them.
+    """
+    _acl, _room, role, who = await _acting_role(room_id, request)
+    if role is None or not role.can_write:
+        raise HTTPException(
+            status_code=403,
+            detail="keeping a .blend snapshot in this room needs editor or "
+                   "above: it is your working file, but it is their room")
+    dev_mode = who is None and not authenticator.settings.enforcing
+    return who, dev_mode
+
+
+@v1.put("/rooms/{room_id}/blend-backup", response_model=BlendBackupOut,
+        tags=["assets"])
+async def archive_blend(room_id: str, request: Request,
+                        label: str = Query(default="", description="what this snapshot is"),
+                        filename: str = Query(default="", description="the .blend's own name")
+                        ) -> BlendBackupOut:
+    """Keep the posted bytes as an opaque snapshot of a working file.
+
+    Deliberate, not automatic: there is no save hook and there will not be one —
+    a backup that happens on every save is a quota, not a safety net. The daily
+    versioning of a `.blend` stays on the modeller's disk; this is the copy that
+    survives the disk.
+
+    Idempotent by content. The same `.blend` archived twice is **one** object and
+    one record: the answer says `created: false` and the record's `seen` goes up,
+    while `created_at` and the label stay the first ones — a backup whose date
+    moves is not a backup.
+    """
+    who, dev_mode = await _backup_door(room_id, request)
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=400,
+                            detail="empty body: there is no snapshot in zero bytes")
+    try:
+        record = BACKUPS.archive(room_id, data, orcid=who, label=label,
+                                filename=filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return BlendBackupOut(**{k: v for k, v in record.items() if k != "room_id"})
+
+
+@v1.get("/rooms/{room_id}/blend-backups", response_model=List[BlendBackupOut],
+        tags=["assets"])
+async def list_blend_backups(room_id: str, request: Request
+                             ) -> List[BlendBackupOut]:
+    """The snapshots YOU kept in this room, newest first.
+
+    Only your own. Being an editor of the room is what let you archive; it does
+    not make somebody else's working file yours to read — a `.blend` in progress
+    is not documentation of the study, and the register is per-author for the same
+    reason a room's member list is not public.
+    """
+    who, dev_mode = await _backup_door(room_id, request)
+    return [BlendBackupOut(**{k: v for k, v in record.items()
+                              if k != "room_id"}, created=False)
+            for record in BACKUPS.mine(room_id, orcid=who,
+                                       all_authors=dev_mode)]
+
+
+@v1.get("/rooms/{room_id}/blend-backup/{sha256}", tags=["assets"])
+async def restore_blend(room_id: str, sha256: str, request: Request) -> Response:
+    """The exact bytes back. Verify them: the name IS the digest.
+
+    404 for a snapshot that is not yours, deliberately — "you did not keep this"
+    and "nobody kept this" are the same answer to the person asking, and telling
+    a caller which digests exist would turn a register they may not read into one
+    they can probe.
+    """
+    who, dev_mode = await _backup_door(room_id, request)
+    data = BACKUPS.fetch(room_id, sha256, orcid=who, all_authors=dev_mode)
+    if data is None:
+        raise HTTPException(status_code=404,
+                            detail=f"no snapshot {sha256} kept by you in this room")
+    return Response(content=data, media_type=BLEND_MEDIA_TYPE,
+                    headers={"ETag": f'"{str(sha256).lower()}"',
+                             "X-EM-Opaque-Backup": "true"})
 
 
 async def _asset_rights(room_id: str, ref: str) -> Optional[Dict[str, Any]]:
@@ -2022,6 +2165,56 @@ def _stored_digests() -> set:
     if isinstance(data, dict):
         return {str(k) for k in data}
     return set()
+
+
+class NodeCheck(BaseModel):
+    name: str
+    #: ok · degraded · unreachable · not configured — four states, because a
+    #: service nobody asked for is not a failure and a service that did not
+    #: answer must never read as ok
+    state: str
+    target: Optional[str] = None
+    latency_ms: Optional[int] = None
+    detail: str = ""
+    facts: Dict[str, Any] = Field(default_factory=dict)
+
+
+class NodeHealthOut(BaseModel):
+    verdict: str
+    #: the wall-clock bound each probe ran under, so the page can say what a
+    #: `unreachable` actually means here
+    deadline_s: float
+    checks: List[NodeCheck] = Field(default_factory=list)
+    versions: Dict[str, Any] = Field(default_factory=dict)
+
+
+@v1.get("/admin/health", response_model=NodeHealthOut, tags=["node"])
+async def node_health_report(request: Request) -> NodeHealthOut:
+    """Is this node well — the services around em-server, not just em-server.
+
+    Operator-scoped on purpose, and it is a different question from `/v1/health`:
+    that one is a public probe for an orchestrator ("is the process up, what can
+    this build do"), this one names the things em-server DEPENDS on and how much
+    they are holding. The two answers belong to two audiences, and merging them
+    would either leak an infrastructure map to anybody or hide it from the person
+    who needs it.
+
+    Every probe is bounded by a wall clock (`EM_HEALTH_DEADLINE`): a health page
+    that can hang is worse than none, because it looks like it is about to answer.
+    See `app/node_health.py` for why a socket timeout alone is not a bound.
+    """
+    _require_operator(request)
+    return NodeHealthOut(**node_health(
+        version=__version__, s3dgraphy=_s3dgraphy_version(),
+        asset_store=ASSET_STORE))
+
+
+def _s3dgraphy_version() -> Optional[str]:
+    try:
+        import s3dgraphy
+        return getattr(s3dgraphy, "__version__", None)
+    except Exception:                              # noqa: BLE001
+        return None
 
 
 class NodeArchiveIn(BaseModel):
