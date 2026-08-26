@@ -18,6 +18,7 @@ bucket, same realm, different question.
 |---|---|
 | see how all the pieces stand together | [`docs/ARCHITECTURE-SYSTEM.md`](docs/ARCHITECTURE-SYSTEM.md) |
 | run the whole thing on a laptop | [`dev-stack/README-DEV.md`](dev-stack/README-DEV.md) |
+| the one-command cheat-sheet (+ connect EMtools to MinIO) | [`dev-stack/CHEATSHEET.md`](dev-stack/CHEATSHEET.md) |
 | deploy it on a real host | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) |
 | know which URL is internal and which public | [`docs/URL-TOPOLOGY.md`](docs/URL-TOPOLOGY.md) |
 
