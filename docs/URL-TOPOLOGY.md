@@ -11,7 +11,7 @@ Every service→service URL in a StratiGraph deployment exists in **two forms**:
 
 The rule, in one line:
 
-> **em-server SPEAKS on the internal form and WRITES the public form into the
+> **StratiGraph Server SPEAKS on the internal form and WRITES the public form into the
 > documents it serves.**
 
 Confusing the two fails *opaquely* — that is the whole reason this file exists.
@@ -21,7 +21,7 @@ clothes:
 | what happened | what it looked like |
 |---|---|
 | the JWKS fetched from the issuer's public URL | `401` on a token that was perfectly good |
-| `info.json` fetched from `EM_IIIF_BASE`, which inside the network is em-server itself | every canvas silently sized `1000×1000` (a placeholder), no error anywhere |
+| `info.json` fetched from `EM_IIIF_BASE`, which inside the network is StratiGraph Server itself | every canvas silently sized `1000×1000` (a placeholder), no error anywhere |
 | a manifest naming `http://localhost:8000` handed to a hosted Mirador | `Failed to fetch`, mixed-content, nothing on screen |
 
 None of the three raised anything. That is the failure mode this page is against.
@@ -33,7 +33,7 @@ None of the three raised anything. That is the failure mode this page is against
 The line above says where each form belongs. This says who is allowed to choose
 them, and it is not symmetric:
 
-> **The address em-server DIALS comes only from the configuration. A request
+> **The address StratiGraph Server DIALS comes only from the configuration. A request
 > parameter may, at most, change the URL WRITTEN INTO the document it gets
 > back.**
 
@@ -55,10 +55,10 @@ Corollary for the next parameter: if it does not have a strong reason to exist
 
 | pair | internal (who dials) | public (what is written / fetched by a browser) |
 |---|---|---|
-| **IIIF image service** | `EM_IIIF_INTERNAL` — em-server → Cantaloupe, to read `info.json` | `EM_IIIF_PUBLIC` — written into every manifest and every image URL a client renders |
-| **Identity** | `OIDC_JWKS_URI` — em-server → Keycloak, to fetch the signing keys | `OIDC_ISSUER` — what the TOKEN says, i.e. the address the user's browser got it from |
-| **Object store** | `MINIO_ENDPOINT` / `EM_ASSET_S3_ENDPOINT` — em-server → MinIO | `/assets/*` on the public host, for clients that fetch an asset by digest |
-| **The room API** | (none: nobody dials em-server from inside) | `/em/*` on the public host — the base EMStudio and EMtools are configured with |
+| **IIIF image service** | `EM_IIIF_INTERNAL` — StratiGraph Server → Cantaloupe, to read `info.json` | `EM_IIIF_PUBLIC` — written into every manifest and every image URL a client renders |
+| **Identity** | `OIDC_JWKS_URI` — StratiGraph Server → Keycloak, to fetch the signing keys | `OIDC_ISSUER` — what the TOKEN says, i.e. the address the user's browser got it from |
+| **Object store** | `MINIO_ENDPOINT` / `EM_ASSET_S3_ENDPOINT` — StratiGraph Server → MinIO | `/assets/*` on the public host, for clients that fetch an asset by digest |
+| **The room API** | (none: nobody dials StratiGraph Server from inside) | `/em/*` on the public host — the base EMStudio and EMtools are configured with |
 
 Older spellings are still read, in this order, so nothing breaks on upgrade:
 `EM_IIIF_PUBLIC` → `EM_IIIF_BASE`, and `EM_IIIF_INTERNAL` → `EM_IIIF_INTERNAL_BASE`.
@@ -69,7 +69,7 @@ day disagree.
 
 ## How each deployment fills them in
 
-**dev-stack** (`em-server/dev-stack/docker-compose.dev.yml`): the "public" form
+**dev-stack** (`stratigraph-server/dev-stack/docker-compose.dev.yml`): the "public" form
 is `http://localhost:<port>` because the browser really is on the same machine;
 the internal form is the compose service name. That difference is exactly why
 the dev stack catches these bugs — a stack where both forms were the same string
@@ -80,7 +80,7 @@ reverse-proxies by path, so every public form is `https://<server_name>/<route>`
 and every internal form is a service name:
 
 ```
-https://<host>/em/*      → em-server:8000     (handle_path: the app's own prefix)
+https://<host>/em/*      → StratiGraph Server:8000     (handle_path: the app's own prefix)
 https://<host>/iiif/*    → cantaloupe:8182    (handle: the IIIF version is IN the path)
 https://<host>/assets/*  → minio:9000
 https://<host>/auth/*    → keycloak:8080

@@ -22,27 +22,28 @@
 	tls internal
 
 	# StratiGraph · the room (graph + assets + the WebSocket the editors join).
-	# `handle_path` strips `/em`, because em-server serves `/v1/...` at its root.
+	# `handle_path` strips `/em`, because StratiGraph Server serves `/v1/...` at its
+	# root. The `/em` PATH stays: it is a public address, not the repo's name.
 	handle_path /em/* {
-		reverse_proxy em-server:8000
+		reverse_proxy stratigraph-server:8000
 	}
 
 	# StratiGraph · the CATALOG (studies as published, beside the rooms above).
-	# `handle` and NOT `handle_path`: em-catalog serves `/catalog/...` at its
+	# `handle` and NOT `handle_path`: StratiGraph Catalog serves `/catalog/...` at its
 	# root, so the prefix is part of the endpoint and stripping it would take
 	# the route with it — the same distinction as `/iiif` below, and the same
 	# trap.
 	handle /catalog/* {
-		reverse_proxy em-catalog:8000
+		reverse_proxy stratigraph-catalog:8000
 	}
 
 	# The IIIF Image API. `handle` and NOT `handle_path`: the API version lives
 	# in the path (`/iiif/3/...`), so stripping the prefix would take the
 	# endpoint with it.
 	#
-	# EMBARGO · every image request is authorised by em-server FIRST.
+	# EMBARGO · every image request is authorised by StratiGraph Server FIRST.
 	#
-	# Cantaloupe reads the bucket by sha256 and em-server is not in the path of
+	# Cantaloupe reads the bucket by sha256 and the server is not in the path of
 	# a pixel: taking the canvas out of a manifest withholds the digest, but
 	# whoever already has the hex reaches the image directly. So the proxy asks
 	# — `forward_auth` to `/v1/iiif-authz`, which reads the graph, resolves the
@@ -58,7 +59,7 @@
 	# inside a component whose job is not authorisation, and hides it from the
 	# file people actually read when they ask who can reach what.
 	handle /iiif/* {
-		forward_auth em-server:8000 {
+		forward_auth stratigraph-server:8000 {
 			uri /v1/iiif-authz
 			copy_headers X-EM-Authz
 		}

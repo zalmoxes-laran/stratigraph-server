@@ -64,7 +64,7 @@ and `seen`, which are facts and not rewrites.
 The `backup` note is a **distinct event** ("somebody kept a copy of a working
 file"), explicitly not a derivation producing a scientific product. It lives in
 the backup register and **not** as a node in the resident DTC corpus, and that is
-a decision rather than an omission: the corpus is the register em-server enforces
+a decision rather than an omission: the corpus is the register StratiGraph Server enforces
 rights from, and its `ResourceNode`s are exactly the publishable things.
 Registering an opaque working file there would manufacture the one thing this
 feature refuses to make — a citable asset — and would make the asset gate answer
@@ -101,7 +101,7 @@ verified on both legs.
 
 * **retention / GC.** Backups accumulate and nothing here deletes anything.
   There is no DELETE endpoint on purpose: an unreferenced-asset sweep
-  (keep-if-referenced) is an em-server-wide concern, and backups are precisely
+  (keep-if-referenced) is an StratiGraph Server-wide concern, and backups are precisely
   the objects a naive sweep would eat. It needs a policy somebody writes down.
 * **the storage report counts them.** `GET /v1/admin/storage` and the Node Health
   panel walk the bucket, so backup objects appear in the node's totals. That is

@@ -1,11 +1,11 @@
 """Where a room's durable truth lives — outside this process.
 
-P4.2 introduces the first component of em-server that **holds state**, and this
+P4.2 introduces the first component of StratiGraph Server that **holds state**, and this
 module is one of the three fences that keep that introduction honest (the others
 are in `rooms.py`: convergence stays in the library, presence stays ephemeral).
 
 The fence here: **the durable truth is not on the process's disk.** A room's
-snapshot goes to an object store — MinIO in the deployment — and what em-server
+snapshot goes to an object store — MinIO in the deployment — and what StratiGraph Server
 keeps in RAM is a *working copy* that can be rebuilt from it. The process may die
 and come back; the study does not live inside it. That is what keeps rule 2 of
 this repo (stateless, 12-factor) meaningful in the presence of a relay: the state

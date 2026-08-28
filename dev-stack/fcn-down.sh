@@ -12,7 +12,7 @@ if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   awk 'NR==1{next} /^#/{sub(/^# ?/,"");print;next} /^[[:space:]]*$/{next} {exit}' "$0"; exit 0
 fi
 set -euo pipefail
-cd "$(dirname "$0")"                     # em-server/dev-stack
+cd "$(dirname "$0")"                     # stratigraph-server/dev-stack
 
 COMPOSE=(docker-compose -f docker-compose.dev.yml --profile https)
 MODE="down"; STOP_COLIMA="no"

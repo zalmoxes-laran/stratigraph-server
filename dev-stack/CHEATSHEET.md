@@ -8,7 +8,7 @@ is the "what do I type" version, plus the one thing it does not cover: pointing
 
 ```bash
 brew install colima docker docker-compose      # once
-cd em-server/dev-stack
+cd stratigraph-server/dev-stack
 cp .env.dev.example .env.dev                    # once
 ./fcn-up.sh                                      # ← the whole stack, in one go
 ```
@@ -21,14 +21,14 @@ cp .env.dev.example .env.dev                    # once
 | **MinIO** | API `:9000`, console `:9001` | bucket `em-assets` auto-created |
 | **Keycloak** | `:8085` | realm `em-dev` |
 | **Cantaloupe / IIIF** | `:8182` | reads the SAME bucket, key = asset sha256 |
-| **em-server** | via Caddy `/em/v1` | the room API |
-| **em-catalog** | `:8010` | the register (published studies) |
+| **StratiGraph Server** | via Caddy `/em/v1` | the room API |
+| **StratiGraph Catalog** | `:8010` | the register (published studies) |
 
 Health: `https://em.localhost:8443/em/v1/health`. First run takes a few minutes
 (image build); after that a full `up` is **~15 s**.
 
 - **Edit s3Dgraphy live:** `./fcn-up.sh --local-s3d` mounts `../../s3Dgraphy/src`;
-  edit, then `docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart em-server em-catalog`.
+  edit, then `docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart stratigraph-server stratigraph-catalog`.
 - **Cert rejected by the browser?** `./fcn-trust-ca.sh` (once; and after every `--wipe`).
 - **Down:** `./fcn-down.sh` — data (studies, rooms, bucket, realm, CA) **persists**;
   only `./fcn-down.sh --wipe` erases it.
@@ -63,7 +63,7 @@ Blender's Python, else `MissingDependency`. Inspect the object at the MinIO cons
 `http://localhost:9001`.
 
 > **Direct vs gated — read this once.** This `S3_*` path writes **straight to
-> MinIO**, which is fine for local single-user work but **bypasses the em-server
+> MinIO**, which is fine for local single-user work but **bypasses the StratiGraph Server
 > gate** (per-room ACL + per-asset DTC). The shared / production path goes through
-> em-server, which enforces rights before the object store. Use the direct path for
+> StratiGraph Server, which enforces rights before the object store. Use the direct path for
 > local dev; do not wire it into a shared node.

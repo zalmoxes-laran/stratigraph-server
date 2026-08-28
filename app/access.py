@@ -3,7 +3,7 @@
 Until now the relay **authenticated** and stopped there: any valid token entered
 any room and wrote to it. Authentication answers *who are you*; this module
 answers *what may you do here*, and the two are not the same question. Keycloak
-does the first. **em-server does the second** — deliberately, because the
+does the first. **StratiGraph Server does the second** — deliberately, because the
 authorisation is about a study this server holds, not about an identity provider.
 
 ## The four roles

@@ -19,8 +19,8 @@ Nine containers behind one Caddy, which terminates TLS and routes by path:
 | `/server/*` | heriverse-server | Heriverse's own API |
 | `/auth/*` | keycloak | identity — one realm for everything |
 | `/couchdb/*` | couchdb | documents (Heriverse's scenes, and the Catalog's index) |
-| `/em/*` | **em-server** | rooms: the live graph, its assets, the WebSocket |
-| `/catalog/*` | **em-catalog** | the studies as published: search, HDT view, "open in…" |
+| `/em/*` | **StratiGraph Server** | rooms: the live graph, its assets, the WebSocket |
+| `/catalog/*` | **StratiGraph Catalog** | the studies as published: search, HDT view, "open in…" |
 | `/iiif/*` | cantaloupe | the IIIF Image API, straight out of the bucket |
 | `/assets/*` | minio | the object store's own API |
 
@@ -37,7 +37,7 @@ in a query string defensible for a viewer that cannot set a header.
 2. **A domain pointing at it.** Caddy needs a name it can prove, over ports 80
    and 443. Without a real name there is no public certificate, and everything
    below still works but only over an internal CA nobody trusts.
-3. **The images.** `em-server` and `em-catalog` are built from the `Dockerfile`
+3. **The images.** `StratiGraph Server` and `StratiGraph Catalog` are built from the `Dockerfile`
    in each repo and pushed to the registry the defaults name
    (`git.3dresearch.it:5050/stratigraph/…`). Change `em_server_image` /
    `em_catalog_image` if they live somewhere else.
@@ -78,18 +78,18 @@ Two notes for whoever runs it:
 |---|---|---|
 | `server_name` | `heriverse.example.com` | **the** domain. Everything public is derived from it |
 | `em_server_enabled` / `em_catalog_enabled` | `true` | whether the StratiGraph services come up at all |
-| `minio_enabled` | `true` | object store on. Off ⇒ em-server falls back to a directory (single instance only) |
+| `minio_enabled` | `true` | object store on. Off ⇒ StratiGraph Server falls back to a directory (single instance only) |
 | `iiif_enabled` | `true` | Cantaloupe on. Needs MinIO |
 | `em_catalog_couchdb_enabled` | `true` | the Catalog's index in CouchDB. Off ⇒ SQLite on a volume |
-| `em_server_audience` / `em_catalog_audience` | `em-server` | the audience each service requires in a token |
+| `em_server_audience` / `em_catalog_audience` | `StratiGraph Server` | the audience each service requires in a token |
 | `minio_root_user` / `_password`, `couchdb_user` / `_password` | **none** | from the inventory or the Vault |
-| `EM_CORPUS_CURATORS` (env on em-server) | **empty** | the ORCIDs allowed to read the **whole** resident DTC corpus. The register's per-file **slice** (`GET /v1/corpus?sha256=…`) is open to any authenticated caller — that is what clients use — but the lot is the provenance of every study on the instance, so it is a curation read and it is **off until somebody is named**. A refusal is a 403 that says so |
-| `EM_CORPUS_OPEN` (env on em-server) | unset | `1` opens the whole read to any authenticated caller. For a single-user instance; kept as one visible setting rather than a special case in the code |
-| `EM_CORPUS_DIR` (env on em-server) | falls back to `EM_SNAPSHOT_DIR` | where the resident corpus lives **when there is no MinIO**. With MinIO configured the register rides in the same bucket as the assets it describes (`em/corpus.em.json`) and needs no setting |
+| `EM_CORPUS_CURATORS` (env on StratiGraph Server) | **empty** | the ORCIDs allowed to read the **whole** resident DTC corpus. The register's per-file **slice** (`GET /v1/corpus?sha256=…`) is open to any authenticated caller — that is what clients use — but the lot is the provenance of every study on the instance, so it is a curation read and it is **off until somebody is named**. A refusal is a 403 that says so |
+| `EM_CORPUS_OPEN` (env on StratiGraph Server) | unset | `1` opens the whole read to any authenticated caller. For a single-user instance; kept as one visible setting rather than a special case in the code |
+| `EM_CORPUS_DIR` (env on StratiGraph Server) | falls back to `EM_SNAPSHOT_DIR` | where the resident corpus lives **when there is no MinIO**. With MinIO configured the register rides in the same bucket as the assets it describes (`em/corpus.em.json`) and needs no setting |
 
-The URL topology is **already correct** in the templates: em-server writes
+The URL topology is **already correct** in the templates: StratiGraph Server writes
 `https://<server_name>/iiif/3` into its manifests and dials
-`http://cantaloupe:8182/iiif/3` to measure images; em-catalog writes
+`http://cantaloupe:8182/iiif/3` to measure images; StratiGraph Catalog writes
 `https://<server_name>` into its "open in…" answers and reaches MinIO and CouchDB
 by service name. Nothing about it has to be assembled by hand — see
 [`URL-TOPOLOGY.md`](URL-TOPOLOGY.md) for why the two forms are two variables.
@@ -109,13 +109,13 @@ docker-compose -f /tmp/dc.yml config
 ```
 
 Measured: **VALID**, nine services —
-`caddy cantaloupe couchdb em-catalog em-server heriverse heriverse-server
+`caddy cantaloupe couchdb StratiGraph Catalog StratiGraph Server heriverse heriverse-server
 keycloak minio` — and the volumes `couchdb_config couchdb_data em_catalog_data
 em_data keycloak_data minio_data`.
 
 With the Catalog on its SQLite index and no object store
 (`em_catalog_couchdb_enabled: false`, `minio_enabled: false`,
-`iiif_enabled: false`): **VALID**, seven services, and the em-catalog block
+`iiif_enabled: false`): **VALID**, seven services, and the StratiGraph Catalog block
 carries `EM_CATALOG_DB` instead of `COUCHDB_URL`. The config gating works in
 both directions, which is the point of testing the *off* case at all.
 
@@ -150,9 +150,9 @@ What to look for, in both answers:
 
 * `"auth": "keycloak"` — **not** `dev-no-auth`. If it says the latter, the
   service did not get its OIDC environment and is answering to anybody;
-* em-server: `"asset_store": "minio (…)"` — if it says `memory`, uploads are
+* StratiGraph Server: `"asset_store": "minio (…)"` — if it says `memory`, uploads are
   living in a process and will vanish with it;
-* em-catalog: `"container_store": "minio (…)"` and `"index": "couchdb (…)"`.
+* StratiGraph Catalog: `"container_store": "minio (…)"` and `"index": "couchdb (…)"`.
 
 Then the one that proves the architecture rather than the wiring:
 

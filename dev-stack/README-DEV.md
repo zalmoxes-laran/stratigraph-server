@@ -1,11 +1,11 @@
-# The dev stack — MinIO + Keycloak + em-server on a laptop (Colima)
+# The dev stack — MinIO + Keycloak + StratiGraph Server on a laptop (Colima)
 
 **What this is.** A local stack for *our* development, not a second deployment
 path. The real server — and a local FCN and an institutional node are the same
 service, only differently addressed — is provisioned with the production
-Ansible/compose (`heriverse-ansible`). What runs here is the **same em-server
+Ansible/compose (`heriverse-ansible`). What runs here is the **same StratiGraph Server
 image**, the **same wire**, and the **same MinIO implementation of the
-AssetStore**. The only thing this directory adds is the two things em-server
+AssetStore**. The only thing this directory adds is the two things StratiGraph Server
 depends on, next to it, so the promotion arc can be exercised against a **real
 object store** without a remote host.
 
@@ -52,7 +52,7 @@ cp .env.dev.example .env.dev
 docker-compose --env-file .env.dev -f docker-compose.dev.yml up -d --build
 ```
 
-That builds em-server and em-catalog from their own `Dockerfile`s and starts the
+That builds StratiGraph Server and StratiGraph Catalog from their own `Dockerfile`s and starts the
 rest: MinIO, a one-shot that **creates the bucket**, Keycloak with the **dev
 realm imported**, Cantaloupe for IIIF, and the two services pointed at all of
 them. First run takes a few minutes (the image builds); after that it is seconds
@@ -60,8 +60,8 @@ them. First run takes a few minutes (the image builds); after that it is seconds
 
 | what | where | credentials |
 |---|---|---|
-| em-server (the room) | <http://localhost:8000/v1/health> | a bearer token (below) |
-| em-catalog (the studies) | <http://localhost:8010/health> | idem |
+| StratiGraph Server (the room) | <http://localhost:8000/v1/health> | a bearer token (below) |
+| StratiGraph Catalog (the studies) | <http://localhost:8010/health> | idem |
 | MinIO console | <http://localhost:9001> | `minioadmin` / `minioadmin` |
 | MinIO API | <http://localhost:9000> | idem |
 | Keycloak | <http://localhost:8085> | `admin` / `admin` |
@@ -86,7 +86,7 @@ curl -s http://localhost:8000/v1/health | jq
 
 A healthy stack answers `"auth": "keycloak"` and
 `"asset_store": "minio (http://minio:9000, bucket em-assets)"`. If it says
-`dev-no-auth` or `memory`, em-server did not get its environment — look at
+`dev-no-auth` or `memory`, StratiGraph Server did not get its environment — look at
 `docker logs em-dev-server`.
 
 ---
@@ -129,9 +129,9 @@ python dev-stack/smoke.py       # from the repo root
 ```
 
 It takes a token, uploads an asset, **opens the bucket itself** to check the
-object is there (em-server's own word is not proof), downloads it, checks that
+object is there (StratiGraph Server's own word is not proof), downloads it, checks that
 an unauthenticated request is refused, and finally runs
-`s3dgraphy.api.promote_resource` against the URL em-server serves — verifying
+`s3dgraphy.api.promote_resource` against the URL StratiGraph Server serves — verifying
 that the URL written into the graph really serves those bytes and that they hash
 to the checksum the graph recorded.
 
@@ -142,13 +142,13 @@ Anything it cannot measure is printed as `SKIPPED` with the reason. A skip means
 
 ## The catalogue — studies beside the rooms
 
-`em-catalog` publishes **studies** (em.json containers) out of the same bucket,
+`StratiGraph Catalog` publishes **studies** (em.json containers) out of the same bucket,
 under the `studies/` prefix, against the same realm. It is a **reference**
 implementation of the contract 3DR will build the production Catalog against —
-see `em-catalog/README.md`.
+see `stratigraph-catalog/README.md`.
 
 ```bash
-docker-compose --env-file .env.dev -f docker-compose.dev.yml up -d --build em-catalog
+docker-compose --env-file .env.dev -f docker-compose.dev.yml up -d --build StratiGraph Catalog
 curl -s http://localhost:8010/health | python3 -m json.tool
 ```
 
@@ -191,7 +191,7 @@ finally **empties the index and rebuilds it from the object store** — the clai
 that the index is a projection, executed rather than asserted.
 
 To exercise the **deploy** index instead of the dev one, bring up CouchDB and
-uncomment the three `COUCHDB_*` lines in the `em-catalog` service:
+uncomment the three `COUCHDB_*` lines in the `StratiGraph Catalog` service:
 
 ```bash
 docker-compose --env-file .env.dev -f docker-compose.dev.yml --profile couchdb up -d
@@ -256,10 +256,10 @@ What does **not** come back, and how to put it back:
 python dev-stack/smoke.py            # re-uploads a test asset, checks the arc
 python dev-stack/smoke_iiif.py       # re-uploads the demonstration IMAGE
 python dev-stack/seed_rooms.py       # the two rooms: mostra (public) / scavo (restricted)
-docker-compose --env-file .env.dev -f docker-compose.dev.yml restart em-server
+docker-compose --env-file .env.dev -f docker-compose.dev.yml restart stratigraph-server
 ```
 
-The restart is needed because em-server reads a room's document when the room is
+The restart is needed because StratiGraph Server reads a room's document when the room is
 first opened; a room it has already opened keeps what it had.
 
 Then the visibility rule answers again — this is the check that tells you the
@@ -297,9 +297,9 @@ prove the stack comes up from nothing (and then re-seed as in case 3 above).
 |---|---|
 | `Cannot connect to the Docker daemon` | Colima is not running, or the context is `default` — `colima start`, `docker context use colima` |
 | Keycloak exits at boot with a Jackson error | an unknown key in `realm-em-dev.json`. The importer is strict: **no comments in that file** (that is why its notes live in `keycloak/README.md`) |
-| `403 … the token's audience does not include 'em-server'` | the realm's audience mapper is missing. It is the single most common reason a correct-looking token is refused |
-| `401` with a token that looks fine | the issuer. A token minted through `localhost:8085` says `iss: http://localhost:8085/...`; em-server is configured with exactly that spelling and fetches the JWKS over the internal `keycloak:8080`. Change one and you must change the other |
-| em-server exits saying the store is *half configured* | three of the four `MINIO_*` variables. It refuses rather than falling back to a local directory nobody backs up |
+| `403 … the token's audience does not include 'StratiGraph Server'` | the realm's audience mapper is missing. It is the single most common reason a correct-looking token is refused |
+| `401` with a token that looks fine | the issuer. A token minted through `localhost:8085` says `iss: http://localhost:8085/...`; StratiGraph Server is configured with exactly that spelling and fetches the JWKS over the internal `keycloak:8080`. Change one and you must change the other |
+| StratiGraph Server exits saying the store is *half configured* | three of the four `MINIO_*` variables. It refuses rather than falling back to a local directory nobody backs up |
 | a port is already taken | change it in `.env.dev` — every port in the compose file is a variable |
 
 ---
@@ -340,7 +340,7 @@ python dev-stack/smoke_iiif.py     # the whole arc, measured
 
 It uploads an image, checks Cantaloupe serves `info.json` / a thumbnail / a
 region crop for it, puts a graph with two annotation regions into a room through
-the op stream, and asks em-server for the **IIIF Presentation manifest** — whose
+the op stream, and asks StratiGraph Server for the **IIIF Presentation manifest** — whose
 canvas is sized from the real `info.json` and whose annotations are the graph's
 regions as **W3C Web Annotations**.
 
@@ -365,7 +365,7 @@ docker compose --profile https --env-file .env.dev -f docker-compose.dev.yml up 
 
 | rotta | va a | uguale a produzione? |
 |---|---|---|
-| `https://em.localhost:8443/em/*` | em-server | sì (`handle_path`) |
+| `https://em.localhost:8443/em/*` | StratiGraph Server | sì (`handle_path`) |
 | `https://em.localhost:8443/iiif/*` | Cantaloupe | sì (`handle` — la versione sta nel path) |
 | `https://em.localhost:8443/assets/*` | MinIO | sì |
 | `https://em.localhost:8443/auth/*` | Keycloak | sì |

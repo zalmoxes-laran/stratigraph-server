@@ -1,4 +1,4 @@
-# Override — em-server & em-catalog girano contro il s3Dgraphy LOCALE (il checkout),
+# Override — stratigraph-server & stratigraph-catalog girano contro il s3Dgraphy LOCALE (il checkout),
 # non contro il wheel di PyPI. Monta `s3Dgraphy/src` e lo antepone via PYTHONPATH:
 # editi s3Dgraphy sul tuo disco → riavvii il servizio → è live. Nessuna pubblicazione
 # su PyPI, nessun rebuild dell'immagine per una modifica al codice.
@@ -13,14 +13,14 @@
 #   docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml --profile https up -d --build
 #
 # Dopo aver editato s3Dgraphy, per raccogliere le modifiche:
-#   docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart em-server em-catalog
+#   docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart stratigraph-server stratigraph-catalog
 services:
-  em-server:
+  stratigraph-server:
     volumes:
       - ../../s3Dgraphy/src:/s3dgraphy-src:ro
     environment:
       PYTHONPATH: /s3dgraphy-src        # antepone il sorgente locale a quello installato
-  em-catalog:
+  stratigraph-catalog:
     volumes:
       - ../../s3Dgraphy/src:/s3dgraphy-src:ro
     environment:

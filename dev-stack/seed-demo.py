@@ -371,7 +371,7 @@ Fatto. Da aprire nel browser (host di Caddy):
   IIIF info.json      {public}/iiif/3/{iiif_id}/info.json
   miniatura           {public}/iiif/3/{iiif_id}/full/!240,240/0/default.jpg
 
-Senza Caddy, sulle porte host: catalog {catalog} · em-server {server} ·
+Senza Caddy, sulle porte host: catalog {catalog} · StratiGraph Server {server} ·
 immagini http://localhost:{env('CANTALOUPE_PORT', '8182')}/iiif/3
 
 Il certificato di Caddy è di una CA interna: se il browser protesta,

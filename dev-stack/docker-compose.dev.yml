@@ -150,7 +150,7 @@ services:
     container_name: em-dev-caddy
     profiles: ["https"]
     depends_on:
-      - em-server
+      - stratigraph-server
       - cantaloupe
       - minio
     ports:
@@ -195,11 +195,11 @@ services:
   # =======================================================================
   # THE ROOM — built from em-server's own Dockerfile, unchanged
   # =======================================================================
-  em-server:
+  stratigraph-server:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: em-server:dev
+    image: stratigraph-server:dev
     container_name: em-dev-server
     depends_on:
       keycloak:
@@ -254,7 +254,7 @@ services:
       # INTERNAL address again, for the same reason. Unset on a node with no
       # Catalog: the panel then says «not configured», which is a fact about the
       # deployment and not a failure.
-      EM_CATALOG_INTERNAL: "http://em-catalog:8000"
+      EM_CATALOG_INTERNAL: "http://stratigraph-catalog:8000"
       # The dev stack runs the LIBRARY YOU ARE EDITING: the sibling s3Dgraphy
       # checkout is mounted and put first on the path. If it is not there the
       # mount is an empty directory and the image's pinned wheel is used instead
@@ -284,11 +284,11 @@ services:
   # It is a REFERENCE implementation (see em-catalog/README.md): the production
   # Catalog is 3DR's, on WP6's CouchDB. This one proves the contract runs.
   # =======================================================================
-  em-catalog:
+  stratigraph-catalog:
     build:
-      context: ../../em-catalog
+      context: ../../stratigraph-catalog
       dockerfile: Dockerfile
-    image: em-catalog:dev
+    image: stratigraph-catalog:dev
     container_name: em-dev-catalog
     depends_on:
       keycloak:
@@ -335,7 +335,7 @@ services:
       - em_catalog_data:/srv/em-catalog-data
       # the code you are editing, on both sides of the line — same reason as
       # em-server: an edit to a route must not need an image rebuild
-      - ../../em-catalog/app:/srv/em-catalog/app:ro
+      - ../../stratigraph-catalog/app:/srv/em-catalog/app:ro
       - ../../s3Dgraphy/src:/srv/s3dgraphy-src:ro
       # …and the built reader, the same way: `npm run build:reader` in EMStudio
       # is served on the next request, with no rebuild and no restart, because

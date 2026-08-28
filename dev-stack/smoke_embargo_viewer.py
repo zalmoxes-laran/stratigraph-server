@@ -19,7 +19,7 @@ What it measures, against the LIVE stack, in order:
 
 1. two real tokens — `dev` (who will own the room) and `viewer`;
 2. an asset published into a fresh room, and an **embargo declared on it in the
-   room's own document** (the graph is where an embargo lives; em-server reads
+   room's own document** (the graph is where an embargo lives; StratiGraph Server reads
    it, it does not keep a copy);
 3. **403 for the viewer, with the date in the message** — the row somebody has
    to be able to act on;
@@ -170,14 +170,14 @@ def main() -> int:
     # `viewer` a stranger — which is the whole point
     room = f"embargo-smoke-{uuid.uuid4().hex[:8]}"
 
-    print(f"em-server : {server}")
+    print(f"StratiGraph Server : {server}")
     print(f"keycloak  : {keycloak}/realms/{realm}")
     print(f"room      : {room}")
     print()
 
     status, body, _ = request(f"{server}/v1/health")
     if status != 200:
-        print(f"em-server is not answering on {server}. Is the stack up?")
+        print(f"StratiGraph Server is not answering on {server}. Is the stack up?")
         return 2
 
     owner_token = token_for(keycloak, realm, env("DEV_USER", "dev"),

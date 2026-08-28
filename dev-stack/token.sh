@@ -108,7 +108,7 @@ fi
 
 if [[ -n "$CLAIMS" ]]; then
     # Decoded, NOT verified — this prints what the token says about itself, which
-    # is what you want when a room refuses it. em-server is the one that checks
+    # is what you want when a room refuses it. StratiGraph Server is the one that checks
     # the signature, and it is right to be the only one that does.
     printf '%s' "$token" | python3 -c '
 import base64, json, sys, datetime

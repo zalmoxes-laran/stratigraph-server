@@ -2,8 +2,8 @@
 
 Two entries, and the order is the point:
 
-* the repo root, so ``app`` is importable without installing em-server;
-* **the s3Dgraphy checkout ahead of any installed wheel**, because em-server is
+* the repo root, so ``app`` is importable without installing StratiGraph Server;
+* **the s3Dgraphy checkout ahead of any installed wheel**, because StratiGraph Server is
   developed against the reference implementation as it is *now*. A test that
   silently validated against last week's published dev would pass while the thing
   it describes was already different.

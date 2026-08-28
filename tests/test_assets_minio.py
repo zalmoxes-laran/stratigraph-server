@@ -35,7 +35,7 @@ ACCESS_KEY = os.environ.get("MINIO_ROOT_USER", "minioadmin")
 SECRET_KEY = os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin")
 
 pytest.importorskip("minio", reason="the `minio` client is not installed "
-                                    "(pip install em-server[s3])")
+                                    "(pip install StratiGraph Server[s3])")
 
 
 def _reachable() -> bool:

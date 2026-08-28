@@ -1,4 +1,4 @@
-# em-server
+# StratiGraph Server
 
 **The s3Dgraphy access API, over HTTP.** A thin FastAPI wrapper around the same
 operations EMStudio's local bridge already calls — so a browser client can point at
@@ -8,10 +8,10 @@ Part of the StratiGraph ecosystem (CNR ISPC, Horizon Europe GA 101232855) with
 [s3Dgraphy](../s3Dgraphy) (the reference implementation), EMStudio, EM-blender-tools
 and EMLab.
 
-**Where this sits.** em-server is **the ROOM**: the graph *being edited right
+**Where this sits.** StratiGraph Server is **the ROOM**: the graph *being edited right
 now*, the relay that carries operations between the people editing it, the assets
 that graph points at, and the IIIF manifests for its images. Its sibling
-[em-catalog](../em-catalog) is **the REGISTER**: the studies as *published*. Same
+[StratiGraph Catalog](../StratiGraph Catalog) is **the REGISTER**: the studies as *published*. Same
 bucket, same realm, different question.
 
 | you want to… | read |
@@ -30,8 +30,8 @@ bucket, same realm, different question.
 ## The two rules that shape this repo
 
 **1. FastAPI lives only here.** s3Dgraphy stays a pure library — no web framework,
-no transport, no server — and em-server is the one place that knows about HTTP. The
-corollary is the useful part: **em-server adds no logic.** Every endpoint is a call
+no transport, no server — and StratiGraph Server is the one place that knows about HTTP. The
+corollary is the useful part: **StratiGraph Server adds no logic.** Every endpoint is a call
 into `s3dgraphy.api`; if an operation needs to compute something, that something
 belongs in the library, where it is testable without a server and reusable by
 EMStudio, EMtools and EMLab. There is a test that reads `app/main.py` and fails if
@@ -104,7 +104,7 @@ to hand to 3DR for P1.
 
 ## Auth (P1)
 
-em-server is a **resource server**: it never logs anybody in. A client gets an
+StratiGraph Server is a **resource server**: it never logs anybody in. A client gets an
 access token from the shared Keycloak realm — the one Heriverse-Server already uses
 — and sends it as `Authorization: Bearer <jwt>`. Every request is verified against
 the realm's published JWKS; there is no session, which is what keeps the service
@@ -128,7 +128,7 @@ switched on. `GET /health` reports `auth: "keycloak"` or `auth: "dev-no-auth"`, 
 | `EM_SERVER_ALLOW_ANON` | `1` to state the local open mode deliberately. **Ignored** when OIDC is configured |
 
 The derivation is the alignment that matters: 3DR already sets `TOKEN_ENDPOINT`, so
-em-server must not ask for a second spelling of the same realm URL. Two variables
+StratiGraph Server must not ask for a second spelling of the same realm URL. Two variables
 for one fact is how configurations drift until one of them is wrong. It works with
 both Keycloak path styles (`/auth/realms/…` for ≤16, `/realms/…` for 17+) because
 the endpoint's fixed suffix is stripped rather than the prefix guessed.
@@ -154,8 +154,8 @@ CLIENT_ID_em=em
 ### What is still needed from 3DR
 
 The end-to-end run against the real realm needs the shared configuration:
-the realm's public URL as reachable from em-server's container, a **client for
-em-server** in that realm, and — the one that bites — an **audience mapper** on it,
+the realm's public URL as reachable from StratiGraph Server's container, a **client for
+StratiGraph Server** in that realm, and — the one that bites — an **audience mapper** on it,
 because Keycloak does not put a client's own id in `aud` by default. Without the
 mapper a genuine token arrives with `aud: account` and is correctly refused with a
 403. See the mail-spec to Romano (realm + bucket + routing).
@@ -189,8 +189,8 @@ installing: `PYTHONPATH=../s3Dgraphy/src .venv/bin/uvicorn app.main:app`.)
 ### Docker
 
 ```bash
-docker build -t em-server .
-docker run --rm -p 8000:8000 em-server
+docker build -t StratiGraph Server .
+docker run --rm -p 8000:8000 StratiGraph Server
 curl -s localhost:8000/v1/health | python3 -m json.tool
 ```
 
@@ -201,7 +201,7 @@ checkout instead, mount it and point `PYTHONPATH` at it:
 ```bash
 docker run --rm -p 8000:8000 \
   -v /path/to/s3Dgraphy/src:/opt/s3dgraphy-src:ro \
-  -e PYTHONPATH=/opt/s3dgraphy-src em-server
+  -e PYTHONPATH=/opt/s3dgraphy-src StratiGraph Server
 ```
 
 The image carries the optional engines by default (rdflib, pyproj): a service whose
@@ -286,7 +286,7 @@ None of them is stubbed here. A placeholder endpoint gets called, and each phase
 carries a real decision — which identity provider, which bucket layout, which
 conflict policy — that is not ours alone to make.
 
-The mini-plan (`Regia_EM/em-server-mini-plan.md`) describes the **full** surface this
+The mini-plan (`Regia_EM/StratiGraph Server-mini-plan.md`) describes the **full** surface this
 service will eventually expose: GraphML ↔ em.json, the resource ops (list / resolve /
 ingest-minio / presign), DTC detach/inject/bake, `georeference_scene`, and the
 narrative generation seam. P0 carries the read-only subset on purpose — everything

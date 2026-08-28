@@ -27,7 +27,7 @@ the difference between a demo and a fixture.
 
 It writes THROUGH the container (`docker exec`) rather than into a host path,
 because the snapshots live on a named volume and the volume is the only place
-they exist. Nothing here needs em-server to be answering — only the container to
+they exist. Nothing here needs StratiGraph Server to be answering — only the container to
 be up — so it also works while the service is restarting.
 
 The image both rooms point at is the one `smoke_iiif.py` uploads; run that first
@@ -326,7 +326,7 @@ def main() -> int:
         # snapshot that arrived by an earlier `docker cp` is owned by the HOST
         # user and the app user cannot truncate it — measured: "Permission
         # denied" on a file that plainly exists and is plainly world-readable.
-        # The chown hands it back to whoever owns the directory, so em-server
+        # The chown hands it back to whoever owns the directory, so StratiGraph Server
         # keeps being able to rewrite it on its own save.
         target = f"{SNAPSHOT_DIR}/{room_id}.em.json"
         result = subprocess.run(
@@ -344,11 +344,11 @@ def main() -> int:
             return 1
         print(f"[  ok  ] {room_id} — record: «{name}» → [{room_id}]")
 
-    print("\nem-server reads a room's document when the room is first opened, so "
+    print("\nStratiGraph Server reads a room's document when the room is first opened, so "
           "a room that was already live in this process keeps what it had.\n"
           "Restart it if you have just changed a seed:\n"
           "  docker-compose --env-file .env.dev -f docker-compose.dev.yml "
-          "restart em-server")
+          "restart StratiGraph Server")
     print()
     api_pass()
 

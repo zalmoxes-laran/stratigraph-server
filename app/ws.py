@@ -1,8 +1,8 @@
-"""The relay: `/v1/rooms/{id}/ws` — em-server as "just another host".
+"""The relay: `/v1/rooms/{id}/ws` — StratiGraph Server as "just another host".
 
 It speaks **the wire that already exists** (ADR-002: `snapshot`, `op`,
 `host_info`, `select`, `command`). That is the whole trick of this step: when
-EMStudio points at an em-server it does not need a new protocol, because the
+EMStudio points at an StratiGraph Server it does not need a new protocol, because the
 relay is a host that happens to have several clients instead of one.
 
 **WIRE 2 · the body travels nested.** The envelope is `{v, type, source,
@@ -68,7 +68,7 @@ def groups() -> Groups:
 #: this process, so a bump cannot be half-applied.
 
 #: What this host calls itself in `host_info` — a client shows it in its footer.
-HOST_TOOL = "em-server (relay)"
+HOST_TOOL = "StratiGraph Server (relay)"
 
 #: The verbs that CHANGE something and therefore need `editor` or better.
 #: `select` and `ack` are not here and must not be: awareness is not writing,

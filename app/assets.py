@@ -162,7 +162,7 @@ class MinioAssetStore:
       that still points at it, because a different content is a different key;
     * **verifiability** — anybody can hash what they fetched and check.
 
-    The `minio` client is an OPTIONAL dependency (`pip install em-server[s3]`).
+    The `minio` client is an OPTIONAL dependency (`pip install StratiGraph Server[s3]`).
     A build without it fails **here**, at construction, with a sentence — not at
     the first upload with a stack trace from inside a request.
     """
@@ -174,7 +174,7 @@ class MinioAssetStore:
         except ImportError as exc:   # pragma: no cover — depends on the build
             raise RuntimeError(
                 "the MinIO asset store needs the `minio` client, which this "
-                "build does not have: install em-server[s3] (or unset the MinIO "
+                "build does not have: install StratiGraph Server[s3] (or unset the MinIO "
                 "environment and use EM_ASSET_DIR)") from exc
 
         self.bucket = bucket
@@ -209,7 +209,7 @@ class MinioAssetStore:
         except Exception as exc:      # network, DNS, TLS: not an S3 answer at all
             raise RuntimeError(
                 f"the object store at {self.endpoint} did not answer: {exc}. "
-                f"em-server will not start without the store it is configured "
+                f"StratiGraph Server will not start without the store it is configured "
                 f"to write to") from exc
 
     # ── the interface ────────────────────────────────────────────────────────
@@ -274,7 +274,7 @@ class MinioAssetStore:
 
 #: The MinIO settings, in the two spellings that exist in the wild: the client's
 #: own names (`MINIO_*`, what the dev-stack and MinIO's own docs use) and the
-#: em-server-prefixed ones the Ansible role writes. Read in this order, like
+#: StratiGraph Server-prefixed ones the Ansible role writes. Read in this order, like
 #: `auth.py` reads the issuer — one setting, two names, and a precedence, rather
 #: than two settings that will one day disagree.
 _MINIO_KEYS = {
@@ -304,7 +304,7 @@ def _minio_settings(env: Dict[str, str]) -> Optional[Dict[str, Any]]:
         raise RuntimeError(
             "the MinIO asset store is half configured: "
             f"{', '.join(sorted(given))} given, {', '.join(sorted(missing))} "
-            "missing. em-server will not fall back to a local directory the "
+            "missing. StratiGraph Server will not fall back to a local directory the "
             "operator did not ask for — set all four "
             "(MINIO_ENDPOINT / MINIO_ACCESS_KEY / MINIO_SECRET_KEY / "
             "MINIO_BUCKET) or none of them.")

@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "em-server"
+name = "stratigraph-server"
 version = "0.1.0.dev0"
 description = "The s3Dgraphy access API over HTTP — thin FastAPI wrapper (StratiGraph)"
 readme = "README.md"
@@ -12,7 +12,8 @@ license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "Emanuel Demetrescu", email = "emanuel.demetrescu@cnr.it" }]
 keywords = ["extended matrix", "archaeology", "fastapi", "cidoc-crm"]
 
-# Deliberately three lines long. em-server adds a transport and nothing else, so
+# Deliberately three lines long. StratiGraph Server adds a transport and nothing
+# else, so
 # its dependencies are the library it exposes plus the server that exposes it.
 # Everything heavy is OPTIONAL and stays optional (see the extras): a deployment
 # that only validates graphs should not have to ship PROJ or an RDF stack.
@@ -46,7 +47,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Kept as NAMES for the capabilities they buy, even though the base pin already
-# carries both: `pip install em-server[geo]` reads as intent, and the day the base
+# carries both: `pip install stratigraph-server[geo]` reads as intent, and the day the base
 # pin is loosened these are the knobs that stay meaningful.
 rdf = ["s3dgraphy[rdf]==1.6.0.dev12"]      # /v1/export-ttl
 geo = ["s3dgraphy[geo]==1.6.0.dev12"]      # /v1/reproject (pyproj bundles PROJ)

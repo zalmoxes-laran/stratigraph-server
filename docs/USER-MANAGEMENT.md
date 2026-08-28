@@ -1,22 +1,22 @@
 # User management, end to end — two faces, one contract
 
-Who may do what in the EM ecosystem is decided **once**, in em-server. Everything
+Who may do what in the EM ecosystem is decided **once**, in StratiGraph Server. Everything
 else is a face on that decision:
 
 | face | who it is for | where it lives | scope |
 |---|---|---|---|
 | **Members panel** | the person who owns a room | EMStudio, in the tool | *my room* |
-| **Node console** | whoever looks after the server | em-server, at `/admin` | *every room* |
+| **Node console** | whoever looks after the server | StratiGraph Server, at `/admin` | *every room* |
 
 Both call the same endpoints. If a rule changes in `app/access.py`, both change
 with it, because neither of them holds a copy.
 
 ```
-Keycloak authenticates ─────► em-server authorises ─────► MinIO stores
+Keycloak authenticates ─────► StratiGraph Server authorises ─────► MinIO stores
    (who you are, ORCID)         (per-room ACL  +  per-asset DTC)     (bytes)
 ```
 
-MinIO is never addressed by a client. Every byte goes through em-server, which
+MinIO is never addressed by a client. Every byte goes through StratiGraph Server, which
 reads the graph to decide whether you may have it — that is the second layer, and
 it is older than this document (`app/corpus.py`, `s3dgraphy.rights`).
 
@@ -41,8 +41,8 @@ it is older than this document (`app/corpus.py`, `s3dgraphy.rights`).
 ## HOWTO · a · bring the stack up
 
 ```bash
-cd em-server/dev-stack
-./fcn-up.sh                       # Keycloak + MinIO + em-server + Caddy (https)
+cd stratigraph-server/dev-stack
+./fcn-up.sh                       # Keycloak + MinIO + StratiGraph Server + Caddy (https)
 curl -sk https://em.localhost:8443/em/health | python3 -m json.tool
 ```
 
@@ -83,13 +83,13 @@ API to do the part a file cannot: the roles and one invitation link.
            EMStudio  <emstudio-url>?join=<token>&room=cantiere-demo
 ```
 
-The link is printed once because that is all there is: em-server keeps a **sha256
+The link is printed once because that is all there is: StratiGraph Server keeps a **sha256
 of the secret**, never the link. A leaked invite file is a list of rooms somebody
 was invited to, not a set of keys.
 
-> `em-server` reads a room's document when the room is first **opened**, and the
+> `StratiGraph Server` reads a room's document when the room is first **opened**, and the
 > dev stack mounts the code you are editing. After changing `app/` or a seed:
-> `docker-compose --env-file .env.dev -f docker-compose.dev.yml restart em-server`
+> `docker-compose --env-file .env.dev -f docker-compose.dev.yml restart stratigraph-server`
 
 ## HOWTO · c · the OWNER's face (EMStudio)
 
@@ -137,7 +137,7 @@ memory (never in web storage) and the console then asks the node
   * **Storage** — the three stores by name, per-room asset counts, containers that
     are missing, orphan digests, and *archive / restore*;
   * **Node Health** — every service this node depends on (itself, MinIO, Keycloak,
-    IIIF, em-catalog) as `ok` · `degraded` · `unreachable` · `not configured`,
+    IIIF, StratiGraph Catalog) as `ok` · `degraded` · `unreachable` · `not configured`,
     with latency, what the bucket is holding, and the versions in view.
 
 The console is a shell plus modules, and adding one does not touch the shell:
@@ -158,7 +158,7 @@ has a secret and does not do the standard flow, so pointing a browser at it fail
 at the last step with a message about the client instead of about the
 configuration. The realm must list the console's redirect (`…/admin/` bare and
 `…/em/admin/` behind a proxy); the dev realm lists both, plus an **audience
-mapper** adding `em-server` — without it the login works and every API call comes
+mapper** adding `StratiGraph Server` — without it the login works and every API call comes
 back 401.
 
 Pasting a bearer token is still there, folded under *"Paste a token instead"*: for
@@ -167,12 +167,12 @@ a dev stack, and for the day the realm is the thing that is down.
 Making yourself an operator on the dev stack (it ships with one already):
 
 ```yaml
-# dev-stack/docker-compose.dev.yml → em-server → environment
+# dev-stack/docker-compose.dev.yml → StratiGraph Server → environment
 EM_OPERATORS: "${DEV_OPERATOR_ORCID:-0000-0002-1825-0097}"
 ```
 
 ```bash
-docker-compose --env-file .env.dev -f docker-compose.dev.yml up -d em-server
+docker-compose --env-file .env.dev -f docker-compose.dev.yml up -d stratigraph-server
 ```
 
 In a real deployment prefer the **realm role** — `EM_OPERATOR_ROLE`, default
@@ -204,7 +204,7 @@ demonstration of the policy.
 The unit suites:
 
 ```bash
-cd em-server && .venv/bin/python -m pytest -q          # includes tests/test_rooms_register.py
+cd stratigraph-server && .venv/bin/python -m pytest -q          # includes tests/test_rooms_register.py
 cd EMStudio/frontend && node scripts/check-members.mjs # the panel, headless
 ```
 

@@ -41,7 +41,7 @@ the invariant refuses.
 Each archive gets a DTC-shaped note (`kind: "backup"`) — who, when, on which
 digest, with which label. It is kept in the **backup register**, and *not* as a
 node in the resident DTC corpus. That is a decision worth writing down: the
-corpus is the register of documentation that em-server *enforces rights from*,
+corpus is the register of documentation that StratiGraph Server *enforces rights from*,
 and its `ResourceNode`s are exactly the publishable things. Registering an
 opaque working file there would manufacture the one thing this module refuses to
 make — a citable asset — and would make the asset gate answer questions about a
@@ -52,7 +52,7 @@ a record, honestly labelled.
 ## Declared, and not tonight
 
 * **retention / GC.** Backups accumulate: an unreferenced-asset sweep
-  (keep-if-referenced) is an em-server-wide concern, and backups are precisely
+  (keep-if-referenced) is an StratiGraph Server-wide concern, and backups are precisely
   the objects a naive sweep would eat. Nothing here deletes anything.
 * **replicas.** The directory register is local, exactly like the directory
   snapshot store, and says so in `describe()`.
@@ -179,7 +179,7 @@ class MinioBackupBlobs:
         except ImportError as exc:   # pragma: no cover — depends on the build
             raise RuntimeError(
                 "the backup store needs the `minio` client, which this build "
-                "does not have: install em-server[s3], or unset the MinIO "
+                "does not have: install StratiGraph Server[s3], or unset the MinIO "
                 "environment and use EM_BACKUP_DIR") from exc
         self.bucket = bucket
         self.endpoint = endpoint

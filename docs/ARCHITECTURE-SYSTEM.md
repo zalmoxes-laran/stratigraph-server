@@ -41,7 +41,7 @@ one of them:
                                 │   ops · presence     │
                                 ▼                      ▼
      SERVICES        ┌───────────────────┐   ┌────────────────────────┐
-     (the node)      │    em-server      │   │      em-catalog        │
+     (the node)      │    StratiGraph Server      │   │      StratiGraph Catalog        │
                      │  THE ROOM         │   │  THE REGISTER          │
                      │  live graph,      │   │  studies as published, │
                      │  op relay,        │   │  search, the HDT view, │
@@ -86,7 +86,7 @@ that something belongs here.*
 
 **Repo:** [`s3Dgraphy`](../../s3Dgraphy) · installable as `pip install s3dgraphy`
 
-### em-server — the ROOM
+### StratiGraph Server — the ROOM
 
 The live half. It holds the graph **being edited right now**, relays operations
 between the people editing it, keeps the assets that graph points at, and serves
@@ -104,9 +104,9 @@ IIIF manifests for its images.
 * **stateless** — no session, no upload directory. The durable truth is the
   object store, never this process's disk.
 
-**Repo:** [`em-server`](../) · API under `/v1` · [`docs/URL-TOPOLOGY.md`](URL-TOPOLOGY.md)
+**Repo:** [`StratiGraph Server`](../) · API under `/v1` · [`docs/URL-TOPOLOGY.md`](URL-TOPOLOGY.md)
 
-### em-catalog — the REGISTER
+### StratiGraph Catalog — the REGISTER
 
 The published half. A study that is *finished enough to be found* is registered
 here: the container goes into the object store, and a **card** is derived from it
@@ -125,7 +125,7 @@ Sarmizegetusa in 1978, in 2013, in 2026, three containers, one digital twin.
 > publication, the browse UI, the institutional deployment — is 3DR's, on the WP6
 > infrastructure. What we provide is the contract, running.
 
-**Repo:** [`em-catalog`](../../em-catalog) · API under `/catalog`
+**Repo:** [`StratiGraph Catalog`](../../StratiGraph Catalog) · API under `/catalog`
 
 ### EMStudio — the editor
 
@@ -162,7 +162,7 @@ Same NarrativeNode, same rendering engine, two outputs — and each one *says
 which it is*, in its own footer. A third rendering built separately would
 eventually disagree with the other two about what the study said.
 
-The live viewer is EMStudio's reader bundle, and em-catalog serves it as a
+The live viewer is EMStudio's reader bundle, and StratiGraph Catalog serves it as a
 **directory** (`/catalog/reader/`, `EM_CATALOG_READER` pointing at the built
 `dist/`) rather than as one file: the reader gave up its single-file build so the
 3D engine could be a chunk fetched only when a model appears. A deployment that
@@ -205,7 +205,7 @@ impossible, which is worth more than the one bug it fixed.
 Every service→service URL exists in **two forms**: the internal one (a service
 name on the container network) and the public one (a host a browser can reach).
 
-> **em-server speaks on the internal form and writes the public form into the
+> **StratiGraph Server speaks on the internal form and writes the public form into the
 > documents it serves.** The address it *dials* comes only from the
 > configuration; a request parameter may, at most, change the URL written *into*
 > the answer.
@@ -253,6 +253,6 @@ stack where both forms were the same string would prove nothing.
 | know which URL is which | [`URL-TOPOLOGY.md`](URL-TOPOLOGY.md) |
 | understand the merge / real-time model | `EMStudio/docs/adr-003-offline-vs-realtime-versioning.md` |
 | use the library | [`s3Dgraphy/README.md`](../../s3Dgraphy/README.md) |
-| use the API | [`em-server/README.md`](../README.md) · [`em-catalog/README.md`](../../em-catalog/README.md) |
+| use the API | [`StratiGraph Server/README.md`](../README.md) · [`stratigraph-catalog/README.md`](../../stratigraph-catalog/README.md) |
 | edit a graph | [`EMStudio/README.md`](../../EMStudio/README.md) |
 | work in 3D | [`EM-blender-tools/README.md`](../../EM-blender-tools/README.md) |

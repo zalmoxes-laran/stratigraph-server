@@ -1,4 +1,4 @@
-"""The RESIDENT corpus: the documentation em-server can read, so the rights bite.
+"""The RESIDENT corpus: the documentation StratiGraph Server can read, so the rights bite.
 
 The hole these tests close was measured on 17 Aug against the live stack: an
 asset was uploaded to MinIO and its licence declared in a per-project corpus
@@ -150,7 +150,7 @@ def test_a_file_is_registered_only_if_this_instance_HOLDS_it(client, resident,
 
     The other acts all speak ABOUT a file (`enrich_asset_dtc` refuses to invent
     one), so a client that has just uploaded bytes registers them first. That is
-    also the moment em-server can look in its own store: a digest nobody uploaded
+    also the moment StratiGraph Server can look in its own store: a digest nobody uploaded
     would sit in the corpus carrying a licence for bytes that are not there.
     """
     ok = client.post("/v1/corpus/append", headers=HEAD, json={

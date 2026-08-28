@@ -1,8 +1,8 @@
 """Is this node well? — the probes behind the console's Health panel.
 
-`/v1/health` answers *«is em-server up, and what can this build do»*: a public
+`/v1/health` answers *«is StratiGraph Server up, and what can this build do»*: a public
 probe, for an orchestrator. This module answers a different question, and it is
-the operator's: **are the things em-server depends on answering, and how much are
+the operator's: **are the things StratiGraph Server depends on answering, and how much are
 they holding?** MinIO, Keycloak, the IIIF server, the Catalog — a node is not
 healthy because its own process is.
 
@@ -166,10 +166,10 @@ def _timed(probe: Callable[[], Check], name: str) -> Check:
 
 def _probe_self(version: str, s3dgraphy: Optional[str],
                 started_at: float) -> Check:
-    """em-server itself. It answered — that is what a request reaching this line
+    """StratiGraph Server itself. It answered — that is what a request reaching this line
     means — so the useful part is what it IS: the version, the library it speaks,
     and how long it has been up."""
-    return Check(name="em-server", state=OK, target="self", latency_ms=0,
+    return Check(name="stratigraph-server", state=OK, target="self", latency_ms=0,
                  detail=f"this process answered (up "
                         f"{int(time.time() - started_at)}s)",
                  facts={"version": version, "s3dgraphy": s3dgraphy,
@@ -222,7 +222,7 @@ def _probe_minio(store: Any) -> Check:
 
 
 def _probe_keycloak(jwks_uri: Optional[str], issuer: Optional[str]) -> Check:
-    """The realm. Probed at its JWKS, because that is the URL em-server actually
+    """The realm. Probed at its JWKS, because that is the URL StratiGraph Server actually
     depends on: a realm that answers but publishes no keys cannot verify a single
     token, and it is `degraded` rather than `ok` — the distinction a two-state
     check cannot make."""
@@ -268,17 +268,17 @@ def _probe_iiif(base: Optional[str]) -> Check:
 
 
 def _probe_catalog(base: Optional[str]) -> Check:
-    """The Catalog, which is a separate service and NOT one em-server talks to in
+    """The Catalog, which is a separate service and NOT one StratiGraph Server talks to in
     normal operation — so it is only probed when a deployment names it
     (`EM_CATALOG_INTERNAL`). Absent means absent."""
     if not base:
-        return Check(name="em-catalog", state=ABSENT,
+        return Check(name="stratigraph-catalog", state=ABSENT,
                      detail="no Catalog named on this node "
                             "(set EM_CATALOG_INTERNAL to watch one)")
     status, payload, error = _fetch(base.rstrip("/") + "/health", expect_json=True)
     target = _host_of(base)
     if error:
-        return Check(name="em-catalog", state=UNREACHABLE, target=target,
+        return Check(name="stratigraph-catalog", state=UNREACHABLE, target=target,
                      detail=f"the Catalog did not answer — {error}")
     if status == 200:
         facts = {}
@@ -286,9 +286,9 @@ def _probe_catalog(base: Optional[str]) -> Check:
             for key in ("version", "studies", "index"):
                 if key in payload:
                     facts[key] = payload[key]
-        return Check(name="em-catalog", state=OK, target=target,
+        return Check(name="stratigraph-catalog", state=OK, target=target,
                      detail="the Catalog answered its health probe", facts=facts)
-    return Check(name="em-catalog", state=DEGRADED, target=target,
+    return Check(name="stratigraph-catalog", state=DEGRADED, target=target,
                  detail=f"the Catalog answered {status}")
 
 
@@ -310,18 +310,18 @@ def node_health(*, version: str, s3dgraphy: Optional[str], asset_store: Any,
     """
     env = environ if environ is not None else os.environ
     checks: List[Check] = [
-        _timed(lambda: _probe_self(version, s3dgraphy, _STARTED_AT), "em-server"),
+        _timed(lambda: _probe_self(version, s3dgraphy, _STARTED_AT), "stratigraph-server"),
         _timed(lambda: _probe_minio(asset_store), "minio"),
         _timed(lambda: _probe_keycloak(env.get("OIDC_JWKS_URI"),
                                        env.get("OIDC_ISSUER")), "keycloak"),
         _timed(lambda: _probe_iiif(env.get("EM_IIIF_INTERNAL")
                                    or env.get("EM_IIIF_INTERNAL_BASE")), "iiif"),
-        _timed(lambda: _probe_catalog(env.get("EM_CATALOG_INTERNAL")), "em-catalog"),
+        _timed(lambda: _probe_catalog(env.get("EM_CATALOG_INTERNAL")), "stratigraph-catalog"),
     ]
 
     # The node's verdict, and the rule is the pessimistic one: anything the node
     # NEEDS being unreachable makes the node unhealthy, whatever else is fine.
-    needed = {"em-server", "minio", "keycloak"}
+    needed = {"stratigraph-server", "minio", "keycloak"}
     states = {c.name: c.state for c in checks}
     if any(states.get(name) == UNREACHABLE for name in needed):
         verdict = UNREACHABLE

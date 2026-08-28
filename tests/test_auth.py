@@ -135,7 +135,7 @@ def test_a_valid_token_is_accepted(realm):
 
 def test_the_jwks_is_fetched_once_and_reused(realm):
     """The cache exists so a burst of requests does not become a burst of calls to
-    the identity provider — which would make em-server a load source on the thing
+    the identity provider — which would make StratiGraph Server a load source on the thing
     everything else also depends on."""
     authenticator, key = realm
     authenticator.verify(_token(key))
@@ -370,7 +370,7 @@ def test_no_configuration_is_dev_mode(caplog):
 def test_dev_mode_says_so_loudly(caplog):
     import logging
 
-    with caplog.at_level(logging.WARNING, logger="em-server.auth"):
+    with caplog.at_level(logging.WARNING, logger="StratiGraph Server.auth"):
         load_settings({})
     assert any("OPEN" in r.message or "OPEN" in str(r.args)
                for r in caplog.records), caplog.text
@@ -390,7 +390,7 @@ def test_half_configured_refuses_to_start():
 
 def test_the_issuer_is_derived_from_heriverse_s_token_endpoint():
     """The alignment that keeps two services on one realm: 3DR already deploys
-    TOKEN_ENDPOINT, so em-server must not require a second spelling of the same
+    TOKEN_ENDPOINT, so StratiGraph Server must not require a second spelling of the same
     URL. Two variables for one fact is how configurations drift."""
     settings = load_settings({
         "TOKEN_ENDPOINT":
@@ -441,7 +441,7 @@ def test_the_anon_flag_cannot_open_a_configured_server(caplog):
     Guessing which of the two the operator meant is not this module's job."""
     import logging
 
-    with caplog.at_level(logging.WARNING, logger="em-server.auth"):
+    with caplog.at_level(logging.WARNING, logger="StratiGraph Server.auth"):
         settings = load_settings({
             "OIDC_ISSUER": ISSUER,
             "OIDC_AUDIENCE": AUDIENCE,

@@ -4,13 +4,13 @@ Guida ai test della stack StratiGraph di campo. Presuppone l'FCN acceso:
 `./fcn-up.sh` (o `--local-s3d`) e la CA fidata (`./fcn-trust-ca.sh`).
 
 ## Tappa 1 — i servizi sono vivi (browser)
-- em-server   → https://em.localhost:8443/em/v1/health
+- StratiGraph Server   → https://em.localhost:8443/em/v1/health
 - catalog     → https://em.localhost:8443/catalog/health
 - MinIO cons. → http://localhost:9001   (credenziali in `.env.dev`)
 - Keycloak    → http://localhost:8085   (realm `em-dev`)
 
 ## Tappa 2 — gli smoke end-to-end (la prova vera)
-Da `~/Documents/GitHub/em-server` (servono i pacchetti `requests` e `minio`:
+Da `~/Documents/GitHub/StratiGraph Server` (servono i pacchetti `requests` e `minio`:
 `pip3 install requests minio --break-system-packages`):
 
     python3 dev-stack/smoke.py          # AssetStore/MinIO reale: PUT→sha256→GET, auth, promozione DP-76
@@ -37,7 +37,7 @@ di verificare — atteso, non un guasto. Un token per l'uno o per l'altro:
     ./dev-stack/token.sh --user viewer   # viewer (autenticato, senza membership)
 
 Atteso: tutti verdi, **zero SKIP** (con `minio` installato, gli smoke aprono il bucket e verificano da soli —
-non si fidano della parola di em-server).
+non si fidano della parola di StratiGraph Server).
 
 ## Tappa 3 — vedi gli effetti
 - MinIO console → bucket `em-assets`: asset nominati col loro **sha256**, prefisso `studies/` coi container.
@@ -50,7 +50,7 @@ non si fidano della parola di em-server).
 EMStudio non è nella stack: è il client. Serve una stanza da aprire, un token, e la CA fidata
 (`./fcn-trust-ca.sh`, senza la quale il `wss://` non si apre e sembra un server muto).
 
-**1 · la stanza** (da `~/Documents/GitHub/em-server`):
+**1 · la stanza** (da `~/Documents/GitHub/StratiGraph Server`):
 
     python3 dev-stack/seed_rooms.py     # crea `basilica-demo`: 6 US e 5 rapporti
 
@@ -95,7 +95,7 @@ Questa è la **controprova umana**. La prova ripetibile è headless, e sono due:
     cd ~/Documents/GitHub/EM-blender-tools
     .venv/bin/python -m pytest tests/test_room_materialise.py -q   # 13 · la funzione pura
     EM_ROOM_URL=http://localhost:8000 EM_ROOM_ID=basilica-demo \
-      EM_ROOM_TOKEN=$(~/Documents/GitHub/em-server/dev-stack/token.sh) \
+      EM_ROOM_TOKEN=$(~/Documents/GitHub/stratigraph-server/dev-stack/token.sh) \
       EM_ASSET_SHA256=sha256:<un glb resident della stanza> \
       "/Applications/Blender 520.app/Contents/MacOS/Blender" --background \
         --python tests/blender_smoke_materialise.py                # 18 · L'OPERATORE

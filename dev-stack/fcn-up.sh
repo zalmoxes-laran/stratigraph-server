@@ -18,7 +18,7 @@ if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   awk 'NR==1{next} /^#/{sub(/^# ?/,"");print;next} /^[[:space:]]*$/{next} {exit}' "$0"; exit 0
 fi
 set -euo pipefail
-cd "$(dirname "$0")"                     # em-server/dev-stack
+cd "$(dirname "$0")"                     # stratigraph-server/dev-stack
 
 HTTPS_PORT="${HTTPS_PORT:-8443}"
 DEV_REALM="${DEV_REALM:-em-dev}"
@@ -60,7 +60,7 @@ export OIDC_ISSUER="https://${PRIMARY}:${HTTPS_PORT}/auth/realms/${DEV_REALM}"
 COMPOSE=(docker-compose --env-file .env.dev -f docker-compose.dev.yml)
 if [ "$LOCAL_S3D" = "yes" ]; then
   COMPOSE+=(-f docker-compose.local-s3d.yml)
-  echo "▶ modo s3Dgraphy LOCALE: em-server/em-catalog useranno ../../s3Dgraphy/src (edita e riavvia per testare)."
+  echo "▶ modo s3Dgraphy LOCALE: StratiGraph Server/StratiGraph Catalog useranno ../../s3Dgraphy/src (edita e riavvia per testare)."
 fi
 "${COMPOSE[@]}" --profile https up -d --build
 
@@ -79,6 +79,6 @@ Note:
   · altro computer: serve un HOSTNAME (mai IP nudo, rompe il TLS della CA interna) e che le
     due macchine si vedano in rete (hotspot che isola → travel-router · Internet-Sharing · Tailscale).
     Per usarlo come primario:  ./fcn-up.sh ${BONJOUR:-<mac>.local}
-$( [ "$LOCAL_S3D" = "yes" ] && echo "  · dopo aver editato s3Dgraphy:  docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart em-server em-catalog" )
+$( [ "$LOCAL_S3D" = "yes" ] && echo "  · dopo aver editato s3Dgraphy:  docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart stratigraph-server stratigraph-catalog" )
 Giù:  ./fcn-down.sh   (o --stop / --wipe / --colima)
 EOF

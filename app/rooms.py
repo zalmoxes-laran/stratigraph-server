@@ -1,6 +1,6 @@
 """The room: a study, its working copy, its op-log, and who is in it.
 
-P4.2 is where em-server stops being stateless, and the honest thing to do is to
+P4.2 is where StratiGraph Server stops being stateless, and the honest thing to do is to
 say exactly where the state is and why it is allowed. Three fences, and they are
 the contract:
 

@@ -17,7 +17,7 @@ browser where the realm is and which **public** client to use (`em-console`);
 `app/node_admin/auth.js` does the flow. Three properties worth keeping:
 
 * **no secret in the page** — that is what PKCE is for, and the node's own
-  `em-server` client (confidential, no standard flow) is deliberately not the one
+  `StratiGraph Server` client (confidential, no standard flow) is deliberately not the one
   the browser uses;
 * **nothing is stored** — the access and refresh tokens live in memory; the PKCE
   verifier has to survive the redirect, so it goes in `sessionStorage` and is
@@ -97,7 +97,7 @@ there:
 | --- | --- | --- |
 | `corpus.js` | `GET /v1/admin/corpus` | the resident DTC register: how many acts, by whom, which digests carry rights |
 | `iiif.js` | `GET /v1/admin/iiif` | Cantaloupe: cache size, derivatives held, `forward_auth` refusals |
-| `catalog.js` | `GET /v1/admin/catalog` | em-catalog: indexed studies, last reindex, what the index disagrees with |
+| `catalog.js` | `GET /v1/admin/catalog` | StratiGraph Catalog: indexed studies, last reindex, what the index disagrees with |
 | `drift.js` | `GET /v1/admin/drift` | datamodel drift across the consumers (Health already shows this node's half) |
 
 `tests/test_node_admin.py::test_the_next_panels_are_declared_and_not_half_built`
@@ -106,8 +106,8 @@ each endpoint answers 404.
 
 ## Node Health, in particular
 
-`GET /v1/admin/health` probes em-server itself, MinIO, Keycloak, IIIF and
-em-catalog, and reports **four states**:
+`GET /v1/admin/health` probes StratiGraph Server itself, MinIO, Keycloak, IIIF and
+StratiGraph Catalog, and reports **four states**:
 
 | state | means |
 | --- | --- |

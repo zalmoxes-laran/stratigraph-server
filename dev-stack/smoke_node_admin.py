@@ -89,10 +89,10 @@ def main() -> int:
                  detail_of(raw))
         print("\nTo measure the operator half, add this identity to the node and "
               "restart it:\n"
-              f"  in dev-stack/docker-compose.dev.yml, under em-server → "
+              f"  in dev-stack/docker-compose.dev.yml, under StratiGraph Server → "
               f"environment:\n      EM_OPERATORS: \"{who_owner}\"\n"
               "  docker-compose --env-file .env.dev -f docker-compose.dev.yml "
-              "up -d em-server\n"
+              "up -d StratiGraph Server\n"
               "…then run this smoke again. (Or grant the realm role "
               f"«{node_env.get('EM_OPERATOR_ROLE') or 'em-operator'}» in "
               "Keycloak.)")
@@ -197,19 +197,20 @@ def main() -> int:
              f"an operator gets the report ({status})",
              f"verdict: {report.get('verdict')} in {elapsed:.2f}s")
     states = {c["name"]: c for c in report.get("checks", [])}
-    for service in ("em-server", "minio", "keycloak", "iiif", "em-catalog"):
+    for service in ("stratigraph-server", "minio", "keycloak", "iiif",
+                    "stratigraph-catalog"):
         check = states.get(service, {})
         tally.ok(check.get("state") in ("ok", "degraded", "unreachable",
                                        "not configured"),
                  f"{service}: {check.get('state')}",
                  f"{check.get('latency_ms')}ms · {check.get('detail', '')[:70]}")
-    tally.ok(states.get("em-server", {}).get("state") == "ok",
+    tally.ok(states.get("stratigraph-server", {}).get("state") == "ok",
              "the node reports on ITSELF (it answered, so it is ok)")
     # A stopped service must not read «ok». Measured for real by stopping MinIO —
     # see docs/NODE-CONSOLE.md; here we assert the weaker property the smoke can
     # check on a healthy stack: nothing is «ok» without having been asked.
     for name, check in states.items():
-        if check.get("state") == "ok" and name != "em-server":
+        if check.get("state") == "ok" and name != "stratigraph-server":
             tally.ok(check.get("latency_ms") is not None and check.get("target"),
                      f"{name} is «ok» because it ANSWERED (target + latency)",
                      f"{check.get('target')} · {check.get('latency_ms')}ms")

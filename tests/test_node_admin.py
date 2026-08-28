@@ -108,7 +108,7 @@ def test_the_capability_comes_from_outside_every_room():
     # a realm role, in either of the two places Keycloak puts it
     assert ops.is_operator({"realm_access": {"roles": ["em-operator"]}}, environ={})
     assert ops.is_operator(
-        {"resource_access": {"em-server": {"roles": ["em-operator"]}}}, environ={})
+        {"resource_access": {"stratigraph-server": {"roles": ["em-operator"]}}}, environ={})
     # …renamable, because a shared realm may already have a convention
     assert ops.is_operator({"realm_access": {"roles": ["nodo"]}},
                            environ={"EM_OPERATOR_ROLE": "nodo"})
@@ -298,14 +298,14 @@ def test_the_health_report_is_operator_scoped(client, enforcing, operator):
 
 
 def test_the_report_answers_about_this_node(client, enforcing, operator):
-    """em-server is asked about itself too — the probe that cannot fail is the one
+    """StratiGraph Server is asked about itself too — the probe that cannot fail is the one
     that proves the page is showing this node and not a cached one."""
     operator(BRUNO)
     enforcing(BRUNO)
     report = client.get("/v1/admin/health", headers=AUTH).json()
     names = [check["name"] for check in report["checks"]]
-    assert names[0] == "em-server"
-    assert {"minio", "keycloak", "iiif", "em-catalog"} <= set(names)
+    assert names[0] == "stratigraph-server"
+    assert {"minio", "keycloak", "iiif", "stratigraph-catalog"} <= set(names)
     assert report["checks"][0]["state"] == "ok"
     assert report["deadline_s"] > 0, "the page says what bound it ran under"
     assert report["versions"]["em_server"]
@@ -400,7 +400,7 @@ def test_the_endpoints_are_derived_from_the_issuer(monkeypatch, client):
 
 
 def test_the_browser_client_is_never_the_confidential_one(monkeypatch, client):
-    """`em-console`, not `em-server`. Pointing a browser at the confidential
+    """`em-console`, not `StratiGraph Server`. Pointing a browser at the confidential
     client produces a login that fails at the last step with a message about the
     client rather than about the configuration — and its secret could not ship in
     a page anyway."""

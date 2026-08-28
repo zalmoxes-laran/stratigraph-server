@@ -5,7 +5,7 @@
 
 The arc it measures, and every step of it is a real request to a real service:
 
-1. an image is uploaded through em-server and lands in **MinIO**;
+1. an image is uploaded through StratiGraph Server and lands in **MinIO**;
 2. **Cantaloupe** serves `info.json` for it — from the object store, with the
    asset's sha256 as the identifier, so nothing was copied or imported;
 3. a **thumbnail** is a size request (no thumbnail pipeline exists in this
@@ -14,7 +14,7 @@ The arc it measures, and every step of it is a real request to a real service:
    region's normalised [0,1] coordinates — no pixel arithmetic anywhere;
 5. a graph is built **in a room**, through the ordinary op stream: the image
    resource and two annotation regions;
-6. em-server returns a **IIIF Presentation 3 manifest** for it, with the canvas
+6. StratiGraph Server returns a **IIIF Presentation 3 manifest** for it, with the canvas
    sized from the real `info.json` and the two regions projected as **W3C Web
    Annotations**.
 
@@ -180,7 +180,7 @@ def main() -> int:
     iiif = f"http://localhost:{os.environ.get('CANTALOUPE_PORT', '8182')}/iiif/3"
     realm = os.environ.get("DEV_REALM", "em-dev")
 
-    print(f"em-server  : {server}")
+    print(f"StratiGraph Server  : {server}")
     print(f"iiif       : {iiif}\n")
 
     status, body, _ = request(f"{iiif}/", timeout=5)
@@ -204,7 +204,7 @@ def main() -> int:
     token = json.loads(body)["access_token"]
     auth = {"Authorization": f"Bearer {token}"}
 
-    # ── 1 · the image goes into MinIO through em-server ─────────────────────
+    # ── 1 · the image goes into MinIO through StratiGraph Server ─────────────────────
     png = make_png(WIDTH, HEIGHT)
     digest = "sha256:" + hashlib.sha256(png).hexdigest()
     status, body, _ = request(f"{server}/v1/rooms/{ROOM}/asset?media_type=image/png",
@@ -318,7 +318,7 @@ def main() -> int:
         # ── 6 · the manifest: the graph, as any viewer sees it ──────────────
         status, body, _ = request(
             f"{server}/v1/rooms/{ROOM}/iiif/img-1/manifest", headers=auth)
-        ok("em-server builds a manifest for it", status == 200, f"status {status}")
+        ok("StratiGraph Server builds a manifest for it", status == 200, f"status {status}")
         if status == 200:
             manifest = json.loads(body)
             ok("…a IIIF Presentation 3 Manifest",

@@ -15,7 +15,7 @@ What it seeds, and why each piece is needed to get a token with `curl`:
 |---|---|
 | realm `em-dev` | the isolated realm this stack validates against |
 | client `em-server` | confidential (`em-dev-secret`), **service accounts ON** so `client_credentials` works, **direct access grants ON** so a password grant works too — which is what a human uses |
-| mapper `audience` | **the one that is always missing.** Without it the token's `aud` is `account`, and em-server answers `403 … issued for another client`. It is the single most common reason a correct-looking token is refused |
+| mapper `audience` | **the one that is always missing.** Without it the token's `aud` is `account`, and StratiGraph Server answers `403 … issued for another client`. It is the single most common reason a correct-looking token is refused |
 | mapper `orcid` | puts the user's ORCID iD in the token, so the room stamps an identity (`_identity()` in `app/ws.py` reads `orcid` first) instead of leaving edits unsigned |
 | user `dev` / `dev` | the human; carries the ORCID attribute. Bootstraps as the **owner** of any room they are the first to join |
 | user `viewer` / `viewer` | a second, ordinary authenticated identity with **no** membership anywhere. Added 2026-08-17 for the embargo end-to-end (`dev-stack/smoke_embargo_viewer.py`): the gate refuses anybody below editor, and with one user in the realm there was nobody to be refused — the 403 could only be measured against a stand-in. Its ORCID is a different one, so a room can tell the two apart |

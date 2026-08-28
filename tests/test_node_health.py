@@ -56,9 +56,9 @@ def test_a_service_nobody_configured_is_not_a_failure():
                             environ={})
     states = {c["name"]: c["state"] for c in report["checks"]}
     assert states["iiif"] == nh.ABSENT
-    assert states["em-catalog"] == nh.ABSENT
+    assert states["stratigraph-catalog"] == nh.ABSENT
     assert report["verdict"] == nh.OK
-    detail = [c for c in report["checks"] if c["name"] == "em-catalog"][0]["detail"]
+    detail = [c for c in report["checks"] if c["name"] == "stratigraph-catalog"][0]["detail"]
     assert "EM_CATALOG_INTERNAL" in detail, "it says how to watch one"
 
 
@@ -73,7 +73,7 @@ def test_a_service_that_did_not_answer_never_reads_ok(monkeypatch):
     states = {c["name"]: c["state"] for c in report["checks"]}
     assert states["keycloak"] == nh.UNREACHABLE
     assert states["iiif"] == nh.UNREACHABLE
-    assert states["em-catalog"] == nh.UNREACHABLE
+    assert states["stratigraph-catalog"] == nh.UNREACHABLE
     # …and a service the node NEEDS being gone is not a "degraded" node.
     assert report["verdict"] == nh.UNREACHABLE
 

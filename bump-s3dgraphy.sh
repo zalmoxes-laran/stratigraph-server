@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# bump-s3dgraphy.sh — allinea em-server a una nuova s3dgraphy pubblicata su PyPI.
+# bump-s3dgraphy.sh — allinea StratiGraph Server a una nuova s3dgraphy pubblicata su PyPI.
 # Aggiorna il pin ESATTO in pyproject.toml e nel Dockerfile (tiene gli extra
 # [geo,rdf], cambia solo il numero), mostra il diff, e — con --build — ricostruisce
-# e riavvia em-server nel dev-stack (il bump della versione fa da cache-bust del layer).
+# e riavvia StratiGraph Server nel dev-stack (il bump della versione fa da cache-bust del layer).
 #
 #   ./bump-s3dgraphy.sh 1.6.0.dev15            # imposta questa versione
 #   ./bump-s3dgraphy.sh --latest              # prende l'ultima da PyPI (pre comprese)
-#   ./bump-s3dgraphy.sh 1.6.0.dev15 --build   # bumpa E ricostruisce+riavvia em-server
+#   ./bump-s3dgraphy.sh 1.6.0.dev15 --build   # bumpa E ricostruisce+riavvia StratiGraph Server
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   awk 'NR==1{next} /^#/{sub(/^# ?/,"");print;next} /^[[:space:]]*$/{next} {exit}' "$0"; exit 0
 fi
 set -euo pipefail
-cd "$(dirname "$0")"                          # em-server (dove stanno pyproject.toml + Dockerfile)
+cd "$(dirname "$0")"                          # stratigraph-server (dove stanno pyproject.toml + Dockerfile)
 
 BUILD="no"; VER=""
 for a in "$@"; do
@@ -45,17 +45,17 @@ for f in pyproject.toml Dockerfile; do
   sed -E -i.bak "s/(s3dgraphy(\[[a-z,]*\])?==)[0-9][A-Za-z0-9.]*/\1${VER}/g" "$f"
   rm -f "$f.bak"; changed=1
 done
-[ "$changed" = "1" ] || { echo "✗ né pyproject.toml né Dockerfile trovati — sei in em-server?"; exit 1; }
+[ "$changed" = "1" ] || { echo "✗ né pyproject.toml né Dockerfile trovati — sei in stratigraph-server?"; exit 1; }
 
 echo "▶ pin aggiornato a s3dgraphy[geo,rdf]==$VER. Diff:"
 git diff -- pyproject.toml Dockerfile 2>/dev/null || echo "  (git non disponibile: controlla i file a mano)"
 
 if [ "$BUILD" = "yes" ]; then
-  echo "▶ ricostruisco em-server nel dev-stack…"
-  ( cd dev-stack && docker-compose -f docker-compose.dev.yml build em-server \
-      && docker-compose -f docker-compose.dev.yml up -d em-server )
-  echo "✔ em-server ricostruito e riavviato con s3dgraphy $VER."
+  echo "▶ ricostruisco StratiGraph Server nel dev-stack…"
+  ( cd dev-stack && docker-compose -f docker-compose.dev.yml build stratigraph-server \
+      && docker-compose -f docker-compose.dev.yml up -d stratigraph-server )
+  echo "✔ StratiGraph Server ricostruito e riavviato con s3dgraphy $VER."
 else
   echo "  Per applicarlo:  ./bump-s3dgraphy.sh $VER --build"
-  echo "  (o:  cd dev-stack && docker-compose -f docker-compose.dev.yml build em-server && up -d em-server)"
+  echo "  (o:  cd dev-stack && docker-compose -f docker-compose.dev.yml build stratigraph-server && up -d stratigraph-server)"
 fi

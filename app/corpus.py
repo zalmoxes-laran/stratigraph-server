@@ -1,4 +1,4 @@
-"""The RESIDENT DTC corpus: this instance's documentation, where em-server can read it.
+"""The RESIDENT DTC corpus: this instance's documentation, where StratiGraph Server can read it.
 
 ## The hole this closes (measured, 17 Aug 2026)
 
@@ -6,13 +6,13 @@ An asset was uploaded to MinIO and its rights were declared in a **file** corpus
 the per-project `DTCCorpus` member that travels inside an em.json. Serving the
 asset, `GET …/asset/<ref>` answered `x-em-license: null`: the enforcement reads
 the rights from the **room's document**, and a file on somebody's laptop is not a
-document em-server has. The licence was written, and the server could not see it,
+document StratiGraph Server has. The licence was written, and the server could not see it,
 so it did not bite.
 
 So the corpus gets a residence. One per **instance** — the shared register of the
 documentation, the way the Catalog is the shared register of studies — held with
 the same discipline as a room snapshot: put atomically, outside this process,
-rebuildable. It is a place em-server can *ask*, which is the whole point.
+rebuildable. It is a place StratiGraph Server can *ask*, which is the whole point.
 
 ## Why per-instance and not per-room
 
@@ -166,7 +166,7 @@ class MinioCorpusStore:
         except ImportError as exc:   # pragma: no cover — depends on the build
             raise RuntimeError(
                 "the MinIO corpus store needs the `minio` client, which this "
-                "build does not have: install em-server[s3] (or unset the MinIO "
+                "build does not have: install StratiGraph Server[s3] (or unset the MinIO "
                 "environment and use EM_CORPUS_DIR)") from exc
         self.bucket = bucket
         self.endpoint = endpoint
@@ -529,7 +529,7 @@ class ResidentCorpus:
 #: `resource` is the door: the other three all speak ABOUT a file, and
 #: `enrich_asset_dtc` refuses to invent one ("enrich the asset after the
 #: ResourceNode exists, not instead of it"). So a client that has just uploaded
-#: bytes registers them here first — which is also the moment em-server can check
+#: bytes registers them here first — which is also the moment StratiGraph Server can check
 #: that the bytes really are in its store, so the register describes assets this
 #: instance holds rather than assets somebody described.
 ACTS = ("resource", "acquisition", "derivation", "attribution")

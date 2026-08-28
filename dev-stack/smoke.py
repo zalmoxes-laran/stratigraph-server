@@ -3,7 +3,7 @@
 
 Everything below could be faked by a server that kept the bytes in a dict, and
 that is exactly what this script is written to rule out. So it does not only ask
-em-server whether it stored something: it **opens the bucket itself** and looks.
+StratiGraph Server whether it stored something: it **opens the bucket itself** and looks.
 
     python dev-stack/smoke.py            # after `docker compose … up -d`
 
@@ -17,7 +17,7 @@ What it checks, in order, and what each one would catch:
    and content-type are read with a `head` that does not download it;
 4. **GET** returns the same bytes, byte for byte;
 5. **no token → refused**, and nothing is stored;
-6. **promotion** (DP-76): `s3dgraphy.api.promote_resource` with the URL em-server
+6. **promotion** (DP-76): `s3dgraphy.api.promote_resource` with the URL StratiGraph Server
    serves → the ResourceNode becomes a `reference` carrying that url + checksum,
    **and that url really serves those bytes**. This is the arc: the model leaves
    the .blend, lands in the object store, and the graph points at it.
@@ -111,7 +111,7 @@ def main() -> int:
     client_id = env("DEV_CLIENT_ID", "em-server")
     room = "smoke-room"
 
-    print(f"em-server : {server}")
+    print(f"StratiGraph Server : {server}")
     print(f"keycloak  : {keycloak}/realms/{realm}")
     print()
 
@@ -119,14 +119,14 @@ def main() -> int:
     status, body, _ = request(f"{server}/v1/health")
     if status != 200:
         why = f"status {status}" if status else f"not reachable ({body.decode()})"
-        print(f"em-server is not answering on {server} ({why}). "
+        print(f"StratiGraph Server is not answering on {server} ({why}). "
               f"Is the stack up? From dev-stack/: "
               f"`docker compose --env-file .env.dev "
               f"-f docker-compose.dev.yml up -d` (or `docker-compose`, see "
               f"README-DEV.md)")
         return 2
     health = json.loads(body)
-    ok("em-server is enforcing tokens", health.get("auth") == "keycloak",
+    ok("StratiGraph Server is enforcing tokens", health.get("auth") == "keycloak",
        str(health.get("auth")))
     ok("the asset store is MinIO", "minio" in str(health.get("asset_store")),
        str(health.get("asset_store")))
@@ -174,7 +174,7 @@ def main() -> int:
     except ImportError:
         skip("the object is in the MinIO bucket",
              "the `minio` client is not installed in this interpreter "
-             "(pip install minio) — em-server's own answer is not proof")
+             "(pip install minio) — StratiGraph Server's own answer is not proof")
     else:
         client = Minio(f"localhost:{env('MINIO_API_PORT', '9000')}",
                        access_key=env("MINIO_ROOT_USER", "minioadmin"),

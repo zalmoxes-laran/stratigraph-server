@@ -273,7 +273,7 @@ def test_the_embargo_cannot_be_walked_around_by_naming_another_room(client, room
 
 def test_the_iiif_gate_refuses_an_embargoed_image_to_a_stranger(client, room,
                                                                 whoever):
-    """Cantaloupe reads the bucket by sha256 and em-server is not in the path of
+    """Cantaloupe reads the bucket by sha256 and StratiGraph Server is not in the path of
     a pixel, so the proxy asks this before serving one. Same rule, same code as
     the asset route."""
     digest = room["embargoed"].split(":")[-1]

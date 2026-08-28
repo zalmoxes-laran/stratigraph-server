@@ -125,7 +125,7 @@ def token_for(user: Optional[str] = None) -> Optional[str]:
 
 
 def orcid_of(jwt: Optional[str]) -> Optional[str]:
-    """Who a token says it is. Decoded, never verified — em-server checks the
+    """Who a token says it is. Decoded, never verified — StratiGraph Server checks the
     signature and it is right to be the only one that does."""
     if not jwt or "." not in jwt:
         return None

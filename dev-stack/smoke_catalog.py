@@ -3,7 +3,7 @@
 
 Everything this service claims could be faked by a catalogue that kept its
 studies in a dict and its cards in another one. So this script does not only ask
-em-catalog whether it registered a study: it **opens the bucket itself** and
+StratiGraph Catalog whether it registered a study: it **opens the bucket itself** and
 looks, and then it **throws the index away and rebuilds it** from what is in
 there.
 
@@ -13,7 +13,7 @@ What it checks, in order, and what each one would catch:
 
 1. the service is up, is **enforcing tokens**, and its container store is
    **MinIO** — if any of those is not true, nothing after it means anything;
-2. a token from the same dev realm em-server uses (one realm, two services);
+2. a token from the same dev realm StratiGraph Server uses (one realm, two services);
 3. **register two studies**, one `public` and one `restricted`, both real
    containers built with s3Dgraphy — and the container really lands in the
    bucket, under `studies/`, verified against MinIO directly;
@@ -147,7 +147,7 @@ def main() -> int:
     client_id = env("DEV_CLIENT_ID", "em-server")
     twin_iri = "https://example.org/h/sarmizegetusa"
 
-    print(f"em-catalog: {catalog}")
+    print(f"StratiGraph Catalog: {catalog}")
     print(f"keycloak  : {keycloak}/realms/{realm}")
     print()
 
@@ -155,12 +155,12 @@ def main() -> int:
     status, body, _ = request(f"{catalog}/health")
     if status != 200:
         why = f"status {status}" if status else f"not reachable ({body.decode()})"
-        print(f"em-catalog is not answering on {catalog} ({why}). From "
+        print(f"StratiGraph Catalog is not answering on {catalog} ({why}). From "
               f"dev-stack/: `docker-compose --env-file .env.dev "
-              f"-f docker-compose.dev.yml up -d --build em-catalog`")
+              f"-f docker-compose.dev.yml up -d --build StratiGraph Catalog`")
         return 2
     health = json.loads(body)
-    ok("em-catalog is enforcing tokens", health.get("auth") == "keycloak",
+    ok("StratiGraph Catalog is enforcing tokens", health.get("auth") == "keycloak",
        str(health.get("auth")))
     ok("the studies live in MinIO", "minio" in str(health.get("container_store")),
        str(health.get("container_store")))
@@ -169,7 +169,7 @@ def main() -> int:
     ok("…and it has the publish mode", bool(
         health.get("capabilities", {}).get("ttl_publish_mode")))
 
-    # ── 1 · a token from the SAME realm em-server uses ──────────────────────
+    # ── 1 · a token from the SAME realm StratiGraph Server uses ──────────────────────
     form = urllib.parse.urlencode({
         "grant_type": "password", "client_id": client_id,
         "client_secret": env("DEV_CLIENT_SECRET", "em-dev-secret"),

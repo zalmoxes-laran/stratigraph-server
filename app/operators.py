@@ -14,7 +14,7 @@ capability comes from outside every room:
 
 * a **Keycloak realm role** (`em-operator` by default, `EM_OPERATOR_ROLE` to
   rename it) — the right answer for a real deployment: it is granted in the realm
-  by whoever administers the realm, and em-server only reads it;
+  by whoever administers the realm, and StratiGraph Server only reads it;
 * or an **ORCID allow-list** in the environment (`EM_OPERATORS`) — the same shape
   `EM_CORPUS_CURATORS` already uses, for a node where nobody wants to touch the
   realm to hand out one capability.

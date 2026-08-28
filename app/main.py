@@ -1,18 +1,18 @@
-"""em-server — the s3Dgraphy access API, over HTTP.
+"""StratiGraph Server — the s3Dgraphy access API, over HTTP.
 
 **P0: read-only, local, no auth.** Auth (Keycloak), assets (MinIO), the WebSocket
 op-log and the deployment on the shared infrastructure are P1–P4, and they land
 with 3DR. Nothing here anticipates them beyond leaving the seams where they go.
 
 The architectural rule this file exists to honour: **FastAPI lives only in
-em-server.** s3Dgraphy stays a pure library — no web framework, no transport — and
+StratiGraph Server.** s3Dgraphy stays a pure library — no web framework, no transport — and
 this is a *thin adapter* over `s3dgraphy.api`. There is no new logic here, and
 there must not be: if an endpoint needs to compute something, that something
 belongs in the library, where it is testable without a server and reusable by
 EMStudio's local bridge, by EMtools, and by EMLab.
 
 **The contract is em-bridge's.** EMStudio already speaks to a local sidecar
-(`EMStudio/tools/em_bridge.py`) with exactly these payloads; em-server answers the
+(`EMStudio/tools/em_bridge.py`) with exactly these payloads; StratiGraph Server answers the
 same shapes so the frontend's `bridgeUrl()` can point here instead, with nothing
 else changed. Where the two differ it is stated in the endpoint's docstring.
 
@@ -107,14 +107,14 @@ try:  # the whole point of the service; a clear failure beats a mysterious one
     from s3dgraphy import api as em
 except ImportError as exc:  # pragma: no cover — deployment error, not runtime
     raise RuntimeError(
-        "em-server needs s3dgraphy importable: pip install s3dgraphy "
+        "StratiGraph Server needs s3dgraphy importable: pip install s3dgraphy "
         f"(or -e ../s3Dgraphy). {exc}"
     ) from exc
 
 __version__ = "0.1.0.dev0"
 
 app = FastAPI(
-    title="em-server",
+    title="StratiGraph Server",
     version=__version__,
     summary="The s3Dgraphy access API over HTTP — read-only (P0), under /v1.",
     description=__doc__,
@@ -126,7 +126,7 @@ app = FastAPI(
 # WebSocket (not subject to CORS) and everything worked — until the first
 # ordinary HTTP call from the app. A `PUT` with an `Authorization` header is a
 # preflighted request, and with no CORS policy the browser refuses it before
-# em-server ever sees it. The symptom is a bare "Failed to fetch", which reads
+# StratiGraph Server ever sees it. The symptom is a bare "Failed to fetch", which reads
 # like the server is down.
 #
 # `*` by default, and it is not laxity: **there are no cookies here**. Every
@@ -198,7 +198,10 @@ def _load(doc: Dict[str, Any]):
 
 class Health(BaseModel):
     ok: bool = True
-    service: str = "em-server"
+    #: WHO answered. Renamed with the repo (2026-08-25): a probe reading this
+    #: reads a product name, not a package. The wire `source` in `ws.py` did NOT
+    #: change — that one is a protocol value the editors match on.
+    service: str = "stratigraph-server"
     version: str
     s3dgraphy: Optional[str] = None
     #: which optional ops this build can actually perform. A client that reads
@@ -268,7 +271,7 @@ class AuthConfig(BaseModel):
     #: runs in dev-no-auth, and the console then says so instead of redirecting
     #: to nowhere.
     issuer: str = ""
-    #: the PUBLIC client the browser authenticates as (never `em-server`, which
+    #: the PUBLIC client the browser authenticates as (never `StratiGraph Server`, which
     #: is confidential and does not do the standard flow)
     client_id: str = ""
     #: where the IdP sends the browser back. Advertised so a deployment can be
@@ -449,7 +452,7 @@ async def get_asset(room_id: str, ref: str, request: Request) -> Response:
     # room name is not a gate.
     rights = await _rights_seen_anywhere(room_id, ref, request)
     # …AND THE RESIDENT CORPUS. This is the hole that was measured: the licence
-    # was declared in a corpus, and a corpus em-server does not hold cannot make
+    # was declared in a corpus, and a corpus StratiGraph Server does not hold cannot make
     # anything bite. The register speaks about the BYTES, so it speaks whatever
     # room the caller came through.
     rights = await _corpus_gate(ref, request, door=room_id, room_rights=rights)
@@ -847,7 +850,7 @@ async def _role_in_room(room_id: str, request: Request):
 #
 # The hole it closes was measured on 17 Aug: an asset whose licence lived in a
 # per-project corpus FILE was served with `x-em-license: null`, because the
-# enforcement reads the rights out of a document em-server holds and a file on a
+# enforcement reads the rights out of a document StratiGraph Server holds and a file on a
 # laptop is not one. Give the corpus a residence and the rights bite (see
 # `app/corpus.py` for why it is one per instance and not one per room).
 #
@@ -898,7 +901,7 @@ class CorpusAct(BaseModel):
     tool: Optional[str] = None
     process_id: Optional[str] = None
     #: resource: a file the register should know about — `checksum` is the door,
-    #: and for a RESIDENT one em-server checks its own store before believing it
+    #: and for a RESIDENT one StratiGraph Server checks its own store before believing it
     media_type: Optional[str] = None
     residency: Optional[str] = None
     url: Optional[str] = None
@@ -1059,13 +1062,13 @@ def merge_corpus_endpoint(request: Request,
 
 # ── IIIF · the authorisation the image server does not have ───────────────────
 #
-# Cantaloupe reads MinIO by sha256 and em-server is NOT in the path of a pixel.
+# Cantaloupe reads MinIO by sha256 and StratiGraph Server is NOT in the path of a pixel.
 # Taking the canvas out of the manifest withholds the digest — which is real,
 # because the manifest is where a digest comes from — but somebody who already
 # has the hex reaches the image directly. That is the hole this closes.
 #
-# The shape: the proxy in front of the image server asks em-server first
-# (`forward_auth`), for every `/iiif/*` request. em-server stays the authority —
+# The shape: the proxy in front of the image server asks StratiGraph Server first
+# (`forward_auth`), for every `/iiif/*` request. StratiGraph Server stays the authority —
 # it is the process that can read the graph, resolve the room's ACL and apply
 # exactly the rule the asset route applies. Cantaloupe keeps knowing nothing
 # about rights, which is right: an image server should serve images.
@@ -1232,13 +1235,13 @@ def _rooms_holding(digest: str) -> List[str]:
 # fails opaquely — a 403, an empty body, a mixed-content block. The pairs are
 # listed once in `docs/URL-TOPOLOGY.md`; the rule is one line:
 #
-#     em-server SPEAKS on the internal form and WRITES the public form into the
+#     StratiGraph Server SPEAKS on the internal form and WRITES the public form into the
 #     documents it serves.
 #
 # `EM_IIIF_PUBLIC` is what goes into a manifest (other people's viewers fetch
 # it, so it must name a host they can reach). `EM_IIIF_INTERNAL` is how this
 # process reaches the same image server to read `info.json` — inside a compose
-# network `localhost` is em-server itself, so using the public form here
+# network `localhost` is StratiGraph Server itself, so using the public form here
 # measures nothing and every canvas silently gets a placeholder size.
 #
 # The older `EM_IIIF_BASE` / `EM_IIIF_INTERNAL_BASE` spellings are still read, in
@@ -1247,7 +1250,7 @@ def _rooms_holding(digest: str) -> List[str]:
 #
 # And the rule has a HARD half, which is the one a request can attack:
 #
-#     the address em-server DIALS comes only from the CONFIG.
+#     the address StratiGraph Server DIALS comes only from the CONFIG.
 #
 # A request parameter may, at most, change the URL WRITTEN INTO the document it
 # gets back. Never the outgoing call. The two are easy to conflate because they
@@ -1285,7 +1288,7 @@ async def iiif_manifest(room_id: str, target_id: str, request: Request,
 
     The graph is the source and the manifest is a view of it — built by
     `s3dgraphy.api.iiif_manifest`, because that is where the logic belongs
-    (rule #1). What em-server adds is the two things a library must not do:
+    (rule #1). What StratiGraph Server adds is the two things a library must not do:
 
     * it knows the deployment's **public** Image API base;
     * it can **fetch `info.json`** to learn each image's pixel size. A library
@@ -2158,7 +2161,7 @@ async def node_storage(request: Request) -> StorageOut:
     * how many assets each room points at, and how many of those the store has;
     * which stored digests **no** room mentions — the orphans.
 
-    MinIO is behind em-server here as everywhere else: this reads the store
+    MinIO is behind StratiGraph Server here as everywhere else: this reads the store
     through the same interface the asset route uses, and hands back numbers. No
     presigned URL, no bucket listing to a browser.
     """
@@ -2260,11 +2263,11 @@ class NodeHealthOut(BaseModel):
 
 @v1.get("/admin/health", response_model=NodeHealthOut, tags=["node"])
 async def node_health_report(request: Request) -> NodeHealthOut:
-    """Is this node well — the services around em-server, not just em-server.
+    """Is this node well — the services around StratiGraph Server, not just StratiGraph Server.
 
     Operator-scoped on purpose, and it is a different question from `/v1/health`:
     that one is a public probe for an orchestrator ("is the process up, what can
-    this build do"), this one names the things em-server DEPENDS on and how much
+    this build do"), this one names the things StratiGraph Server DEPENDS on and how much
     they are holding. The two answers belong to two audiences, and merging them
     would either leak an infrastructure map to anybody or hide it from the person
     who needs it.

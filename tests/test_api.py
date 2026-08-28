@@ -1,4 +1,4 @@
-"""em-server's endpoints, and the properties that make it a *thin* wrapper.
+"""StratiGraph Server's endpoints, and the properties that make it a *thin* wrapper.
 
 Two things are worth testing in a service that is deliberately logic-free, and
 they are not "does FastAPI work":
@@ -55,7 +55,7 @@ def test_health_says_what_this_build_can_do():
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["service"] == "em-server"
+    assert body["service"] == "stratigraph-server"
     assert body["version"]
     # capabilities is the useful part: a client learns what works WITHOUT having
     # to discover a 501 by trying.
@@ -92,7 +92,7 @@ def test_a_malformed_document_is_a_400_not_a_500():
 @pytest.mark.skipif(not _has("rdflib"), reason="rdflib not installed")
 def test_export_ttl_is_byte_identical_to_the_library():
     """The property that makes this a wrapper and not a second implementation.
-    (Same reason the bridge and em-server agree: both call project_ttl.)"""
+    (Same reason the bridge and StratiGraph Server agree: both call project_ttl.)"""
     doc = _doc()
     response = client.post("/v1/export-ttl", json=doc)
     assert response.status_code == 200
@@ -213,7 +213,7 @@ def test_em_server_adds_no_logic():
     for forbidden in ("from s3dgraphy.nodes", "from s3dgraphy.exporter",
                       "from s3dgraphy.importer", "from s3dgraphy.graph"):
         assert forbidden not in source, \
-            f"{forbidden}: em-server must go through s3dgraphy.api only"
+            f"{forbidden}: StratiGraph Server must go through s3dgraphy.api only"
 
 
 def test_it_is_stateless():
@@ -262,7 +262,7 @@ def test_the_openapi_schema_is_served():
                       ("DELETE", "/v1/groups/{group_id}/members/{orcid}"),
                       # …and revoking an INVITATION, which is the same kind of
                       # thing once more: a link that offers a role is operational
-                      # (em-server), not scientific (the em.json), and an
+                      # (StratiGraph Server), not scientific (the em.json), and an
                       # invitation that could be sent and never withdrawn would be
                       # a door with no lock. The record survives the revocation —
                       # the DELETE is of the link's validity, not of the fact that
