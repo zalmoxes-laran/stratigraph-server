@@ -124,8 +124,10 @@ cd EMStudio/frontend && npm run dev        # or open frontend/dist/index.html
 open https://em.localhost:8443/em/admin/
 ```
 
-It asks for a token once (kept in memory for the tab — never in web storage) and
-then asks the node `GET /v1/admin/whoami`. Two outcomes, and both are useful:
+It **signs in against this node's own realm** — Authorization Code + PKCE, the
+same IdP everybody else uses, a different surface. The token stays in the tab's
+memory (never in web storage) and the console then asks the node
+`GET /v1/admin/whoami`. Two outcomes, and both are useful:
 
 * **not an operator** → the page says so, names the capability, and states that
   owning a room does not grant it. That is the fail-closed half;
@@ -146,6 +148,21 @@ A room also holds something that is *not* part of the study and is governed
 differently — the opaque `.blend` safety snapshots people keep on demand. Room
 membership lets you keep one; only their author lists and restores them. See
 **[BLEND-BACKUPS.md](BLEND-BACKUPS.md)**.
+
+**How the browser knows where to sign in**: `GET /v1/auth-config` — public by
+construction (an issuer and a client id are not secrets, and the one thing that
+would be does not exist here: the console is a **public** OIDC client and PKCE
+replaces the secret). The browser client is `em-console`
+(`EM_CONSOLE_CLIENT_ID`), never the confidential `em-server` one — that client
+has a secret and does not do the standard flow, so pointing a browser at it fails
+at the last step with a message about the client instead of about the
+configuration. The realm must list the console's redirect (`…/admin/` bare and
+`…/em/admin/` behind a proxy); the dev realm lists both, plus an **audience
+mapper** adding `em-server` — without it the login works and every API call comes
+back 401.
+
+Pasting a bearer token is still there, folded under *"Paste a token instead"*: for
+a dev stack, and for the day the realm is the thing that is down.
 
 Making yourself an operator on the dev stack (it ships with one already):
 

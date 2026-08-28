@@ -15,6 +15,8 @@
  * IIIF, Catalog, datamodel drift) without this file changing.
  */
 
+import * as oidc from "./auth.js";
+
 const MODULES = [];
 let active = null;
 
@@ -40,6 +42,12 @@ export function register(module) {
 const BASE = window.location.pathname.replace(/\/admin(\/.*)?$/, "") + "/v1";
 
 let token = "";
+//: the node's answer to "how does a browser sign in here" (`/v1/auth-config`)
+let authConfig = null;
+//: the refresh token and the timer that uses it. In memory, like the access
+//: token: a refresh token in web storage is a credential that outlives the tab.
+let refreshToken = "";
+let refreshTimer = 0;
 
 export const api = {
   base: BASE,
@@ -164,39 +172,164 @@ async function whoami() {
   }
 }
 
+/** Keep the session alive without asking again.
+ *
+ *  Dev tokens last minutes, and a console that logged you out mid-panel would
+ *  teach people to keep the paste box open. Refreshed at 80% of the lifetime —
+ *  early enough that a slow realm does not turn into an expired token, late
+ *  enough that it is not a poll. */
+function scheduleRefresh(seconds) {
+  window.clearTimeout(refreshTimer);
+  if (!refreshToken || !seconds) return;
+  const wait = Math.max(15, Math.floor(seconds * 0.8)) * 1000;
+  refreshTimer = window.setTimeout(async () => {
+    const result = await oidc.refresh(authConfig, refreshToken);
+    if (!result.ok) {
+      // Said, not swallowed: the next call would 401 and the page would look
+      // broken for a reason that has nothing to do with the node.
+      say(`Your session could not be refreshed (${result.error}). Sign in again.`,
+          "bad");
+      return;
+    }
+    token = result.token;
+    refreshToken = result.refresh_token || refreshToken;
+    scheduleRefresh(result.expires_in);
+  }, wait);
+}
+
+/** Take the token from a completed sign-in. */
+function adoptSession(result) {
+  token = result.token;
+  refreshToken = result.refresh_token || "";
+  scheduleRefresh(result.expires_in);
+}
+
 async function boot() {
+  authConfig = await oidc.loadConfig(BASE).catch(() => null);
+
+  // Coming BACK from the IdP is the first thing to check: the page is loading
+  // with `?code=…` on it and there is nothing else to do until that is spent.
+  if (authConfig && oidc.returningFromIdp()) {
+    const result = await oidc.completeSignIn(authConfig);
+    if (result.ok) adoptSession(result);
+    else say(`Sign-in did not complete: ${result.error}`, "bad");
+  }
+
   let me = await whoami();
   if (me === undefined) return;                 // the API itself did not answer
   if (!me) {
-    // Ask, once. `authenticator` is the node's, and this console has no login of
-    // its own on purpose: a second way to authenticate would be a second thing
-    // to get wrong (and the realm already has one).
-    dialog.showModal();
-    await new Promise((resolve) => dialog.addEventListener("close", resolve, { once: true }));
-    token = document.getElementById("token-input").value.trim();
-    me = token ? await whoami() : null;
-  }
-  if (!me) {
-    whoEl.textContent = "not signed in";
-    panel.innerHTML = "";
-    say("This console needs a token from the node's realm. Reload to try again.",
-        "bad");
+    // ASK THE REALM, not the person. The console has no login of its own — it
+    // sends you to the node's own IdP and comes back with the same kind of token
+    // everybody else carries. The paste box stays underneath it, for a dev stack
+    // and for the day the realm is the thing that is broken.
+    showSignIn();
     return;
   }
+  await enter(me);
+}
+
+/**
+ * Signed in — now, may you administer this node?
+ *
+ * The two questions stay separate, and that separation is the whole point of
+ * signing in this way. WHO you are is the realm's answer; WHETHER you are an
+ * operator is `/v1/admin/whoami`'s, decided server-side from a realm role or an
+ * ORCID allow-list. A console that took the second question on itself would be a
+ * console you could talk out of it with a devtools console.
+ */
+async function enter(me) {
   whoEl.textContent = me.operator
     ? `operator${me.orcid ? " · " + me.orcid : " · dev mode"}`
     : (me.orcid || "signed in");
   if (!me.operator) {
     panel.innerHTML = "";
     // The refusal a person can act on: the capability is not something they can
-    // give themselves, so the page says who can.
+    // give themselves, so the page says who can. Note what this is NOT: a
+    // failure. The sign-in worked; this identity simply does not run the node.
     say(`You are signed in${me.orcid ? " as " + me.orcid : ""} but you are not an `
         + `operator of this node. Capability: ${me.capability}. Owning a room does `
         + `not grant it — ask whoever runs this node.`, "bad");
+    if (authConfig?.end_session_endpoint) {
+      const out = document.createElement("button");
+      out.className = "ghost";
+      out.textContent = "Sign out";
+      out.addEventListener("click", () => {
+        token = "";
+        refreshToken = "";
+        window.clearTimeout(refreshTimer);
+        // …of the REALM too, or the next Sign in walks straight back in on the
+        // IdP's cookie — which is not what somebody signing out meant.
+        window.location.assign(oidc.signOutUrl(authConfig));
+      });
+      panel.appendChild(out);
+    }
     return;
   }
   drawNav();
   if (MODULES.length) await show(MODULES[0]);
+}
+
+/** The signed-out screen: one button, and the fallback under it. */
+function showSignIn() {
+  whoEl.textContent = "not signed in";
+  panel.innerHTML = "";
+  const box = document.createElement("section");
+  box.className = "card";
+  const head = document.createElement("h2");
+  head.textContent = "Sign in";
+  box.appendChild(head);
+
+  if (authConfig?.enforcing && authConfig.authorization_endpoint) {
+    const line = document.createElement("p");
+    line.className = "muted";
+    line.textContent = `This node authenticates against ${authConfig.issuer}. `
+      + `You will come back here signed in — the token stays in this tab and is `
+      + `never stored.`;
+    const button = document.createElement("button");
+    button.textContent = "Sign in with the node's realm";
+    button.addEventListener("click", () => void oidc.signIn(authConfig));
+    box.append(line, button);
+  } else {
+    const line = document.createElement("p");
+    line.className = "muted";
+    // A "Sign in" that cannot work is worse than none: say which of the two
+    // reasons it is, because they have different fixes.
+    line.textContent = authConfig
+      ? "This node enforces no authentication (dev-no-auth), so there is nothing "
+        + "to sign in to — reload, or use a token below if the node is behind "
+        + "something that does."
+      : "This node did not answer /v1/auth-config, so this console cannot tell "
+        + "where its realm is. Use a token below.";
+    box.appendChild(line);
+  }
+
+  const advanced = document.createElement("details");
+  advanced.className = "small";
+  const summary = document.createElement("summary");
+  summary.textContent = "Paste a token instead (dev, or when the realm is down)";
+  const paste = document.createElement("button");
+  paste.className = "ghost";
+  paste.textContent = "Paste a bearer token…";
+  paste.addEventListener("click", () => void askForToken());
+  advanced.append(summary, paste);
+  box.appendChild(advanced);
+  panel.appendChild(box);
+}
+
+/** The old way, kept: one dialog, memory only, and a re-check of `whoami`. */
+async function askForToken() {
+  dialog.showModal();
+  await new Promise((resolve) =>
+    dialog.addEventListener("close", resolve, { once: true }));
+  token = document.getElementById("token-input").value.trim();
+  document.getElementById("token-input").value = "";
+  if (!token) return;
+  const me = await whoami();
+  if (!me) {
+    say("That token was not accepted by this node.", "bad");
+    return;
+  }
+  await enter(me);
 }
 
 document.getElementById("reload").addEventListener("click", () => {

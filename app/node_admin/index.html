@@ -42,9 +42,14 @@
     </main>
   </div>
 
-  <!-- The token. Held in MEMORY only, never in localStorage: a node operator's
-       bearer token in web storage is a credential that survives the tab, and
-       this console is not worth that. Asked for once per session. -->
+  <!-- The token, PASTED — now the fallback rather than the way in. The console
+       signs in against the node's own realm (Authorization Code + PKCE, see
+       `auth.js`); this stays for a dev stack and for the day the realm is the
+       thing that is down.
+
+       Held in MEMORY only, never in localStorage: a node operator's bearer token
+       in web storage is a credential that survives the tab, and this console is
+       not worth that. -->
   <dialog id="ask-token">
     <form method="dialog">
       <h2>Operator token</h2>

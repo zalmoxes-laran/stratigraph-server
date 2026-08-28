@@ -255,6 +255,76 @@ class Health(BaseModel):
 BACKUPS = BlendBackups(backup_blobs_from_env(), backup_register_from_env())
 
 
+class AuthConfig(BaseModel):
+    """What a BROWSER needs to sign in against this node's realm.
+
+    Public by construction — an issuer and a client id are not secrets, and the
+    one thing that would be (a client secret) does not exist for this client: the
+    console is a public OIDC client and uses PKCE instead. See
+    `app/node_admin/auth.js`.
+    """
+
+    #: the realm, e.g. `https://sso.example.org/realms/em`. Empty when this node
+    #: runs in dev-no-auth, and the console then says so instead of redirecting
+    #: to nowhere.
+    issuer: str = ""
+    #: the PUBLIC client the browser authenticates as (never `em-server`, which
+    #: is confidential and does not do the standard flow)
+    client_id: str = ""
+    #: where the IdP sends the browser back. Advertised so a deployment can be
+    #: read from one place, but the console computes its OWN from the page's URL
+    #: (it is served under `/admin` bare and under `/em/admin` behind a proxy)
+    #: and sends that — the two must agree with what the realm allows.
+    redirect_uri: str = ""
+    #: the OIDC endpoints, derived from the issuer the way Keycloak lays them
+    #: out. Derived rather than configured: two URLs that must agree are two
+    #: URLs that will one day disagree (`auth.py` makes the same argument about
+    #: the issuer and the JWKS).
+    authorization_endpoint: str = ""
+    token_endpoint: str = ""
+    end_session_endpoint: str = ""
+    #: what the browser will ask for
+    scope: str = "openid profile email"
+    #: False when this node enforces nothing — the console then keeps the paste
+    #: box and says why, instead of offering a Sign in that cannot work
+    enforcing: bool = False
+
+
+@v1_public.get("/auth-config", response_model=AuthConfig, tags=["meta"])
+def auth_config() -> AuthConfig:
+    """How the browser signs in to THIS node. No secret, by construction.
+
+    The console used to be handed a bearer token pasted by hand. That is fine for
+    a dev stack and wrong for a service: a person administering a node should sign
+    in the way everybody else does — same IdP, same token, a different surface —
+    and a console that made its own login would be a second thing to keep correct.
+    So the node says where its realm is and which public client to use, and the
+    browser does Authorization Code + PKCE.
+
+    `EM_CONSOLE_CLIENT_ID` names the public client (default `em-console`). It is
+    deliberately NOT `CLIENT_ID_em`: that one is confidential, has a secret, and
+    does not do the standard flow — pointing a browser at it produces a login that
+    fails at the last step with a message about the client rather than about the
+    configuration.
+    """
+    settings = authenticator.settings
+    issuer = str(getattr(settings, "issuer", "") or "")
+    client_id = os.environ.get("EM_CONSOLE_CLIENT_ID", "em-console").strip()
+    return AuthConfig(
+        issuer=issuer,
+        client_id=client_id if issuer else "",
+        redirect_uri=os.environ.get("EM_CONSOLE_REDIRECT_URI", "").strip(),
+        authorization_endpoint=(f"{issuer}/protocol/openid-connect/auth"
+                                if issuer else ""),
+        token_endpoint=(f"{issuer}/protocol/openid-connect/token"
+                        if issuer else ""),
+        end_session_endpoint=(f"{issuer}/protocol/openid-connect/logout"
+                              if issuer else ""),
+        scope=os.environ.get("EM_CONSOLE_SCOPE", "openid profile email").strip(),
+        enforcing=bool(getattr(settings, "enforcing", False)),
+    )
+
+
 @v1_public.get("/health", response_model=Health, tags=["meta"])
 def health() -> Health:
     """Liveness, version, and what this build can do.

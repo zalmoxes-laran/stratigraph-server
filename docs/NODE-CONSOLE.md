@@ -9,6 +9,24 @@ whoever owns a room.
 Two things are worth writing down: the shape of a module, and the two properties
 that shape protects.
 
+## Signing in
+
+The console authenticates against **this node's own realm** (Authorization Code
++ PKCE) and holds the token in memory for the tab. `GET /v1/auth-config` tells the
+browser where the realm is and which **public** client to use (`em-console`);
+`app/node_admin/auth.js` does the flow. Three properties worth keeping:
+
+* **no secret in the page** — that is what PKCE is for, and the node's own
+  `em-server` client (confidential, no standard flow) is deliberately not the one
+  the browser uses;
+* **nothing is stored** — the access and refresh tokens live in memory; the PKCE
+  verifier has to survive the redirect, so it goes in `sessionStorage` and is
+  deleted the moment the code is exchanged;
+* **the capability does not move into the client** — signing in says who you are,
+  `/v1/admin/whoami` still says whether you may administer this node.
+
+The pasted-token box remains as the fallback (dev, or a realm outage).
+
 ## The shape
 
 A module is **three things and nothing else**:

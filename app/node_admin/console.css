@@ -175,3 +175,7 @@ dialog {
 }
 dialog textarea { width: 100%; font-family: ui-monospace, monospace; font-size: .8em; }
 dialog menu { padding: 0; margin: .6rem 0 0; display: flex; justify-content: flex-end; }
+
+/* the signed-out card: one button, and the paste box folded under it */
+details.small summary { cursor: pointer; color: var(--ink-soft); margin-top: .8rem; }
+details.small button { margin-top: .4rem; }

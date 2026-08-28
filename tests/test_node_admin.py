@@ -350,3 +350,98 @@ def test_the_next_panels_are_declared_and_not_half_built(client):
         assert not (root / "modules" / f"{planned}.js").exists(), \
             f"{planned} is half-built: declared as a seam and shipped as a file"
         assert client.get(f"/v1/admin/{planned}", headers=AUTH).status_code == 404
+
+
+# ── signing in: the console asks the node where its realm is ────────────────
+
+def test_the_node_says_how_a_browser_signs_in(client):
+    """`/v1/auth-config` is PUBLIC by construction — an issuer and a client id
+    are not secrets, and the one thing that would be does not exist for this
+    client: the console is a public OIDC client and uses PKCE."""
+    answer = client.get("/v1/auth-config")
+    assert answer.status_code == 200
+    config = answer.json()
+    assert set(config) >= {"issuer", "client_id", "authorization_endpoint",
+                           "token_endpoint", "end_session_endpoint", "scope",
+                           "enforcing"}
+    assert "secret" not in " ".join(config).lower()
+    assert not any("secret" in str(v).lower() for v in config.values())
+
+
+def test_a_node_with_no_realm_offers_no_sign_in(client):
+    """dev-no-auth: there is nothing to sign in TO, and a Sign in button that
+    cannot work is worse than none. The config says so instead of handing out an
+    endpoint that is the empty string plus a path."""
+    config = client.get("/v1/auth-config").json()
+    assert config["enforcing"] is False
+    assert config["issuer"] == ""
+    assert config["client_id"] == ""
+    assert config["authorization_endpoint"] == ""
+
+
+def test_the_endpoints_are_derived_from_the_issuer(monkeypatch, client):
+    """Two URLs that must agree are two URLs that will one day disagree — the
+    same argument `auth.py` makes about the issuer and the JWKS."""
+    class Enforcing:
+        enforcing = True
+        issuer = "https://sso.example.org/realms/em"
+
+        def describe(self):
+            return "keycloak"
+
+    monkeypatch.setattr(main_module.authenticator, "settings", Enforcing())
+    config = client.get("/v1/auth-config").json()
+    assert config["issuer"] == "https://sso.example.org/realms/em"
+    assert config["authorization_endpoint"] == \
+        "https://sso.example.org/realms/em/protocol/openid-connect/auth"
+    assert config["token_endpoint"] == \
+        "https://sso.example.org/realms/em/protocol/openid-connect/token"
+    assert config["enforcing"] is True
+
+
+def test_the_browser_client_is_never_the_confidential_one(monkeypatch, client):
+    """`em-console`, not `em-server`. Pointing a browser at the confidential
+    client produces a login that fails at the last step with a message about the
+    client rather than about the configuration — and its secret could not ship in
+    a page anyway."""
+    class Enforcing:
+        enforcing = True
+        issuer = "https://sso.example.org/realms/em"
+
+        def describe(self):
+            return "keycloak"
+
+    monkeypatch.setattr(main_module.authenticator, "settings", Enforcing())
+    monkeypatch.delenv("EM_CONSOLE_CLIENT_ID", raising=False)
+    assert client.get("/v1/auth-config").json()["client_id"] == "em-console"
+    monkeypatch.setenv("EM_CONSOLE_CLIENT_ID", "em-console-prod")
+    assert client.get("/v1/auth-config").json()["client_id"] == "em-console-prod"
+
+
+def test_the_console_carries_no_secret_and_no_framework(client):
+    """Two properties of the page itself, read from what the node serves.
+
+    A `client_secret` in a page is the whole point of PKCE being there instead;
+    and the console stays vanilla — a console that needed a build step to change
+    a label is a console nobody changes."""
+    for name in ("console.js", "auth.js", "boot.js"):
+        source = client.get(f"/admin/{name}")
+        assert source.status_code == 200, name
+        text = source.text
+        assert "client_secret" not in text, name
+        for framework in ("react", "vue", "angular", "import(\"http"):
+            assert framework not in text.lower(), f"{name} pulled in {framework}"
+    page = client.get("/admin/").text
+    assert "<script" in page and "cdn" not in page.lower()
+
+
+def test_the_pkce_verifier_never_outlives_its_exchange(client):
+    """Read from the source, because it is the property that matters and it is
+    one line: the verifier has to survive the redirect (sessionStorage, which
+    dies with the tab) and is REMOVED the moment it is read."""
+    source = client.get("/admin/auth.js").text
+    assert "sessionStorage" in source
+    assert "sessionStorage.removeItem(VERIFIER_KEY)" in source
+    assert "localStorage" not in source, "a verifier in localStorage outlives the tab"
+    # …and the token itself is never stored, in either file
+    assert "localStorage" not in client.get("/admin/console.js").text
