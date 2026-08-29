@@ -29,13 +29,22 @@
  *   at the last step and this file surfaces that sentence rather than a code.
  */
 
-const VERIFIER_KEY = "em-console.pkce";
-const RETURN_KEY = "em-console.return";
+// Keyed by the PAGE, not by the app. Two consoles are served by this process
+// now (`/admin` and `/rooms`), they sign in against the same realm, and a shared
+// key would let one consume the other's PKCE verifier — a sign-in that fails
+// once, mysteriously, whenever somebody has both tabs open.
+const VERIFIER_KEY = `em-console.pkce${window.location.pathname}`;
+const RETURN_KEY = `em-console.return${window.location.pathname}`;
 
-/** The page's own base, up to and including `/admin/` — which is the redirect
- *  the realm has to know. Same shape as the API base the shell derives. */
+/** The page's own directory — which is the redirect URI the realm has to know.
+ *
+ *  DERIVED, not hardcoded: this module is imported by the node console
+ *  (`/admin/`) and by the room browser (`/rooms/`), and behind a proxy both
+ *  carry a prefix (`/em/admin/`). Anything written literally here would be right
+ *  for one of the four and silently wrong for the others — and a wrong redirect
+ *  URI fails at the IdP, far from the line that caused it. */
 export function redirectUri() {
-  const path = window.location.pathname.replace(/\/admin(\/.*)?$/, "/admin/");
+  const path = window.location.pathname.replace(/[^/]*$/, "");
   return `${window.location.origin}${path}`;
 }
 

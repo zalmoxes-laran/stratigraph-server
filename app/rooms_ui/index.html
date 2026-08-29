@@ -1,0 +1,62 @@
+<!doctype html>
+<!--
+  MY ROOMS — the page that kills the hand-typed Hub.
+
+  Before this, joining a room meant putting three things into a settings panel:
+  an address, a room name, and a token pasted out of a terminal. Three chances to
+  get it wrong, and the third one was a secret travelling by clipboard.
+
+  Here: sign in, see the rooms you have a grant in, make new ones, and hand one
+  to a tool with a click. The link the button produces names a PLACE and never a
+  permission — the tool signs in by itself. See `app/handoff.py`.
+
+  Same shape as the node console next door, and deliberately so: no build step, no
+  framework, served by the process it talks to. It even imports that console's
+  sign-in module rather than copying it (`../admin/auth.js` — RELATIVE, so it
+  survives the `/em` prefix a proxy adds).
+
+  Different SCOPE though, and that is why it is a second page rather than a panel
+  in the first: the console is about the NODE (every room, the storage, the
+  lifecycle) and needs an operator capability. This is about YOUR rooms, and
+  needs only that you are somebody.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My rooms · StratiGraph</title>
+  <link rel="stylesheet" href="../admin/console.css">
+  <link rel="stylesheet" href="./rooms.css">
+</head>
+<body>
+  <header class="bar">
+    <span class="wordmark">StratiGraph</span>
+    <span class="sep">·</span>
+    <span class="where">my rooms</span>
+    <span class="grow"></span>
+    <span id="who" class="who"></span>
+    <button id="btn-signout" class="ghost hidden">Sign out</button>
+  </header>
+
+  <main id="main">
+    <section id="gate" class="gate">
+      <h1>My rooms</h1>
+      <p>Sign in to see the rooms you work in, and to open one in a tool.</p>
+      <button id="btn-signin" class="primary">Sign in</button>
+      <p id="gate-note" class="note"></p>
+    </section>
+
+    <section id="workspace" class="hidden">
+      <div class="toolbar">
+        <input id="new-room-title" type="text" placeholder="A new room's name…"
+               autocomplete="off" maxlength="120">
+        <button id="btn-create" class="primary">Create room</button>
+        <span id="create-note" class="note"></span>
+      </div>
+      <div id="rooms"></div>
+    </section>
+  </main>
+
+  <script type="module" src="./rooms.js"></script>
+</body>
+</html>

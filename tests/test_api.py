@@ -286,11 +286,21 @@ def test_the_openapi_schema_is_served():
 
 def test_every_api_route_is_under_v1():
     """`/v1` is the contract 3DR builds against, so nothing may sit beside it by
-    accident. The ONE exception is the unversioned health probe, and it is an
-    exception on purpose — see the next test."""
+    accident. TWO exceptions, both deliberate and both for the same reason — a
+    human, not a program, is the caller:
+
+    * `/health` — the unversioned probe an orchestrator uses (see the next test);
+    * `/open` — the web half of the handoff (`app/handoff.py`): the page a person
+      pastes into a browser when no `stratigraph://` handler is registered. It
+      cannot be versioned, because the whole point is that a link written today
+      still opens in five years; and it must not need a token, because a 401 on
+      an HTML page is a blank tab with a status code.
+
+    The two consoles (`/admin`, `/rooms`) are static mounts and never reach this
+    list — they are faces on the API, not API."""
     schema = client.get("/openapi.json").json()
-    unversioned = [p for p in schema["paths"] if not p.startswith("/v1")]
-    assert unversioned == ["/health"], unversioned
+    unversioned = sorted(p for p in schema["paths"] if not p.startswith("/v1"))
+    assert unversioned == ["/health", "/open"], unversioned
 
 
 def test_the_unversioned_probe_mirrors_the_versioned_one():

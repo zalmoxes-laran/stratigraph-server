@@ -67,7 +67,11 @@
         "http://localhost:8000/admin/*",
         "http://127.0.0.1:8000/admin/*",
         "https://em.localhost:8443/em/admin/*",
-        "https://localhost:8443/em/admin/*"
+        "https://localhost:8443/em/admin/*",
+        "http://localhost:8000/rooms/*",
+        "http://127.0.0.1:8000/rooms/*",
+        "https://em.localhost:8443/em/rooms/*",
+        "https://localhost:8443/em/rooms/*"
       ],
       "webOrigins": [
         "+"

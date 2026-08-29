@@ -41,6 +41,8 @@ import pathlib
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, FastAPI, HTTPException, Query, Response
+from fastapi.responses import HTMLResponse
+from html import escape as html_escape
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -1587,7 +1589,7 @@ async def photogrammetry_job(job_id: str, request: Request) -> PhotogrammetryJob
                    f"run itself may still be on the engine.")
     _acl, _room, role, _who = await _acting_role(job.room_id, request)
     if role is None:
-        raise HTTPException(status_code=access.refusal_code(_who),
+        raise HTTPException(status_code=access.http_refusal_code(_who),
                             detail="not your room")
     return PhotogrammetryJob(**job.as_dict())
 
@@ -2614,6 +2616,175 @@ def delete_group(group_id: str, request: Request) -> Dict[str, Any]:
                     "resolve to nothing"}
 
 
+# ── the HANDOFF: "open this room in <tool>" ──────────────────────────────────
+#
+# The contract lives in `app/handoff.py`, including the reason the link carries no
+# token. What is here is the two faces of it: the JSON a UI asks for, and the
+# plain page a person can paste anywhere.
+
+
+class HandoffOut(BaseModel):
+    room: str
+    server: str
+    #: `stratigraph://open?server=…&room=…`
+    scheme: str
+    #: the same handoff as an https link this server serves itself
+    web: str
+    tools: Dict[str, Any] = Field(default_factory=dict)
+    #: asserted in the answer, and checked by a test that greps the URLs: a
+    #: handoff names a place and never a permission
+    carries_token: bool = False
+    note: str = ""
+
+
+class WhoAmI(BaseModel):
+    """Who the token says you are. Identity, and nothing about capability."""
+
+    orcid: Optional[str] = None
+    name: Optional[str] = None
+    #: False on a node with no OIDC: there is nobody to be, and saying so beats
+    #: showing an empty name as if the sign-in had failed
+    enforcing: bool = True
+
+
+@v1.get("/whoami", response_model=WhoAmI, tags=["meta"])
+def member_whoami(request: Request) -> WhoAmI:
+    """The MEMBER-facing identity — deliberately not `/v1/admin/whoami`.
+
+    That one answers "may you administer this node", which is a capability and is
+    gated as one. This answers "who am I", which every signed-in page needs to
+    put a name in a corner, and which no page should have to pass an operator
+    check to learn. Two questions, two endpoints — the same separation the
+    console's own sign-in makes between identity and capability.
+    """
+    principal = authenticator.require_token(request)
+    dev_mode = bool(principal.get("em_dev_mode"))
+    return WhoAmI(
+        orcid=None if dev_mode else (principal.get("orcid")
+                                     or principal.get("preferred_username")
+                                     or principal.get("sub")),
+        name=principal.get("name") or None,
+        enforcing=bool(authenticator.settings.enforcing))
+
+
+@v1.get("/rooms/{room_id}/open", response_model=HandoffOut, tags=["rooms"])
+async def room_handoff(room_id: str, request: Request) -> HandoffOut:
+    """How to open this room in a tool, without typing anything.
+
+    **Who may**: anybody with a grant here — the same rule the listing follows.
+    A handoff for a room you may not enter would be a way to find out which rooms
+    exist, and a listing is not a discovery service.
+
+    The answer carries no credential. The tool that follows the link signs in by
+    itself (OIDC + PKCE) and holds its token in memory.
+    """
+    from . import access
+    from . import handoff as ho
+
+    _acl, _room, role, who = await _acting_role(room_id, request)
+    if role is None:
+        raise HTTPException(
+            status_code=access.http_refusal_code(who),
+            detail="no grant in this room: ask its owner for an invite link — "
+                   "that one carries a role, which is what this one deliberately "
+                   "does not")
+    try:
+        return HandoffOut(**ho.open_targets(room_id))
+    except ho.HandoffError as exc:
+        # a node that does not know its own public address cannot write a link
+        # another machine could follow, and saying so beats writing localhost
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@v1_public.post("/handoff/parse", tags=["rooms"])
+def parse_handoff(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    """`{link}` → `{server, room}`, or the reason it is not a handoff.
+
+    Public and read-only: it parses a string and reaches nothing. It exists so
+    that the THREE consumers (this server's own page, EMStudio, the field
+    assistant) can be measured against one implementation of the grammar rather
+    than three that drift — the same argument the wire's `read()` makes.
+    """
+    from . import handoff as ho
+
+    try:
+        return {"ok": True, **ho.parse(str(body.get("link") or ""))}
+    except ho.HandoffError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+@app.get("/open", response_class=HTMLResponse, tags=["rooms"])
+def open_page(server: str = Query(default=""),
+              room: str = Query(default="")) -> HTMLResponse:
+    """The web half of the handoff: a page that tries the scheme, then explains.
+
+    Outside `/v1` and unauthenticated, deliberately — it is the thing a person
+    pastes into a browser, and a 401 on it would be a blank page with a status
+    code. It carries no data about the room: the parameters came from the caller
+    and go straight back out, and every real check happens when the tool that
+    opens signs in.
+
+    Why a page at all, rather than a bare redirect to the scheme: on a machine
+    with no handler registered a redirect does NOTHING, silently, and looks like
+    the user's fault. This says what happened and what to install.
+    """
+    from . import handoff as ho
+
+    safe_room = html_escape(str(room or ""))
+    safe_server = html_escape(str(server or ""))
+    try:
+        link = ho.scheme_url(server or ho.public_base(), room)
+    except ho.HandoffError:
+        link = ""
+    safe_link = html_escape(link)
+    return HTMLResponse(f"""<!doctype html>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Open room {safe_room}</title>
+<style>
+ :root {{ color-scheme: light dark; }}
+ body {{ font: 16px/1.55 system-ui, sans-serif; max-width: 34rem;
+        margin: 12vh auto; padding: 0 1.2rem; }}
+ code {{ background: rgba(127,127,127,.18); padding: .1em .35em; border-radius: 3px;
+        word-break: break-all; }}
+ a.go {{ display: inline-block; margin: 1.2rem 0; padding: .6rem 1.1rem;
+        border: 1px solid currentColor; border-radius: 6px;
+        text-decoration: none; font-weight: 600; }}
+ p.small {{ opacity: .75; font-size: .9em; }}
+</style>
+<h1>Room <code>{safe_room}</code></h1>
+<p>on <code>{safe_server or '(this server)'}</code></p>
+<a class="go" id="go" href="{safe_link}">Open in a StratiGraph tool</a>
+<p class="small" id="said"></p>
+<p class="small">
+  This link names a <strong>place</strong>, not a permission — there is no token
+  in it. Whichever tool opens it signs you in itself and keeps the token in
+  memory. If you are not a member of this room yet, ask its owner for an
+  <em>invite</em> link: that one carries a role.
+</p>
+<script>
+  // Try the handler, then SAY what happened. A page that only redirected would
+  // be a blank tab on every machine with no handler registered.
+  const said = document.getElementById("said");
+  const go = document.getElementById("go");
+  if (!go.getAttribute("href")) {{
+    said.textContent = "This server does not know its own public address, so it "
+      + "cannot write a link another machine could follow (EM_PUBLIC_BASE).";
+    go.remove();
+  }} else {{
+    let left = false;
+    window.addEventListener("blur", () => {{ left = true; }});
+    setTimeout(() => {{ go.click(); }}, 120);
+    setTimeout(() => {{
+      if (left) return;
+      said.textContent = "Nothing opened — no StratiGraph tool is registered for "
+        + "this link on this machine. Install EMStudio, or open the room from "
+        + "inside it, or copy the link above.";
+    }}, 1800);
+  }}
+</script>
+""")
+
+
 # ── the NODE CONSOLE, served by the process it administers ───────────────────
 #
 # Static files, no build step, mounted OUTSIDE `/v1` because it is not the API: it
@@ -2630,6 +2801,18 @@ if _CONSOLE.is_dir():
     from fastapi.staticfiles import StaticFiles
     app.mount("/admin", StaticFiles(directory=str(_CONSOLE), html=True),
               name="node-console")
+
+# …and the MEMBER-facing one beside it. A second page rather than a panel in the
+# first, because the scope is different: the console is about the NODE (every
+# room, the storage, the lifecycle) and needs an operator capability; this is
+# about YOUR rooms and needs only that you are somebody. It imports the console's
+# sign-in module relatively (`../admin/auth.js`), so there is ONE PKCE
+# implementation and it survives the prefix a proxy adds.
+_ROOMS_UI = pathlib.Path(__file__).resolve().parent / "rooms_ui"
+if _ROOMS_UI.is_dir():
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/rooms", StaticFiles(directory=str(_ROOMS_UI), html=True),
+              name="rooms-browser")
 
 app.include_router(v1_public)
 app.include_router(v1)

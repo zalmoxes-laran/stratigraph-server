@@ -383,6 +383,22 @@ def refusal_code(orcid: Optional[str]) -> int:
     return 4403 if _norm(orcid) else 4401
 
 
+def http_refusal_code(orcid: Optional[str]) -> int:
+    """The same distinction over HTTP: 401 without an identity, 403 with one.
+
+    Its own function, and the reason is a bug it now prevents. `refusal_code`
+    returns WEBSOCKET close codes (the 4000-range is where an application's own
+    close reasons live), and two HTTP endpoints had passed one straight into an
+    `HTTPException` — which answers a literal `4403`, a status no client
+    understands and no proxy classifies. It looked right at the call site because
+    the function name says "refusal" and the numbers look like 401/403 with a
+    prefix.
+
+    Two names for two protocols, so the wrong one reads as wrong.
+    """
+    return 403 if _norm(orcid) else 401
+
+
 # ── who may hand out which role ──────────────────────────────────────────────
 
 def may_assign(actor: Optional[Role], target_current: Optional[Role],

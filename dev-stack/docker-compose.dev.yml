@@ -255,6 +255,11 @@ services:
       # Catalog: the panel then says «not configured», which is a fact about the
       # deployment and not a failure.
       EM_CATALOG_INTERNAL: "http://stratigraph-catalog:8000"
+      # --- this node's own PUBLIC address, for handoff links -------------------
+      # What `stratigraph://open?server=…` names. Behind Caddy the server lives
+      # under /em, and the link has to say so or the tool that follows it dials a
+      # path that is not there.
+      EM_PUBLIC_BASE: "${EM_PUBLIC_BASE:-https://em.localhost:${HTTPS_PORT:-8443}/em}"
       # --- the photogrammetric engine ----------------------------------------
       # An ENDPOINT, not a host: today the `nodeodm` service beside us, tomorrow
       # a ClusterODM broker in front of a CPU worker and a GPU one — the same
