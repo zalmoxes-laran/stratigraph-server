@@ -293,11 +293,12 @@ def test_3c_measure_images_refuses_an_unconfigured_base(dialled):
 def test_3d_the_only_outbound_calls_read_their_address_from_config():
     """The audit, kept as a tripwire.
 
-    THREE places in this service open a socket to another one: the JWKS fetch,
-    the `info.json` measurement, and — since the node console grew a Health panel
-    — the service probes. All of them take their address from configuration. A
-    fourth one arriving is not forbidden; it just has to arrive with this test
-    updated, which is the point (and is what happened here).
+    FOUR places in this service open a socket to another one: the JWKS fetch,
+    the `info.json` measurement, the node-console Health probes, and — since the
+    photogrammetric driver moved here out of s3Dgraphy (2026-08-29) — the engine.
+    All of them take their address from configuration. A fifth one arriving is
+    not forbidden; it just has to arrive with this test updated, which is the
+    point (and is what happened here, twice).
     """
     import re
 
@@ -307,9 +308,14 @@ def test_3d_the_only_outbound_calls_read_their_address_from_config():
         source = path.read_text(encoding="utf-8")
         if re.search(r"urlopen\(|httpx\.|requests\.(get|post)\(", source):
             callers[path.name] = source
-    assert set(callers) == {"auth.py", "main.py", "node_health.py"}, \
+    assert set(callers) == {"auth.py", "main.py", "node_health.py",
+                            "nodeodm_client.py"}, \
         f"a new outbound call site appeared: {sorted(callers)}"
 
+    # the engine's address is a setting with a compose-network default, and the
+    # ONLY thing that reaches it: nothing derives it from a request
+    assert 'os.environ.get("NODEODM_URL")' in callers["nodeodm_client.py"]
+    assert "DEFAULT_NODEODM_URL = " in callers["nodeodm_client.py"]
     # the JWKS URI is a setting, and `kid` (which DOES come from the token)
     # only picks a key out of what that setting returned
     assert "_JwksCache(self.settings.jwks_uri)" in callers["auth.py"]

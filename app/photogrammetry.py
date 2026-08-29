@@ -24,11 +24,15 @@ queue is a service this node does not have yet. Stated, not hidden.
 
 from __future__ import annotations
 
+import hashlib
+import io
 import logging
 import os
+import posixpath
 import threading
 import time
 import uuid as _uuid
+import zipfile
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -260,6 +264,7 @@ def start(job: Job, *, document: Dict[str, Any], cluster_ref: str,
           publish: Callable[[bytes, str], Dict[str, Any]],
           apply_delta: Callable[[Job, Dict[str, Any]], None],
           options: Optional[Dict[str, Any]] = None,
+          engine_version: Optional[str] = None,
           client: Any = None) -> Job:
     """Stage, reconstruct, publish, apply — on a daemon thread.
 
@@ -268,7 +273,8 @@ def start(job: Job, *, document: Dict[str, Any], cluster_ref: str,
     least possible. Everything after the first engine call is out of band.
     """
     import s3dgraphy.api as em
-    from s3dgraphy.photogrammetry import NodeODMClient
+
+    from .nodeodm_client import DEFAULT_OPTIONS, ENGINE_NAME, NodeODMClient
 
     gcps = None
     if gcps_payload:
@@ -282,44 +288,83 @@ def start(job: Job, *, document: Dict[str, Any], cluster_ref: str,
     images, resource_ids, acquisition_id = stage_cluster(
         document, cluster_ref, fetch=fetch)
     job.image_count = len(images)
-    cluster = em.photo_cluster(images, acquisition_id=acquisition_id or None,
-                               resource_ids=resource_ids,
-                               name=f"{cluster_ref}",
-                               subject_id=subject_id)
     engine = client or NodeODMClient(NODEODM_URL)
 
-    def _publish(blob: bytes, media_type: str, filename: str) -> Dict[str, Any]:
-        stored = publish(blob, media_type)
-        # the store speaks `ref`; the runner's contract speaks `sha256`, and it
-        # means the FULL reference (the thing a client verifies against)
-        return {"sha256": stored.get("ref") or stored.get("sha256"),
-                "url": f"asset/{stored.get('ref')}",
-                "media_type": media_type, "residency": "resident",
-                "created": stored.get("created")}
+    gcp_list = gcps.gcp_list() if gcps is not None else None
 
     def _work() -> None:
         job.status = "running"
+        notes: List[str] = []
+        # ── the engine. THIS is the part that knows what NodeODM is ──────────
         try:
-            run = em.run_photogrammetry(
-                cluster, client=engine, publish=_publish, gcps=gcps,
-                mode=job.mode, author=job.author, at=_now(), options=options,
-                deadline=JOB_DEADLINE,
-                on_progress=lambda task: _progress(job, task))
+            task, archive = engine.run(
+                images, options=options, gcp_list=gcp_list, name=cluster_ref,
+                poll=5.0, deadline=JOB_DEADLINE,
+                on_progress=lambda t: _progress(job, t))
         except Exception as exc:                     # the engine, or the network
             job.status, job.error = "failed", f"{type(exc).__name__}: {exc}"
             job.finished_at = time.time()
             log.warning("photogrammetry job %s failed: %s", job.job_id, exc)
             return
-        if not run.get("ok"):
-            job.status, job.error = "failed", run.get("message")
-            job.task_uuid = run.get("task_uuid") or job.task_uuid
+        job.task_uuid = task.uuid
+
+        found = read_archive(archive)
+        notes.extend(found["warnings"])
+        if found["model"] is None:
+            job.status = "failed"
+            job.error = (f"task {task.uuid} finished but the archive holds no "
+                         f"model in a form we read "
+                         f"({', '.join(MODEL_CANDIDATES)}): the run is on the "
+                         f"node, nothing was written to the graph")
             job.finished_at = time.time()
             return
-        job.task_uuid = run.get("task_uuid")
+
+        # ── the bytes, published BEFORE the graph points at them ─────────────
+        outputs: List[Dict[str, Any]] = []
+        stored = _publish_one(publish, "model", found["model"], outputs)
+        if found["point_cloud"] is not None:
+            _publish_one(publish, "point_cloud", found["point_cloud"], outputs)
+        # the whole archive too: a run you cannot re-open is a run nobody can check
+        _publish_one(publish, "archive", ("all.zip", archive), outputs)
+
+        # ── the MEANING, which is s3Dgraphy's and not ours ───────────────────
+        rms = rms_from_report(found.get("report"))
+        if gcps is not None and rms is None:
+            notes.append("registered, but the RMS of the fit could not be read")
+        transform = None
+        if rms is not None:
+            # only when we actually measured something: the builder's own
+            # canonical transform is the honest one otherwise
+            transform = em.registration_transform(
+                crs=gcps.crs if gcps is not None else None, rms=rms,
+                name=("Registration (absolute)" if gcps is not None
+                      else "Registration (site frame)"))
+        run = em.build_photogrammetry_delta(
+            input_resources=resource_ids,
+            output_model=em.produced_model(
+                stored["sha256"], url=stored.get("url"),
+                media_type=stored.get("media_type"),
+                residency=stored.get("residency") or "resident",
+                name=f"{cluster_ref} · {ENGINE_NAME} model"),
+            transform=transform, gcp_set=gcps,
+            author=job.author, mode=job.mode,
+            acquisition=acquisition_id or None, subject=subject_id,
+            tool={"name": ENGINE_NAME, "version": engine_version,
+                  "task_uuid": task.uuid,
+                  "options": {**DEFAULT_OPTIONS, **(options or {})}},
+            image_count=len(images), at=_now(), warnings=notes)
+
+        if not run.get("ok"):
+            # the semantic refusal, surfaced with the library's own words
+            job.status, job.error = "failed", run.get("message")
+            job.finished_at = time.time()
+            return
+
         job.detail = run.get("message") or ""
         job.result = {k: run.get(k) for k in
-                      ("model_id", "transform_id", "gcp_set_id", "process_id",
-                       "outputs", "warnings")}
+                      ("model_id", "transform_id", "gcp_set_id", "process_id")}
+        job.result["outputs"] = outputs
+        job.result["warnings"] = run.get("warnings") or []
         try:
             # AFTER the result is on the job: the applier adds to it, and an
             # assignment afterwards would drop what it wrote (measured).
@@ -339,6 +384,168 @@ def start(job: Job, *, document: Dict[str, Any], cluster_ref: str,
     threading.Thread(target=_work, name=f"photogrammetry-{job.job_id[:8]}",
                      daemon=True).start()
     return job
+
+
+# ── the archive: where THIS engine puts what ─────────────────────────────────
+#
+# Engine-specific by nature, which is exactly why it is here and not in the
+# semantic library: these paths are NodeODM's layout, and a second engine has its
+# own. Everything is optional and every absence is REPORTED — a version that moves
+# a file must not make this return a model of zero bytes.
+
+#: Ordered: the first match wins, and the order is the preference — glTF is what
+#: the ecosystem consumes (design §1.5).
+MODEL_CANDIDATES = (
+    "odm_texturing/odm_textured_model_geo.glb",
+    "odm_texturing/odm_textured_model.glb",
+    "odm_texturing/odm_textured_model_geo.obj",
+    "odm_texturing/odm_textured_model.obj",
+)
+POINTCLOUD_CANDIDATES = (
+    "odm_georeferencing/odm_georeferenced_model.laz",
+    "odm_georeferencing/odm_georeferenced_model.las",
+    "odm_filterpoints/point_cloud.ply",
+    "odm_georeferencing/odm_georeferenced_model.ply",
+)
+#: read when present, declared when not — never invented
+REPORT_CANDIDATES = (
+    "odm_georeferencing/odm_georeferencing_model_geo.txt",
+    "odm_report/stats.json",
+)
+
+MEDIA_TYPES = {".glb": "model/gltf-binary", ".gltf": "model/gltf+json",
+               ".obj": "model/obj", ".laz": "application/vnd.laszip",
+               ".las": "application/vnd.las", ".ply": "application/x-ply",
+               ".zip": "application/zip"}
+
+
+def read_archive(blob: bytes) -> Dict[str, Any]:
+    """Pull the model, the point cloud and (if legible) the residuals out."""
+    out: Dict[str, Any] = {"model": None, "point_cloud": None,
+                           "report": None, "warnings": []}
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(blob))
+    except zipfile.BadZipFile:
+        out["warnings"].append("the engine's answer is not a zip archive")
+        return out
+    names = set(archive.namelist())
+    for candidate in MODEL_CANDIDATES:
+        if candidate in names:
+            out["model"] = (posixpath.basename(candidate), archive.read(candidate))
+            break
+    for candidate in POINTCLOUD_CANDIDATES:
+        if candidate in names:
+            out["point_cloud"] = (posixpath.basename(candidate),
+                                  archive.read(candidate))
+            break
+    if out["point_cloud"] is None:
+        out["warnings"].append(
+            "no point cloud in the archive: the model was published, the cloud "
+            "was not (looked for " + ", ".join(POINTCLOUD_CANDIDATES) + ")")
+    for candidate in REPORT_CANDIDATES:
+        if candidate in names:
+            try:
+                out["report"] = archive.read(candidate).decode("utf-8", "replace")
+            except OSError:                       # a truncated member
+                continue
+            break
+    if out["report"] is None:
+        out["warnings"].append(
+            "no georeferencing report in the archive: the transform carries the "
+            "CRS the caller stated and NO residuals — the fit's error is unknown, "
+            "not zero")
+    return out
+
+
+def rms_from_report(report: Optional[str]) -> Optional[float]:
+    """The one shape we read: a line naming an RMS and a number on it.
+
+    Deliberately narrow. Guessing at a format across engine versions is how a
+    number that means something else ends up in a record somebody cites.
+    """
+    if not report:
+        return None
+    for line in report.splitlines():
+        if "rms" not in line.lower():
+            continue
+        for token in line.replace(",", " ").replace("=", " ").split():
+            try:
+                return float(token)
+            except ValueError:
+                continue
+    return None
+
+
+def _publish_one(publish: Callable[[bytes, str], Dict[str, Any]], role: str,
+                 item: Tuple[str, bytes],
+                 outputs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Bytes into the store, and the record of where they went.
+
+    The store speaks `ref`; the semantic layer speaks `sha256` and means the FULL
+    reference (the thing a client verifies against). Translated once, here.
+    """
+    filename, blob = item
+    media_type = MEDIA_TYPES.get(posixpath.splitext(filename)[1].lower(),
+                                 "application/octet-stream")
+    stored = publish(blob, media_type) or {}
+    ref = stored.get("ref") or stored.get("sha256") or (
+        "sha256:" + hashlib.sha256(blob).hexdigest())
+    record = {"sha256": ref, "url": f"asset/{ref}", "media_type": media_type,
+              "residency": "resident", "created": stored.get("created")}
+    outputs.append({"role": role, "filename": filename, "bytes": len(blob),
+                    **{k: v for k, v in record.items()
+                       if k in ("sha256", "url", "media_type", "created",
+                                "residency")}})
+    return record
+
+
+# ── the connector, DECLARED ──────────────────────────────────────────────────
+#
+# The descriptor moved here with the driver it names. s3Dgraphy keeps the generic
+# contract (`contract/`) and the vocabulary; naming an engine is a fact about THIS
+# node, and a node that runs COLMAP instead declares a different one.
+#
+# No new capability was invented: the set in `contract.connector` is closed on
+# purpose, and this connector needs three that already exist — it reads the graph
+# to find the cluster, writes the provenance, and attaches the bytes it produced.
+
+def photogrammetry_descriptor(handler=None, *, version: Optional[str] = None):
+    """The connector, as a promise. Declaring it buys the core's four refusals —
+    and the one that matters for a machine act is the third: a write with no
+    author is refused."""
+    from s3dgraphy.contract.connector import ConnectorDescriptor
+    from s3dgraphy.contract.core import Slot
+
+    from .nodeodm_client import ENGINE_NAME
+
+    return ConnectorDescriptor(
+        name="photogrammetry",
+        intents=["photogrammetry", "build-model", "reconstruct",
+                 "costruisci il modello"],
+        input_schema=[
+            Slot("cluster", "string", True,
+                 "the acquisition (or the resources) the photographs arrived as"),
+            Slot("subject", "string", False,
+                 "what is being reconstructed — a stratigraphic unit, usually"),
+            Slot("mode", "string", False,
+                 "'local' (scaled, site frame) or 'absolute' (registered by GCPs)"),
+            Slot("gcps", "object", False,
+                 "the control set: points, observations, CRS"),
+        ],
+        output="graph-delta",
+        handler=handler,
+        description=(f"A cluster of photographs becomes a placed 3D model: "
+                     f"{ENGINE_NAME} reconstructs it, the graph records the "
+                     f"genesis (crmdig:D7), the placement and, when there are "
+                     f"ground control points, the evidence it was registered from."),
+        service="rest",
+        writes=True,
+        host="app-side",
+        transport=["direct", "lan"],
+        capabilities=["read-graph", "write-graph", "attach-asset"],
+        provenance="derivation",
+        vendor={"engine": ENGINE_NAME, "engine_version": version},
+    )
 
 
 def _progress(job: Job, task: Any) -> None:

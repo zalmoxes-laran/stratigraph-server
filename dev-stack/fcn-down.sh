@@ -14,7 +14,10 @@ fi
 set -euo pipefail
 cd "$(dirname "$0")"                     # stratigraph-server/dev-stack
 
-COMPOSE=(docker-compose -f docker-compose.dev.yml --profile https)
+# `--profile engine` here and NOT in fcn-up: the engine is opt-in to start
+# (2.62 GB, see the compose) but "down" has to mean down — otherwise an
+# engine somebody turned on by hand outlives the stack and keeps its volume.
+COMPOSE=(docker-compose -f docker-compose.dev.yml --profile https --profile engine)
 MODE="down"; STOP_COLIMA="no"
 for a in "$@"; do
   case "$a" in

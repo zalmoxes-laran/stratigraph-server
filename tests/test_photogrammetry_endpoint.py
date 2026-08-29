@@ -89,7 +89,7 @@ class FakeEngineTransport:
 @pytest.fixture
 def engine(monkeypatch):
     """A configured node whose engine lives in this process."""
-    from s3dgraphy.photogrammetry import NodeODMClient
+    from app.nodeodm_client import NodeODMClient
 
     monkeypatch.setattr(pg, "NODEODM_URL", "http://nodeodm:3000")
     made = NodeODMClient("http://nodeodm:3000",
@@ -262,7 +262,7 @@ def test_absolute_without_control_points_fails_the_job_not_the_request(engine, r
 
 
 def test_an_archive_with_no_model_writes_nothing_and_keeps_the_uuid(room, monkeypatch):
-    from s3dgraphy.photogrammetry import NodeODMClient
+    from app.nodeodm_client import NodeODMClient
 
     monkeypatch.setattr(pg, "NODEODM_URL", "http://nodeodm:3000")
     empty = NodeODMClient("http://nodeodm:3000",

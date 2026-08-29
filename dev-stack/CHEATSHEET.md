@@ -23,32 +23,49 @@ cp .env.dev.example .env.dev                    # once
 | **Cantaloupe / IIIF** | `:8182` | reads the SAME bucket, key = asset sha256 |
 | **StratiGraph Server** | via Caddy `/em/v1` | the room API |
 | **StratiGraph Catalog** | `:8010` | the register (published studies) |
-| **NodeODM** | `:3010` (its own dashboard) | the photogrammetric engine — StratiGraph Server dials it at `nodeodm:3000`, never this port |
+| **NodeODM** | `:3010` (its own dashboard) | **not started by `fcn-up.sh`** — opt-in, see §1-bis |
 
 Health: `https://em.localhost:8443/em/v1/health`. First run takes a few minutes
 (image build); after that a full `up` is **~15 s**.
 
-> **Disk, and it bit us (measured 2026-08-29).** NodeODM is **2.62 GB on disk**
-> and its working volume grows by a GB or two per run — it prunes nothing, not
-> even failed runs. On a Colima VM with a 19 GB root already holding ~16 GB of
-> other projects' images, the stack and the engine did **not** both fit: the pull
-> and then the server's own rebuild died on `no space left on device`. If
-> `./fcn-up.sh` fails that way:
->
-> ```bash
-> colima stop && colima start --disk 120     # grow the VM; the volumes survive
-> ```
->
-> …or reclaim (`docker image prune -a`), or run without the engine
-> (`docker compose stop nodeodm && docker volume rm em-dev_nodeodm_data` — the
-> `/v1/photogrammetry` endpoint then reports the engine as unreachable, which is
-> a true sentence about that node).
+## 1-bis · Turn the photogrammetric engine on
 
-- **Edit s3Dgraphy live:** `./fcn-up.sh --local-s3d` mounts `../../s3Dgraphy/src`;
-  edit, then `docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart stratigraph-server stratigraph-catalog`.
-- **Cert rejected by the browser?** `./fcn-trust-ca.sh` (once; and after every `--wipe`).
-- **Down:** `./fcn-down.sh` — data (studies, rooms, bucket, realm, CA) **persists**;
-  only `./fcn-down.sh --wipe` erases it.
+The engine is **opt-in**, like production (`nodeodm_enabled: false` in the Ansible
+role). A plain `./fcn-up.sh` leaves it down; a photogrammetry session turns it on:
+
+```bash
+docker compose --env-file .env.dev -f docker-compose.dev.yml --profile engine up -d nodeodm
+```
+
+…and off again when you are done:
+
+```bash
+docker compose --env-file .env.dev -f docker-compose.dev.yml --profile engine stop nodeodm
+```
+
+With the engine down, `POST /v1/photogrammetry` reports that it cannot reach it —
+which is a true sentence about that node, not a failure.
+
+Then the end-to-end walk, against the real engine:
+
+```bash
+python dev-stack/smoke_photogrammetry.py --images ~/photos/US12 --wait 1800
+```
+
+> **Why opt-in, measured 2026-08-29.** NodeODM is **2.62 GB on disk**, and by
+> default it keeps finished *and failed* tasks for **48 h**. On a Colima VM with a
+> 19 GB root already holding ~16 GB of other projects' images, the stack and the
+> engine did not both fit — the pull, and then the server's own rebuild, died on
+> `no space left on device`. Both halves are now handled: the size is opt-in
+> (`profiles: ["engine"]`) and the growth is bounded
+> (`--cleanup_tasks_after`, `NODEODM_CLEANUP_AFTER=60` minutes — the engine sweeps
+> at boot and hourly). If a node still runs out of room, grow the VM rather than
+> shrinking the window — `colima stop && colima start --disk 120` keeps the
+> volumes. Note the trade-off of a short window: after it, the engine deletes the
+> task, so its `all.zip` is gone and `GET /task/{uuid}/info` 404s. Safe for us —
+> the connector publishes the produced bytes to MinIO *before* writing anything to
+> the graph — but raise `NODEODM_CLEANUP_AFTER` on a node where somebody
+> re-downloads runs from NodeODM's own dashboard.
 
 ## 2 · Colima is the intended runtime
 

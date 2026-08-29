@@ -302,21 +302,57 @@ services:
   # MIT, which is why it is the default (design §4): the node is deployed at
   # partners and must stay redistributable.
   # =======================================================================
-  # DISK, MEASURED 2026-08-29 and worth knowing before the first `up`: the image
-  # is 2.62 GB on disk (0.65 GB pulled) and the engine's working area grows by a
-  # GB or two per run. On the laptop this was built on, a Colima VM with a 19 GB
-  # root already holding ~16 GB of other projects' images, the stack and the
-  # engine did NOT both fit — the pull and then the server's own rebuild both
-  # died on ENOSPC. If `./fcn-up.sh` fails that way, the remedy is one of:
-  #   colima stop && colima start --disk 120     (grow the VM, keeps the volumes)
-  #   docker image prune -a                      (reclaim what nothing uses)
-  #   docker compose stop nodeodm && docker volume rm em-dev_nodeodm_data
-  # The engine also keeps FAILED runs in its volume and prunes nothing on its
-  # own: a node that reconstructs every day needs a retention decision, and this
-  # stack does not make one.
+  # DISK, MEASURED 2026-08-29 — both halves are now handled below, and this is
+  # the record of why. The image is 2.62 GB on disk (0.65 GB pulled) and the
+  # engine's working area grew by a GB or two per run while keeping FAILED tasks
+  # for 48 h by default. On the laptop this was built on (Colima, 19 GB root,
+  # ~16 GB of other projects' images) the stack and the engine did not both fit:
+  # the pull, and then the server's own rebuild, died on ENOSPC.
+  #   · the SIZE is now opt-in       → `profiles: ["engine"]`
+  #   · the GROWTH is now bounded    → `--cleanup_tasks_after`
+  # If a node still runs out of room, grow the VM rather than shrinking the
+  # window: `colima stop && colima start --disk 120` keeps the volumes.
   nodeodm:
+    # OPT-IN, like production (`nodeodm_enabled: false` in the Ansible role). A
+    # plain `./fcn-up.sh` does NOT bring the engine up; a photogrammetry session
+    # does:
+    #
+    #   docker compose --env-file .env.dev -f docker-compose.dev.yml \
+    #     --profile engine up -d nodeodm
+    #
+    # Measured, and the reason this is a profile rather than a default: the image
+    # is 2.62 GB on disk and this laptop's Colima VM has a 19 GB root already
+    # holding ~16 GB of other projects — the stack and the engine did not both
+    # fit, and the server's own rebuild died on ENOSPC. An engine nobody asked
+    # for should not be able to stop the stack from coming up.
+    profiles: ["engine"]
     image: opendronemap/nodeodm:3.5.6
     container_name: em-dev-nodeodm
+    # THE ROOT CAUSE OF THE DISK, fixed where it starts. Verified against the
+    # source of the pinned version (NodeODM v2.2.3 — what `GET /info` reports
+    # inside `opendronemap/nodeodm:3.5.6`): `config.js` declares
+    # `--cleanup_tasks_after <minutes>` (default 2880 = 48 h) and
+    # `--cleanup_uploads_after <minutes>` (same default), and
+    # `TaskManager.removeOldTasks` sweeps tasks in FAILED, COMPLETED *and*
+    # CANCELED — at boot and then hourly (`0 * * * *`). FAILED matters: the run
+    # that filled the disk here was a failure, and 48 h of those is what a node
+    # reconstructing every day accumulates.
+    #
+    # THE TRADE-OFF, said out loud: after this window the engine deletes the
+    # task, so its `all.zip` is gone and `GET /task/{uuid}/info` 404s. That is
+    # safe for US because the connector downloads the archive and publishes it to
+    # MinIO *before* it writes anything to the graph — the bytes we keep are the
+    # ones in the object store, not the ones on the engine. What it does cost is
+    # re-downloading a run from NodeODM's own dashboard an hour later. Raise
+    # NODEODM_CLEANUP_AFTER on a node where somebody works that way.
+    command:
+      - "--cleanup_tasks_after"
+      - "${NODEODM_CLEANUP_AFTER:-60}"
+      # the other way the volume grows: a cluster whose upload was interrupted.
+      # Its own knob, because the honest value is "the longest a dataset takes to
+      # upload", which is a different question from how long to keep results.
+      - "--cleanup_uploads_after"
+      - "${NODEODM_CLEANUP_UPLOADS_AFTER:-60}"
     ports:
       # 3000 is a crowded port on a laptop; the CONTAINER's is what matters and
       # that one is fixed at 3000 by the image.
@@ -324,7 +360,7 @@ services:
     volumes:
       # the engine's own working area: tasks, intermediate products, the archives
       # it serves back. A named volume, so a restart does not lose a run that is
-      # still downloadable.
+      # still inside the cleanup window.
       - nodeodm_data:/var/www/data
     restart: unless-stopped
 
