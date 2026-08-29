@@ -23,9 +23,26 @@ cp .env.dev.example .env.dev                    # once
 | **Cantaloupe / IIIF** | `:8182` | reads the SAME bucket, key = asset sha256 |
 | **StratiGraph Server** | via Caddy `/em/v1` | the room API |
 | **StratiGraph Catalog** | `:8010` | the register (published studies) |
+| **NodeODM** | `:3010` (its own dashboard) | the photogrammetric engine — StratiGraph Server dials it at `nodeodm:3000`, never this port |
 
 Health: `https://em.localhost:8443/em/v1/health`. First run takes a few minutes
 (image build); after that a full `up` is **~15 s**.
+
+> **Disk, and it bit us (measured 2026-08-29).** NodeODM is **2.62 GB on disk**
+> and its working volume grows by a GB or two per run — it prunes nothing, not
+> even failed runs. On a Colima VM with a 19 GB root already holding ~16 GB of
+> other projects' images, the stack and the engine did **not** both fit: the pull
+> and then the server's own rebuild died on `no space left on device`. If
+> `./fcn-up.sh` fails that way:
+>
+> ```bash
+> colima stop && colima start --disk 120     # grow the VM; the volumes survive
+> ```
+>
+> …or reclaim (`docker image prune -a`), or run without the engine
+> (`docker compose stop nodeodm && docker volume rm em-dev_nodeodm_data` — the
+> `/v1/photogrammetry` endpoint then reports the engine as unreachable, which is
+> a true sentence about that node).
 
 - **Edit s3Dgraphy live:** `./fcn-up.sh --local-s3d` mounts `../../s3Dgraphy/src`;
   edit, then `docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart stratigraph-server stratigraph-catalog`.

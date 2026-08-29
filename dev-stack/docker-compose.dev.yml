@@ -255,6 +255,13 @@ services:
       # Catalog: the panel then says «not configured», which is a fact about the
       # deployment and not a failure.
       EM_CATALOG_INTERNAL: "http://stratigraph-catalog:8000"
+      # --- the photogrammetric engine ----------------------------------------
+      # An ENDPOINT, not a host: today the `nodeodm` service beside us, tomorrow
+      # a ClusterODM broker in front of a CPU worker and a GPU one — the same
+      # three REST endpoints either way, which is why no code changes for that.
+      # Unset on a node with no engine: `/v1/photogrammetry` then answers 503
+      # saying so, rather than timing out against nothing.
+      NODEODM_URL: "http://nodeodm:3000"
       # The dev stack runs the LIBRARY YOU ARE EDITING: the sibling s3Dgraphy
       # checkout is mounted and put first on the path. If it is not there the
       # mount is an empty directory and the image's pinned wheel is used instead
@@ -270,6 +277,55 @@ services:
       # is discovered as a 404 on an endpoint that plainly exists.
       - ../app:/srv/em-server/app:ro
       - ../../s3Dgraphy/src:/srv/s3dgraphy-src:ro
+    restart: unless-stopped
+
+  # =======================================================================
+  # THE ENGINE — NodeODM, the photogrammetric reconstruction
+  #
+  # A PULLED DEPENDENCY, not our code (design §7-bis): the processing connector
+  # in s3Dgraphy drives it over three REST endpoints, and the only bespoke part
+  # is that connector. It is here for the same reason MinIO and Cantaloupe are —
+  # a service of the node, brought up with it.
+  #
+  # PINNED, never `latest`. 3.5.6 is the newest semver tag published for BOTH
+  # amd64 and arm64 (checked on the registry, 2026-08-29), so it runs natively on
+  # an Apple-Silicon Mac mini with no emulation. Updating is deliberate: raise the
+  # tag, `docker compose pull nodeodm && docker compose up -d nodeodm`, one
+  # service at a time. `latest` moved on 2026-03-25 and would have moved under a
+  # running node without anybody choosing it.
+  #
+  # NOT exposed through Caddy. The engine speaks no auth of its own, so the only
+  # thing that may reach it is StratiGraph Server on the compose network; the host
+  # port below is for a developer looking at its own dashboard, and it is NOT the
+  # address the server uses.
+  #
+  # MIT, which is why it is the default (design §4): the node is deployed at
+  # partners and must stay redistributable.
+  # =======================================================================
+  # DISK, MEASURED 2026-08-29 and worth knowing before the first `up`: the image
+  # is 2.62 GB on disk (0.65 GB pulled) and the engine's working area grows by a
+  # GB or two per run. On the laptop this was built on, a Colima VM with a 19 GB
+  # root already holding ~16 GB of other projects' images, the stack and the
+  # engine did NOT both fit — the pull and then the server's own rebuild both
+  # died on ENOSPC. If `./fcn-up.sh` fails that way, the remedy is one of:
+  #   colima stop && colima start --disk 120     (grow the VM, keeps the volumes)
+  #   docker image prune -a                      (reclaim what nothing uses)
+  #   docker compose stop nodeodm && docker volume rm em-dev_nodeodm_data
+  # The engine also keeps FAILED runs in its volume and prunes nothing on its
+  # own: a node that reconstructs every day needs a retention decision, and this
+  # stack does not make one.
+  nodeodm:
+    image: opendronemap/nodeodm:3.5.6
+    container_name: em-dev-nodeodm
+    ports:
+      # 3000 is a crowded port on a laptop; the CONTAINER's is what matters and
+      # that one is fixed at 3000 by the image.
+      - "${NODEODM_PORT:-3010}:3000"
+    volumes:
+      # the engine's own working area: tasks, intermediate products, the archives
+      # it serves back. A named volume, so a restart does not lose a run that is
+      # still downloadable.
+      - nodeodm_data:/var/www/data
     restart: unless-stopped
 
   # =======================================================================
@@ -374,3 +430,4 @@ volumes:
   minio_data:
   em_data:
   cantaloupe_cache:   # derivatives: a cache, recomputable — not study data
+  nodeodm_data:       # the engine's tasks and the archives it still serves

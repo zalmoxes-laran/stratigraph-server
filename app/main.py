@@ -1427,6 +1427,171 @@ def _measure_images(graph: Any, base: str) -> Dict[str, Any]:
     return sizes
 
 
+# ── photogrammetry: a cluster of photographs becomes a placed model ───────────
+#
+# The connector's HTTP face. Everything it DECIDES is s3Dgraphy's (the two modes,
+# the refusals, the shape of the provenance); what is here is the staging, the
+# out-of-band run and the landing — see `app/photogrammetry.py`.
+#
+# Two endpoints and no more: start a job, poll it. A reconstruction is minutes,
+# so a synchronous answer would be a request something drops halfway.
+
+
+class GCPPoint(BaseModel):
+    """One ground control point, as a client states it."""
+
+    id: str
+    #: [x, y, z] in the set's CRS
+    world: List[float]
+    #: where it was SEEN: [{"image": "IMG_0042.JPG", "pixel": [x, y]}, …]. The
+    #: image names are the resources' names in the room — that is how a pixel
+    #: finds its photograph.
+    observations: List[Dict[str, Any]] = Field(default_factory=list)
+    uncertainty: Optional[float] = None
+
+
+class GCPSetIn(BaseModel):
+    points: List[GCPPoint] = Field(default_factory=list)
+    #: `EPSG:32633`, a proj string, or null for a site-local grid. Absolute mode
+    #: REFUSES null: registration into an unnamed frame is not absolute.
+    crs: Optional[str] = None
+    id: Optional[str] = None
+    name: str = "Ground control points"
+
+
+class PhotogrammetryIn(BaseModel):
+    room_id: str
+    #: the cluster: an acquisition (crmdig:D12), a single resource, or a unit
+    #: with photographs on it. All three are real records, so all three are read.
+    cluster: str
+    #: what is being reconstructed — usually the stratigraphic unit. The model is
+    #: linked to it so the assembly does not have to guess.
+    subject: Optional[str] = None
+    #: `local` (scaled and oriented in a site frame — honestly NOT
+    #: georeferenced) or `absolute` (registered against control points).
+    mode: str = "local"
+    gcps: Optional[GCPSetIn] = None
+    #: passed to the engine verbatim, over the connector's own defaults
+    options: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PhotogrammetryJob(BaseModel):
+    job_id: str
+    room_id: str
+    status: str
+    mode: str
+    author: Optional[str] = None
+    created_at: float
+    finished_at: Optional[float] = None
+    #: the ENGINE's id for the run. The one durable handle: this process's job
+    #: registry is in memory, so after a restart this is how a run is found.
+    task_uuid: Optional[str] = None
+    progress: float = 0.0
+    image_count: int = 0
+    detail: str = ""
+    error: Optional[str] = None
+    result: Dict[str, Any] = Field(default_factory=dict)
+
+
+@v1.post("/photogrammetry", response_model=PhotogrammetryJob,
+         status_code=202, tags=["photogrammetry"])
+async def start_photogrammetry(request: Request,
+                               ask: PhotogrammetryIn = Body(...)
+                               ) -> PhotogrammetryJob:
+    """Reconstruct a cluster of photographs into a placed 3D model.
+
+    **Who may**: editor and above in the room. A reconstruction WRITES — a
+    resource, a genesis event, a placement — so it is gated exactly as any other
+    write is, and by the same resolution the WebSocket door uses.
+
+    **202, with a job id.** The engine takes minutes on a small unit and longer
+    on a large one; poll `GET /v1/photogrammetry/{job_id}`. What comes back when
+    it is done is not a file to download but the IDS of what appeared in the
+    graph — the bytes are in the room's store, behind the same gate every other
+    asset is behind.
+
+    Refused before a job id is handed out: an unknown mode, `absolute` without
+    control points or without a CRS, control points in `local` mode, a cluster
+    this node cannot fully stage. Refused after, and reported on the job: the
+    engine being down, a run that fails, an archive with no model in it.
+    """
+    from . import photogrammetry as pg
+
+    if not pg.configured():
+        raise HTTPException(
+            status_code=503,
+            detail="this node has no photogrammetric engine: set NODEODM_URL "
+                   "to the engine's address (the dev stack runs one as `nodeodm`)")
+    _acl, room, role, who = await _acting_role(ask.room_id, request)
+    if role is None or not role.can_write:
+        raise HTTPException(
+            status_code=403,
+            detail="building a model in this room needs editor or above: it "
+                   "writes a resource, a genesis event and a placement")
+    if who is None and authenticator.settings.enforcing:
+        # belt and braces: the contract's core refuses an unattributed write, and
+        # a 500 from inside a thread is a worse place to learn it
+        raise HTTPException(status_code=403,
+                            detail="a model with nobody's name on it is a record "
+                                   "nobody can defend: sign in")
+
+    job = pg.JOBS.new(ask.room_id, author=who, mode=ask.mode)
+
+    def _apply(the_job: "pg.Job", run: Dict[str, Any]) -> None:
+        ops = pg.delta_to_ops(run.get("delta") or {})
+        applied = 0
+        for op in ops:
+            outcome = room.apply(op)
+            if outcome.get("applied"):
+                applied += 1
+        the_job.result["ops_applied"] = applied
+        the_job.result["ops"] = len(ops)
+
+    try:
+        pg.start(job, document=room.document, cluster_ref=ask.cluster,
+                 subject_id=ask.subject,
+                 gcps_payload=(ask.gcps.model_dump() if ask.gcps else None),
+                 fetch=ASSET_STORE.get,
+                 publish=ASSET_STORE.put,
+                 apply_delta=_apply,
+                 options=dict(ask.options or {}))
+    except pg.StagingError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except ValueError as exc:            # a control point that controls nothing
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return PhotogrammetryJob(**job.as_dict())
+
+
+@v1.get("/photogrammetry/{job_id}", response_model=PhotogrammetryJob,
+        tags=["photogrammetry"])
+async def photogrammetry_job(job_id: str, request: Request) -> PhotogrammetryJob:
+    """Where a reconstruction is now.
+
+    Gated by the ROOM the job is in, not by who started it: a run is a fact
+    about the study, and an editor who arrives after their colleague went home
+    needs to know whether the model is coming.
+
+    A job this process has forgotten (a restart) is a 404 — and the run may
+    still be alive on the engine. That is the declared limit of an in-memory
+    registry, and the `task_uuid` on the record is what survives it.
+    """
+    from . import photogrammetry as pg
+
+    from . import access
+
+    job = pg.JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no job {job_id} on this node. A restart forgets jobs; the "
+                   f"run itself may still be on the engine.")
+    _acl, _room, role, _who = await _acting_role(job.room_id, request)
+    if role is None:
+        raise HTTPException(status_code=access.refusal_code(_who),
+                            detail="not your room")
+    return PhotogrammetryJob(**job.as_dict())
+
+
 # ── validate ──────────────────────────────────────────────────────────────────
 
 @v1.post("/validate", tags=["graph"])
