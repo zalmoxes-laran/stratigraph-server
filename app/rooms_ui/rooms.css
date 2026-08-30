@@ -25,3 +25,17 @@
 .link-row { margin-top: .55rem; display: flex; gap: .5rem; align-items: center; }
 .link-row code { flex: 1; font-size: .8em; opacity: .75; overflow: hidden;
                  text-overflow: ellipsis; white-space: nowrap; }
+
+/* A tool is a NAME with up to two doors. Grouped so the eye reads
+   "EMStudio: desktop | browser" rather than six loose buttons in a row — and so
+   a tool with only one door does not look like a tool that is missing one. */
+.tool { display: inline-flex; align-items: center; gap: 0;
+        border: 1px solid rgba(127,127,127,.35); border-radius: 6px;
+        overflow: hidden; }
+.tool-name { padding: .3rem .6rem; font-size: .88em; opacity: .85;
+             border-right: 1px solid rgba(127,127,127,.35); }
+.tool button { border: 0; border-radius: 0; padding: .32rem .7rem;
+               font-size: .82em; background: transparent; color: inherit;
+               cursor: pointer; }
+.tool button + button { border-left: 1px solid rgba(127,127,127,.35); }
+.tool button:hover { background: rgba(127,127,127,.14); }

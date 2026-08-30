@@ -260,3 +260,77 @@ def test_the_two_refusal_codes_are_for_two_PROTOCOLS():
     source = (_REPO / "app" / "main.py").read_text(encoding="utf-8")
     assert "status_code=access.refusal_code(" not in source, \
         "a WebSocket close code is being answered over HTTP again"
+
+
+# ── 5 · the second door: the tool's own web build ────────────────────────────
+
+def test_a_browser_door_appears_only_where_a_web_build_is_CONFIGURED(monkeypatch):
+    """No default and no guess. A button pointing at a web app nobody deployed
+    fails AFTER the click, which is worse than a button that is not there."""
+    monkeypatch.delenv("EM_EMSTUDIO_WEB_URL", raising=False)
+    monkeypatch.delenv("EM_FIELD_ASSISTANT_URL", raising=False)
+    tools = ho.open_targets("saggio-b")["tools"]
+    assert all("browser" not in t for t in tools.values())
+
+    monkeypatch.setenv("EM_EMSTUDIO_WEB_URL", "http://localhost:5177")
+    tools = ho.open_targets("saggio-b")["tools"]
+    assert "browser" in tools["emstudio"]
+    # …and only for the one that was named
+    assert "browser" not in tools["chatbot"]
+    assert "browser" not in tools["blender"]
+
+
+def test_blender_can_never_have_a_browser_door():
+    """Not a missing setting — Blender is not a web app, so there is no env var
+    that could turn one on."""
+    assert "web_env" not in ho.CONSUMERS["blender"]
+    assert ho.web_app("blender") == ""
+
+
+def test_the_browser_link_carries_the_same_two_parameters_and_no_token(monkeypatch):
+    monkeypatch.setenv("EM_EMSTUDIO_WEB_URL", "http://localhost:5177")
+    url = ho.open_targets("saggio-b")["tools"]["emstudio"]["browser"]
+    assert url.startswith("http://localhost:5177/?")
+    query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))
+    assert query == {"server": "https://em.example.org", "room": "saggio-b"}
+    for secret in SECRETS:
+        assert f"{secret}=" not in url.lower()
+
+
+def test_the_browser_link_reads_back_through_the_SAME_grammar(monkeypatch):
+    """The web build parses `?server=&room=` with its own copy of the grammar
+    (`EMStudio/src/handoff.ts::handoffFromLocation`). Measured here against the
+    server's parser, so the two cannot drift apart unnoticed."""
+    monkeypatch.setenv("EM_EMSTUDIO_WEB_URL", "http://localhost:5177")
+    url = ho.open_targets("saggio-b")["tools"]["emstudio"]["browser"]
+    query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))
+    # the same pair the scheme carries, which is what makes the two doors one
+    # handoff rather than two features
+    assert ho.parse(ho.open_targets("saggio-b")["scheme"]) == query
+
+
+def test_a_web_url_with_a_path_keeps_it(monkeypatch):
+    monkeypatch.setenv("EM_EMSTUDIO_WEB_URL", "https://apps.example.org/emstudio/")
+    url = ho.open_targets("r")["tools"]["emstudio"]["browser"]
+    assert url.startswith("https://apps.example.org/emstudio?")
+
+
+def test_the_answer_names_the_address_and_not_the_setting(monkeypatch):
+    """`web_env` is this deployment's business. A browser gets the address."""
+    monkeypatch.setenv("EM_EMSTUDIO_WEB_URL", "http://localhost:5177")
+    raw = client.get("/v1/rooms/handoff-a/open").text
+    assert "EM_EMSTUDIO_WEB_URL" not in raw
+    assert "web_env" not in raw
+
+
+def test_the_room_browser_draws_a_browser_door_only_from_the_ANSWER():
+    """The page must not decide this for itself — whether a web build exists is
+    a fact about the deployment."""
+    page = (_REPO / "app" / "rooms_ui" / "rooms.js").read_text(encoding="utf-8")
+    assert "if (!target.browser) continue" in page
+    assert "window.open(target.browser" in page
+    # …and it never builds one out of its own head
+    assert "?server=" not in page
+
+
+import urllib.parse  # noqa: E402  — used by the browser-door tests above

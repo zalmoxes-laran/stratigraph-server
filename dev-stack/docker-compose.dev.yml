@@ -294,6 +294,18 @@ services:
       # under /em, and the link has to say so or the tool that follows it dials a
       # path that is not there.
       EM_PUBLIC_BASE: "${EM_PUBLIC_BASE:-https://em.localhost:${HTTPS_PORT:-8443}/em}"
+      # --- where the tools' WEB builds live ------------------------------------
+      # Set one and the room browser offers "browser" beside "desktop" for that
+      # tool: a plain tab at `<web>?server=&room=`, no token, the app signs
+      # itself in. Unset and that tool has only the desktop scheme — no button,
+      # rather than a button that 404s.
+      #
+      # Empty by default even here: `npm run dev` in EMStudio is not always
+      # running, and offering a door to a port nobody is listening on is the
+      # failure this is meant to prevent. Fill them in `.env.dev` when the web
+      # builds are up (5177 / 8020 are the usual dev ports).
+      EM_EMSTUDIO_WEB_URL: "${EM_EMSTUDIO_WEB_URL:-}"
+      EM_FIELD_ASSISTANT_URL: "${EM_FIELD_ASSISTANT_URL:-}"
       # --- the photogrammetric engine ----------------------------------------
       # An ENDPOINT, not a host: today the `nodeodm` service beside us, tomorrow
       # a ClusterODM broker in front of a CPU worker and a GPU one — the same

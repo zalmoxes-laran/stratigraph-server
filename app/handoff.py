@@ -62,11 +62,19 @@ ACTION = "open"
 #: hand-rolled WebSocket client that joins a room on this server, and
 #: `sync_manager/room_session.py` has been doing the join for a while. Checked
 #: before it was added, not assumed.
+#: `web_env` names the setting that says WHERE that tool's web build is served.
+#: Set it and the room browser offers "open in browser" beside the desktop
+#: scheme; leave it unset and that tool has only the scheme. NOT a default and
+#: not a guess: a button pointing at a web app nobody deployed is a button that
+#: fails after the click, which is worse than a button that is not there.
+#:
+#: `blender` has no `web_env` and never will — Blender is not a web app.
 CONSUMERS: Dict[str, Dict[str, str]] = {
     "emstudio": {
         "label": "EMStudio",
         "note": "opens the room and joins it live (desktop registers the scheme; "
                 "the web build reads the same parameters off its own URL)",
+        "web_env": "EM_EMSTUDIO_WEB_URL",
     },
     "blender": {
         "label": "EMtools (Blender)",
@@ -77,8 +85,42 @@ CONSUMERS: Dict[str, Dict[str, str]] = {
     "chatbot": {
         "label": "Field assistant",
         "note": "configures the field node to write into this room",
+        "web_env": "EM_FIELD_ASSISTANT_URL",
     },
 }
+
+
+def web_app(tool: str) -> str:
+    """Where that tool's WEB build is served, or "" when nobody said.
+
+    Configuration, like every other address this module writes — see
+    `public_base` for why a request header would be a hole rather than a
+    convenience.
+    """
+    setting = (CONSUMERS.get(tool) or {}).get("web_env")
+    if not setting:
+        return ""
+    return (os.environ.get(setting) or "").strip().rstrip("/")
+
+
+def browser_url(tool: str, server: str, room: str) -> str:
+    """The tool's own web app, opened ON this room.
+
+    `<web>?server=<addr>&room=<id>` — the SAME two parameters as the scheme, and
+    the same absence: no token. The web build signs in by itself (which is only
+    now possible without mixed content, since Keycloak moved behind https), so
+    a link a person copies out of the address bar still carries nothing.
+    """
+    base = web_app(tool)
+    if not base:
+        return ""
+    query = urllib.parse.urlencode({"server": str(server).rstrip("/"),
+                                    "room": str(room)})
+    # a `/` before the query when the base has no path: `host:5177?x=1` is legal
+    # and every browser rewrites it, so the link somebody COPIES should already
+    # be the form they will see back
+    path = urllib.parse.urlsplit(base).path
+    return f"{base}{'' if path else '/'}?{query}"
 
 
 class HandoffError(ValueError):
@@ -161,7 +203,19 @@ def open_targets(room: str, *, server: Optional[str] = None,
         # looking at either.
         "scheme": link,
         "web": web,
-        "tools": {name: {**CONSUMERS[name], "scheme": link, "web": web}
+        # Three ways in, and each one is a fact rather than an offer:
+        #   scheme  — the desktop handler (registered or not: that is the OS's)
+        #   web     — this server's own /open page, which explains itself
+        #   browser — the tool's OWN web build, present only when a setting
+        #             names one. Absent = that tool has no web build here, and
+        #             the UI draws no button for it.
+        # `web_env` is dropped: the NAME of a setting is this deployment's
+        # business, and an answer a browser reads should carry the address, not
+        # the knob that produced it.
+        "tools": {name: {k: v for k, v in
+                         {**CONSUMERS[name], "scheme": link, "web": web,
+                          "browser": browser_url(name, base, room)}.items()
+                         if v and k != "web_env"}
                   for name in wanted},
         "carries_token": False,
         "note": "the link names a place, not a permission: the tool signs in by "

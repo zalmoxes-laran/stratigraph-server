@@ -191,13 +191,28 @@ function card(room) {
   // Written out here rather than looped from the answer because the answer
   // arrives only when a button is pressed, and a row with no buttons until you
   // press one is a row with no buttons.
-  for (const [tool, label] of [["emstudio", "Open in EMStudio"],
-                               ["blender", "Open in EMtools"],
-                               ["chatbot", "Open in field assistant"]]) {
-    const button = document.createElement("button");
-    button.textContent = label;
-    button.addEventListener("click", () => void openIn(room, tool, box, said));
-    actions.appendChild(button);
+  //
+  // Each one is a NAME with up to two doors: **desktop** (the `stratigraph://`
+  // handler, which the OS may or may not have) and **browser** (that tool's own
+  // web build, which exists only where a setting names one). The browser door
+  // is drawn LAZILY — after the first handoff answer, because only the server
+  // knows whether a web url is configured, and guessing would draw a button
+  // that fails after the click.
+  for (const [tool, label] of [["emstudio", "EMStudio"],
+                               ["blender", "EMtools"],
+                               ["chatbot", "Field assistant"]]) {
+    const group = document.createElement("span");
+    group.className = "tool";
+    group.dataset.tool = tool;
+    const name = document.createElement("span");
+    name.className = "tool-name";
+    name.textContent = label;
+    const desktop = document.createElement("button");
+    desktop.textContent = "desktop";
+    desktop.title = `Open ${label} on this machine (stratigraph:// handler)`;
+    desktop.addEventListener("click", () => void openIn(room, tool, box, said));
+    group.append(name, desktop);
+    actions.appendChild(group);
   }
   const copy = document.createElement("button");
   copy.className = "ghost";
@@ -205,7 +220,42 @@ function card(room) {
   copy.addEventListener("click", () => void copyLink(room, said));
   actions.append(copy, said);
   box.appendChild(actions);
+  // Ask once, up front, so the browser doors are there before anybody presses
+  // anything. A failure is silent HERE on purpose: it costs only the extra
+  // door, the desktop one already works, and a red line on every card because
+  // one node has no EM_PUBLIC_BASE would be noise about a room that is fine.
+  void addBrowserDoors(room, box);
   return box;
+}
+
+/** Draw "browser" beside "desktop" for every tool that has a web build.
+ *
+ *  What decides is the SERVER's answer (`tools[t].browser`), never this page:
+ *  whether a web app is deployed is a fact about the deployment, and a client
+ *  that assumed one would offer a button that 404s.
+ */
+async function addBrowserDoors(room, box) {
+  let targets;
+  try {
+    targets = await handoff(room);
+  } catch {
+    return;                       // only the extra door is lost; see above
+  }
+  for (const [tool, target] of Object.entries(targets.tools || {})) {
+    if (!target.browser) continue;          // no web build: no button, no lie
+    const group = box.querySelector(`.tool[data-tool="${tool}"]`);
+    if (!group || group.querySelector(".browser")) continue;
+    const button = document.createElement("button");
+    button.className = "browser";
+    button.textContent = "browser";
+    button.title = `Open ${target.label} in a new tab (${target.browser})`;
+    button.addEventListener("click", () => {
+      // A plain navigation with the same two parameters the scheme carries and
+      // the same absence of a token: the web build signs itself in.
+      window.open(target.browser, "_blank", "noopener");
+    });
+    group.appendChild(button);
+  }
 }
 
 // ── the handoff ─────────────────────────────────────────────────────────────
