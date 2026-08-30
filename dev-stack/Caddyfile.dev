@@ -103,7 +103,27 @@
 		reverse_proxy keycloak:8080
 	}
 
+	# TWO blocks, and the split is a bug fix rather than tidying.
+	#
+	# There used to be one `handle` answering **200** with this banner to
+	# ANYTHING unrouted. Measured on 2026-08-30: a client that posted to the
+	# wrong base got `200 OK · text/plain` instead of a 404, died on
+	# `res.json()`, and its catch reported «node unreachable» — while the node
+	# was up. A field note dictated in a trench would have sat in an offline
+	# queue for ever, with a message blaming the network. That is not the
+	# chatbot's bug: it is every client we will ever connect.
+	#
+	# `handle /` matches the root PATH EXACTLY — a matcher without a trailing
+	# `*` is not a prefix (measured below, not assumed: `/anything` falls
+	# through to the 404). So the banner keeps helping a person who lands here,
+	# and a program that missed the route is told it missed.
+	handle / {
+		respond "em dev stack — try /em/v1/health, /catalog/health, /chat/, /iiif/3/<sha256>/info.json" 200
+	}
+
 	handle {
-		respond "em dev stack — try /em/v1/health, /catalog/health, /iiif/3/<sha256>/info.json" 200
+		# Plain text on purpose: a JSON body here would be a guess about who is
+		# asking, and the point is that this route belongs to nobody.
+		respond "no such route on this node — see / for the ones there are" 404
 	}
 }

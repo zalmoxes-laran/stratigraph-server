@@ -4,6 +4,7 @@
 #
 #   ./fcn-up.sh                 # locale: https://em.localhost:8443 (+ serve anche il nome Bonjour .local)
 #   ./fcn-up.sh mac.local       # host PRIMARIO = un hostname risolvibile (per l'altro computer)
+#   ./fcn-up.sh --demo          # …e POPOLA: studi, stanze, immagini IIIF. Idempotente.
 #   ./fcn-up.sh --local-s3d     # s3Dgraphy dal CHECKOUT LOCALE (editi e testi live)
 #   ./fcn-up.sh mac.local --local-s3d
 #
@@ -24,11 +25,12 @@ HTTPS_PORT="${HTTPS_PORT:-8443}"
 DEV_REALM="${DEV_REALM:-em-dev}"
 
 # ── argomenti: hostname PRIMARIO opzionale + --local-s3d ─────────────────────
-LOCAL_S3D="no"; ARG_HOST=""
+LOCAL_S3D="no"; DEMO="no"; ARG_HOST=""
 for a in "$@"; do
   case "$a" in
     --local-s3d) LOCAL_S3D="yes" ;;
-    -*) echo "flag sconosciuto: $a (usa --local-s3d)"; exit 2 ;;
+    --demo)      DEMO="yes" ;;
+    -*) echo "flag sconosciuto: $a (usa --local-s3d | --demo)"; exit 2 ;;
     *) ARG_HOST="$a" ;;
   esac
 done
@@ -70,16 +72,71 @@ if [ "$LOCAL_S3D" = "yes" ]; then
 fi
 "${COMPOSE[@]}" --profile https up -d --build
 
+# ── 4-bis · --demo: aspetta, poi popola ──────────────────────────────────────
+#
+# Il pulsantone è un FLAG, non uno script nuovo: `up` accendeva già tutto e
+# stampava gli indirizzi, ma restavano tre `python dev-stack/seed_*.py` da
+# ricordare. Qui vengono eseguiti quelli che ci sono già.
+#
+# I seed sono idempotenti per costruzione (riusano per id/nome invece di
+# creare), quindi due `--demo` di fila lasciano lo stesso stato. Non è una
+# proprietà da rompere: se un seed comincia a duplicare, si aggiusta lui.
+if [ "$DEMO" = "yes" ]; then
+  HEALTH="https://${PRIMARY}:${HTTPS_PORT}/em/v1/health"
+  echo
+  echo "▶ --demo: aspetto che il nodo risponda (${HEALTH})…"
+  # 90s: la PRIMA accensione costruisce le immagini e Keycloak importa il realm.
+  # Se scade lo DICE e si ferma qui — proseguire al buio significherebbe tre
+  # seed che falliscono uno dopo l'altro con tre errori diversi, nessuno dei
+  # quali è la causa.
+  ready="no"
+  for _ in $(seq 1 45); do
+    if curl -sk -o /dev/null --max-time 2 "$HEALTH"; then ready="yes"; break; fi
+    sleep 2
+  done
+  if [ "$ready" != "yes" ]; then
+    echo "✗ il nodo non ha risposto entro 90s. NON popolo: guarda i log con"
+    echo "  docker-compose -f docker-compose.dev.yml logs --tail=40 stratigraph-server"
+    exit 1
+  fi
+  echo "✔ nodo su. Popolo…"
+  # L'ORDINE conta: le immagini prima, perché seed-demo cita gli asset che
+  # smoke_iiif mette nel bucket.
+  for step in smoke_iiif.py seed_rooms.py seed-demo.py; do
+    echo
+    echo "── $step ──────────────────────────────────────────────"
+    if ! python3 "$step"; then
+      echo "✗ $step è fallito. Gli altri passi NON sono stati eseguiti."
+      exit 1
+    fi
+  done
+fi
+
 # ── 5 · indirizzi + promemoria ───────────────────────────────────────────────
 cat <<EOF
 
 ✔ FCN acceso${LOCAL_S3D:+ (s3Dgraphy locale)}. Caddy serve: ${EM_SITE}
   Su questo computer:   https://${PRIMARY}:${HTTPS_PORT}/em/v1/health
+  Le mie stanze:        https://${PRIMARY}:${HTTPS_PORT}/em/rooms/
+  Console del nodo:     https://${PRIMARY}:${HTTPS_PORT}/em/admin/
+  Catalogo:             https://${PRIMARY}:${HTTPS_PORT}/catalog/ui/
+  Assistente di campo:  https://${PRIMARY}:${HTTPS_PORT}/chat/
 $( [ -n "$BONJOUR" ] && [ "$BONJOUR" != "$PRIMARY" ] && echo "  Per l'ALTRO computer: https://${BONJOUR}:${HTTPS_PORT}/em/v1/health   (via Bonjour/mDNS)" )
 
 Note:
-  · la ROOT (/) è vuota: apri un percorso vero — /em/v1/health , /catalog/ , /iiif/…
+  · la ROOT (/) è un cartello: elenca le rotte vere. Tutto il resto dà 404 (e non
+    più 200 con un banner, che faceva sembrare "irraggiungibile" un nodo acceso).
   · certificato: se il browser lo rifiuta → ./fcn-trust-ca.sh (una volta; e dopo ogni --wipe).
+$( # RILEVATO, mai eseguito: fcn-trust-ca.sh chiede una password di sistema, e uno
+   # script che si blocca su un prompt dentro un giro non presidiato è una trappola.
+   # La sonda è diretta — curl SENZA -k riesce solo se il sistema si fida della CA.
+   # Se l'host non risponde affatto stampa comunque l'avviso: un promemoria in più
+   # costa una riga, un blocco silenzioso costa un pomeriggio.
+   if ! curl -s -o /dev/null --max-time 4 "https://${PRIMARY}:${HTTPS_PORT}/em/v1/health"; then
+     echo "  · ⚠ LA CA NON È FIDATA su questo Mac: il browser rifiuterà la pagina e"
+     echo "      un service worker non si registrerà. Rimedio, UNA volta:  ./fcn-trust-ca.sh"
+     echo "      (chiede la password di sistema, per questo non lo faccio io.)"
+   fi )
   · dati: studi/stanze/asset/corpus PERSISTONO fra i riavvii (volumi named). ./fcn-down.sh li
     tiene; solo ./fcn-down.sh --wipe li cancella.
   · altro computer: serve un HOSTNAME (mai IP nudo, rompe il TLS della CA interna) e che le

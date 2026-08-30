@@ -11,6 +11,7 @@ brew install colima docker docker-compose      # once
 cd stratigraph-server/dev-stack
 cp .env.dev.example .env.dev                    # once
 ./fcn-up.sh                                      # ← the whole stack, in one go
+./fcn-up.sh --demo                               # …and POPULATE it: images, rooms, studies (idempotent)
 ```
 
 `fcn-up.sh` starts **Colima** by itself, then brings up, behind Caddy on

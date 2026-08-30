@@ -53,6 +53,100 @@ in a query string defensible for a viewer that cannot set a header.
 
 ---
 
+## Two shapes, and the certificate tells them apart
+
+Everything above describes one host with a public name. There are two deployments
+in front of us and only one of them looks like that. The difference is not the
+services — those are the same — it is how the origin gets a certificate, and that
+decides what has to be true about the network.
+
+### The institutional node — a public name
+
+The templates already assume this shape: `Caddyfile.j2` opens with
+`{{ server_name }} {` and carries **no `tls` directive**, so Caddy obtains and
+renews the certificate by itself over ports 80 and 443. Nothing is handed to it.
+
+"We already have certificates" is usually the wrong shape of answer, because a
+host is one of three things and only the first works as the templates stand:
+
+1. **Caddy is the front door.** Public A record, 80 and 443 reachable from the
+   internet. ACME does the rest, including renewal. This is today's default.
+2. **The institution terminates TLS** on its own reverse proxy and forwards to
+   us. Then Caddy must **not** attempt ACME — it would fail and keep retrying —
+   the site block has to be plain `http://`, and the proxy has to forward the
+   headers the services read. A small change to the template, but not an
+   automatic one.
+3. **Certificates handed over as files.** `tls /path/fullchain.pem /path/key.pem`
+   — and somebody owns the renewal, which is the half that is forgotten and then
+   expires on a Sunday.
+
+Two institutional nodes are **two deployments**, not one with two names: the
+realm, the bucket, the studies and the audience are per-instance, and a handoff
+link names the host it was asked from — so a study opened from one node points at
+that node. That is correct behaviour, and not something to paper over with a
+shared name.
+
+### The Field Computing Node — a local network, no public reachability
+
+The prerequisite above says that without a real name everything still works "but
+only over an internal CA nobody trusts". On an FCN that sentence understates the
+cost, because of what a browser withholds from a page it does not consider a
+secure context: **camera, microphone and geolocation**. The field assistant is
+exactly those three. So on a node in a trench, TLS that browsers trust is not
+polish — it is the feature.
+
+Three ways, in the order worth trying:
+
+1. **A real subdomain resolved to a private address, with a DNS-01 certificate.**
+   `fcn.<domain>` → `192.168.x.x`, and Caddy proves the name by writing a TXT
+   record instead of by being reachable. The result is a publicly trusted
+   certificate on a network with no inbound path, and **nothing to install on any
+   phone**. The cost is real and worth stating: the stock `caddy:2-alpine` image
+   has no DNS providers compiled in, so this needs a Caddy built with the
+   provider plugin and an API credential for the zone. This is the one to aim
+   for.
+
+   **Two things that are easy to get wrong here, because they concern different
+   moments.** *Issuing* the certificate needs the node to reach the internet
+   outbound — to Let's Encrypt and to the DNS provider's API — for a few seconds;
+   it needs no inbound path, no public address and no open port. *Using* it needs
+   nothing at all: a certificate is a signed file with a date on it, and a browser
+   checks the signature and the clock, never the internet. So the node is issued
+   or renewed wherever it has connectivity — at base, on a phone hotspot, the
+   evening before leaving — and then works for the rest of its ~90 days on a
+   network with no uplink whatsoever. Plan the renewal before a campaign, not
+   during one.
+
+   The second is **name resolution in the field**, and it bites at use time
+   rather than at issue time. The `A` record is public and points at a private
+   address, which is legitimate and common; but a phone on a trench network with
+   no uplink cannot ask a public resolver anything. So the field router (or the
+   node itself) has to answer for that name locally — a DNS override on the
+   access point mapping `fcn.<domain>` to the node's LAN address. Without it the
+   certificate is perfect and nobody can reach the name it certifies. Note also
+   that some resolvers refuse to return private addresses for public names
+   ("DNS rebinding protection"); the local override sidesteps that too.
+2. **The internal CA, trusted per device** (`tls internal` — what the dev stack
+   does). Free, and it works, but every phone that will record anything has to
+   install *and* trust that CA. On iOS those are two separate steps in two
+   different settings screens, once per device — to be done before leaving for
+   the site, not in a trench with no signal.
+3. **Plain HTTP.** Not an option here. It is the configuration in which the
+   assistant quietly loses the three permissions it exists for, and says nothing
+   about it.
+
+There is no fourth way. A certificate that browsers trust is one signed by a CA
+they already carry, and no public CA signs anything without some contact with the
+internet at some point. Either the node touches the network occasionally (1), or
+the trust is installed by hand on each device (2).
+
+The field assistant is **not in the playbook yet**: `heriverse-ansible` carries
+the other nine services and not this one. When it lands its route is `/chat/*`,
+under the same rule as everything else on this page — one origin, one
+certificate.
+
+---
+
 ## The command
 
 ```bash
