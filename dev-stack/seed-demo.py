@@ -254,7 +254,7 @@ def main() -> int:
     load_env_file(HERE / ".env.dev")
     load_env_file(HERE / ".env.dev.example")
 
-    keycloak = f"http://localhost:{env('KEYCLOAK_PORT', '8085')}"
+    keycloak = f"http://localhost:{env('KEYCLOAK_PORT', '8085')}/auth"
     server = f"http://localhost:{env('EM_SERVER_PORT', '8000')}"
     catalog = f"http://localhost:{env('EM_CATALOG_PORT', '8010')}"
     realm = env("DEV_REALM", "em-dev")

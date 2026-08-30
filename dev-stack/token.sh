@@ -83,7 +83,12 @@ if [[ -n "$WANTED_USER" ]]; then
     PASSWORD="${DEV_PASSWORD:-$WANTED_USER}"
 fi
 
-ENDPOINT="http://localhost:${KEYCLOAK_PORT}/realms/${REALM}/protocol/openid-connect/token"
+# `/auth` — Keycloak now serves under a relative path so it can sit behind the
+# proxy on the same origin as everything else (KC_HTTP_RELATIVE_PATH). The DIRECT
+# port still works and is what this script uses: no certificate to trust, and the
+# token it mints carries the same public `iss` as one obtained through https,
+# because Keycloak has one frontend URL now and not one per door.
+ENDPOINT="http://localhost:${KEYCLOAK_PORT}/auth/realms/${REALM}/protocol/openid-connect/token"
 
 # `--data-urlencode`, not a hand-built body: a password with an `&` in it would
 # otherwise become two form fields and the failure would look like a wrong realm.

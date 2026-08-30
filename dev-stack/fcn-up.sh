@@ -55,6 +55,12 @@ export EM_IIIF_PUBLIC="https://${PRIMARY}:${HTTPS_PORT}/iiif"
 export EM_CATALOG_EMSTUDIO_URL="https://${PRIMARY}:${HTTPS_PORT}"
 # ⚠ VERIFICA: l'issuer OIDC dipende da come Caddy espone Keycloak nel Caddyfile.dev
 export OIDC_ISSUER="https://${PRIMARY}:${HTTPS_PORT}/auth/realms/${DEV_REALM}"
+# …and the origin Keycloak stamps into every token, so `iss` is ONE string
+# whichever door it came through (the proxy, or the direct port).
+export OIDC_PUBLIC_ORIGIN="https://${PRIMARY}:${HTTPS_PORT}"
+# What a HANDOFF link names (`stratigraph://open?server=…`): the same host the
+# browser is on, not a hardcoded em.localhost.
+export EM_PUBLIC_BASE="https://${PRIMARY}:${HTTPS_PORT}/em"
 
 # ── 4 · su (con l'override s3Dgraphy-locale se richiesto) ─────────────────────
 COMPOSE=(docker-compose --env-file .env.dev -f docker-compose.dev.yml)

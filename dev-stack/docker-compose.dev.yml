@@ -181,13 +181,39 @@ services:
     environment:
       KEYCLOAK_ADMIN: "${KEYCLOAK_ADMIN}"
       KEYCLOAK_ADMIN_PASSWORD: "${KEYCLOAK_ADMIN_PASSWORD}"
+      # ── ONE frontend URL, and that is the whole fix ─────────────────────────
+      # MEASURED BUG (2026-08-29, in the field test): the room browser is served
+      # over https and `/v1/auth-config` handed it an issuer of
+      # `http://localhost:8085`. The PKCE code→token exchange is then a fetch
+      # from an https page to an http endpoint — MIXED CONTENT. Safari blocks it
+      # outright; Chrome sometimes lets `localhost` through as a secure context,
+      # which is worse, because it works on one machine and not the next.
+      #
+      # The cure is not to patch the one URL the browser sees: it is to give
+      # Keycloak a single PUBLIC identity, so the `iss` it stamps is the same
+      # string no matter which door a token came through (the proxy on 8443 or
+      # the direct port on 8085). `app/auth.py` verifies `iss` strictly against
+      # `OIDC_ISSUER`, so two spellings mean 401 for one of them.
+      KC_HOSTNAME_URL: "${OIDC_PUBLIC_ORIGIN:-https://em.localhost:${HTTPS_PORT:-8443}}/auth"
+      # …and the relative path that makes Caddy's `handle /auth/*` land. `handle`
+      # and NOT `handle_path`: the prefix is kept, so Keycloak must expect it.
+      # The pair has to agree — with `handle_path` and no relative path it also
+      # works, and mixing the two is a 404 that looks like a routing bug.
+      KC_HTTP_RELATIVE_PATH: "/auth"
+      # Honour Caddy's X-Forwarded-Proto. Without it Keycloak builds its own
+      # redirects as http and the round trip breaks in the middle.
+      KC_PROXY: "edge"
+      # The direct port stays usable (token.sh, the smokes, a developer poking at
+      # the admin console) even though the public identity is the https one.
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_BACKCHANNEL: "false"
     ports:
       - "${KEYCLOAK_PORT:-8085}:8080"
     volumes:
       - ./keycloak/realm-em-dev.json:/opt/keycloak/data/import/realm-em-dev.json:ro
     healthcheck:
       # Keycloak 24 has no curl in the image; this is the shell's own /dev/tcp
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 && echo -e 'GET /realms/em-dev HTTP/1.1\\nHost: localhost\\nConnection: close\\n\\n' >&3 && cat <&3 | head -1 | grep -q '200'"]
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 && echo -e 'GET /auth/realms/em-dev HTTP/1.1\\nHost: localhost\\nConnection: close\\n\\n' >&3 && cat <&3 | head -1 | grep -q '200'"]
       interval: 5s
       timeout: 5s
       retries: 40
@@ -213,8 +239,16 @@ services:
       # carries `http://localhost:<port>` — so the issuer is the HOST spelling
       # and the JWKS is fetched over the internal one. Getting this pair wrong
       # is the classic "token refused, and both sides look right".
-      OIDC_ISSUER: "http://localhost:${KEYCLOAK_PORT:-8085}/realms/${DEV_REALM}"
-      OIDC_JWKS_URI: "http://keycloak:8080/realms/${DEV_REALM}/protocol/openid-connect/certs"
+      # The PUBLIC issuer — what `iss` says and what a browser is told to go to.
+      # `fcn-up.sh` has exported this all along; the compose used to override it
+      # with an http URL, which is how the mixed-content bug survived a launcher
+      # that was already right.
+      OIDC_ISSUER: "${OIDC_ISSUER:-https://em.localhost:${HTTPS_PORT:-8443}/auth/realms/${DEV_REALM}}"
+      # …and the INTERNAL address the keys are fetched from. Different on purpose,
+      # and the same split as the IIIF pair below: `iss` is a NAME the token
+      # carries, the JWKS URI is a machine we dial. Routing the key fetch through
+      # Caddy would make the server's ability to validate depend on its own proxy.
+      OIDC_JWKS_URI: "http://keycloak:8080/auth/realms/${DEV_REALM}/protocol/openid-connect/certs"
       OIDC_AUDIENCE: "${DEV_CLIENT_ID}"
       # --- the object store: the PRODUCTION implementation -------------------
       MINIO_ENDPOINT: "http://minio:9000"
@@ -394,8 +428,16 @@ services:
         condition: service_completed_successfully
     environment:
       # --- identity: the SAME realm as em-server, and the same two variables --
-      OIDC_ISSUER: "http://localhost:${KEYCLOAK_PORT:-8085}/realms/${DEV_REALM}"
-      OIDC_JWKS_URI: "http://keycloak:8080/realms/${DEV_REALM}/protocol/openid-connect/certs"
+      # The PUBLIC issuer — what `iss` says and what a browser is told to go to.
+      # `fcn-up.sh` has exported this all along; the compose used to override it
+      # with an http URL, which is how the mixed-content bug survived a launcher
+      # that was already right.
+      OIDC_ISSUER: "${OIDC_ISSUER:-https://em.localhost:${HTTPS_PORT:-8443}/auth/realms/${DEV_REALM}}"
+      # …and the INTERNAL address the keys are fetched from. Different on purpose,
+      # and the same split as the IIIF pair below: `iss` is a NAME the token
+      # carries, the JWKS URI is a machine we dial. Routing the key fetch through
+      # Caddy would make the server's ability to validate depend on its own proxy.
+      OIDC_JWKS_URI: "http://keycloak:8080/auth/realms/${DEV_REALM}/protocol/openid-connect/certs"
       OIDC_AUDIENCE: "${DEV_CLIENT_ID}"
       # --- the studies: the SAME bucket as the assets, under `studies/` -------
       MINIO_ENDPOINT: "http://minio:9000"

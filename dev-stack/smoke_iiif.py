@@ -176,7 +176,7 @@ def main() -> int:
     load_env_file(HERE / ".env.dev")
     load_env_file(HERE / ".env.dev.example")
     server = f"http://localhost:{os.environ.get('EM_SERVER_PORT', '8000')}"
-    keycloak = f"http://localhost:{os.environ.get('KEYCLOAK_PORT', '8085')}"
+    keycloak = f"http://localhost:{os.environ.get('KEYCLOAK_PORT', '8085')}/auth"
     iiif = f"http://localhost:{os.environ.get('CANTALOUPE_PORT', '8182')}/iiif/3"
     realm = os.environ.get("DEV_REALM", "em-dev")
 
