@@ -116,10 +116,15 @@ def test_the_address_comes_from_CONFIG_and_never_from_the_caller(monkeypatch):
     assert ho.public_base() == "https://node.example.org"
 
 
-def test_blender_is_not_offered_because_it_cannot_take_a_room_yet():
-    assert "blender" not in ho.CONSUMERS
-    with pytest.raises(ho.HandoffError):
-        ho.open_targets("r", tools=["blender"])
+def test_a_tool_is_offered_only_when_it_has_a_READER_for_the_link():
+    """The list is measured, not aspired to. EMtools was written off as "not a
+    room client" and that was wrong — it has had one for a while
+    (`sync_bridge/ws_client.py`), so it is here; something with no reader is not.
+    """
+    assert set(ho.CONSUMERS) == {"emstudio", "blender", "chatbot"}
+    with pytest.raises(ho.HandoffError) as exc:
+        ho.open_targets("r", tools=["heriverse"])
+    assert "nothing here can open a room in that" in str(exc.value)
 
 
 # ── 2 · through HTTP ─────────────────────────────────────────────────────────
@@ -138,7 +143,7 @@ def test_the_endpoint_answers_a_well_formed_handoff():
     assert body["room"] == "handoff-a"
     assert body["scheme"].startswith("stratigraph://open?")
     assert body["web"].startswith("https://em.example.org/open?")
-    assert set(body["tools"]) == {"emstudio", "chatbot"}
+    assert set(body["tools"]) == {"emstudio", "blender", "chatbot"}
     assert body["carries_token"] is False
 
 

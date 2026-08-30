@@ -187,7 +187,12 @@ function card(room) {
   const said = document.createElement("span");
   said.className = "note";
 
+  // The three consumers, from the server's own list — see `handoff.CONSUMERS`.
+  // Written out here rather than looped from the answer because the answer
+  // arrives only when a button is pressed, and a row with no buttons until you
+  // press one is a row with no buttons.
   for (const [tool, label] of [["emstudio", "Open in EMStudio"],
+                               ["blender", "Open in EMtools"],
                                ["chatbot", "Open in field assistant"]]) {
     const button = document.createElement("button");
     button.textContent = label;

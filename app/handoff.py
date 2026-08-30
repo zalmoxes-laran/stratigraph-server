@@ -54,17 +54,25 @@ SCHEME = "stratigraph"
 ACTION = "open"
 
 #: Tools that can consume a room handoff TODAY, measured rather than aspired to:
-#: each one has a reader for this link in its own repo.
+#: each one has a reader for this link in its own repo, and a test that holds it
+#: to the same strings this module's own suite uses.
 #:
-#: `blender` is deliberately ABSENT. EMtools speaks to MinIO and imports files; it
-#: is not a client of a room's wire yet, so a button that offered to open a room
-#: in it would be a button that cannot work. It arrives here the day its
-#: room-client does, and not before.
+#: Three, and `blender` was nearly two: EMtools was written off here as "not a
+#: room client" and that was simply wrong — `sync_bridge/ws_client.py` is a
+#: hand-rolled WebSocket client that joins a room on this server, and
+#: `sync_manager/room_session.py` has been doing the join for a while. Checked
+#: before it was added, not assumed.
 CONSUMERS: Dict[str, Dict[str, str]] = {
     "emstudio": {
         "label": "EMStudio",
         "note": "opens the room and joins it live (desktop registers the scheme; "
                 "the web build reads the same parameters off its own URL)",
+    },
+    "blender": {
+        "label": "EMtools (Blender)",
+        "note": "joins the room from the link and adopts its document — no "
+                "handler is registered for the scheme, so the link is pasted "
+                "into 'Open room from link…'",
     },
     "chatbot": {
         "label": "Field assistant",
@@ -142,7 +150,7 @@ def open_targets(room: str, *, server: Optional[str] = None,
     if not wanted:
         raise HandoffError(
             f"nothing here can open a room in that: today it is "
-            f"{', '.join(CONSUMERS)}. EMtools is not a room client yet.")
+            f"{', '.join(CONSUMERS)}.")
     link = scheme_url(base, room)
     web = web_url(base, room)
     return {
