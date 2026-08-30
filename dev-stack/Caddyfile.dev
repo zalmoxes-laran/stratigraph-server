@@ -28,6 +28,33 @@
 		reverse_proxy stratigraph-server:8000
 	}
 
+	# StratiGraph · the FIELD ASSISTANT — and the reason it is here at all is a
+	# browser rule, not a preference: camera, microphone and GPS are offered
+	# only to a secure context. On a laptop `http://localhost:8020` counted as
+	# one; on a PHONE it does not, so the assistant ran without the three things
+	# it exists for. Behind this door it is https on the shared origin, and they
+	# come back.
+	#
+	# `handle_path` — which STRIPS — and that is the opposite of the two routes
+	# below it. The distinction the rest of this file keeps warning about, so
+	# here is which side this one is on and why:
+	#
+	#   · the Catalog serves `/catalog/...` at its own root, and IIIF carries its
+	#     API version in the path. For them the prefix IS part of the endpoint,
+	#     so stripping it would take the route with it → `handle`.
+	#   · the assistant serves `/`, `/v1/...`, `/sw.js` and `/brand/...` at its
+	#     root, exactly like the room server. It knows nothing about `/chat`, so
+	#     the prefix has to come off → `handle_path`.
+	#
+	# The PAGE is what makes this safe: it derives its API base and its service
+	# worker from its own document URL (`web/index.html`, `web/sw.js`), so the
+	# same file works served here at `/chat/` and at `:8020/` for the `--reload`
+	# loop. A worker registered at the origin's root would claim scope `/` and
+	# intercept the fetches of every service above.
+	handle_path /chat/* {
+		reverse_proxy stratigraph-chatbot:8000
+	}
+
 	# StratiGraph · the CATALOG (studies as published, beside the rooms above).
 	# `handle` and NOT `handle_path`: StratiGraph Catalog serves `/catalog/...` at its
 	# root, so the prefix is part of the endpoint and stripping it would take

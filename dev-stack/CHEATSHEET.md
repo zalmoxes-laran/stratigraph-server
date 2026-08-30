@@ -24,6 +24,7 @@ cp .env.dev.example .env.dev                    # once
 | **StratiGraph Server** | via Caddy `/em/v1` | the room API |
 | **StratiGraph Catalog** | `:8010` | the register (published studies) |
 | **NodeODM** | `:3010` (its own dashboard) | **not started by `fcn-up.sh`** — opt-in, see §1-bis |
+| **Field assistant** | via Caddy `/chat` | the PWA — https on the shared origin, which is what gives a **phone** its camera, microphone and GPS |
 
 Health: `https://em.localhost:8443/em/v1/health`. First run takes a few minutes
 (image build); after that a full `up` is **~15 s**.
@@ -66,6 +67,49 @@ python dev-stack/smoke_photogrammetry.py --images ~/photos/US12 --wait 1800
 > the connector publishes the produced bytes to MinIO *before* writing anything to
 > the graph — but raise `NODEODM_CLEANUP_AFTER` on a node where somebody
 > re-downloads runs from NodeODM's own dashboard.
+
+## 1-ter · Point the field assistant at a room
+
+By default the assistant writes to **its own container** on a volume, not to a
+room. That is the honest default rather than a shortcut: it refuses to start with
+a room configured and no token (`writer.py`: *the assistant writes as a verified
+person or it does not write*), a compose file cannot call `token.sh`, and a JWT
+pasted into `.env.dev` would be a credential dressed up as configuration — living
+there long after the reason it was issued.
+
+When you want the writes to land in a room, put a **fresh** token in the
+environment for that run:
+
+```bash
+cd stratigraph-server/dev-stack
+EM_CHATBOT_SERVER_URL=http://stratigraph-server:8000 \
+EM_CHATBOT_ROOM=cantiere-demo \
+EM_CHATBOT_TOKEN="$(./token.sh)" \
+  docker compose --env-file .env.dev -f docker-compose.dev.yml \
+    up -d --force-recreate stratigraph-chatbot
+```
+
+The URL is the **internal** one (`stratigraph-server:8000`): the assistant dials
+it from inside the compose network, and routing it back out through Caddy would
+make it depend on the proxy to reach a service beside it. `/chat/health` reports
+which of the two it is on.
+
+Dev tokens are short-lived. When it stops writing, the token expired — re-run the
+command. Persisting a session is a decision of its own and is not made here.
+
+## 1-quater · The dev loop is not lost
+
+The assistant still runs alone, which is the loop worth keeping:
+
+```bash
+cd stratigraph-chatbot && .venv/bin/python -m uvicorn app.main:app --port 8020 --reload
+```
+
+The page derives its API base and its service-worker scope from **its own
+document URL**, so the same file works at `http://localhost:8020/` and at
+`https://em.localhost:8443/chat/` with nothing configured. On a phone, though,
+only the second one has a camera: `localhost` is a secure context, `http://<lan
+ip>:8020` is not.
 
 ## 2 · Colima is the intended runtime
 

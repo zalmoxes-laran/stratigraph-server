@@ -331,6 +331,64 @@ services:
     restart: unless-stopped
 
   # =======================================================================
+  # THE FIELD ASSISTANT — behind the same https door as everything else
+  #
+  # WHY IT IS IN THE STACK AT ALL, and it is not tidiness: it used to run by hand
+  # on `:8020`, in the clear. On a laptop that is fine — `localhost` is a secure
+  # context — but on a PHONE it is not, and a browser withholds the camera, the
+  # microphone and the GPS from an insecure origin. Which is everything a field
+  # assistant exists for. Behind Caddy, on the shared https origin, they come
+  # back. It is also half of the deployment (#37): the shape taken here is the
+  # shape that goes on the real node.
+  #
+  # NO ROOM BY DEFAULT, and that is the honest case rather than a shortcut. The
+  # assistant refuses to start with a room configured and no token (`writer.py`:
+  # "the assistant writes as a verified person or it does not write"), and a
+  # compose file cannot call `token.sh`. Pasting a JWT into `.env.dev` would
+  # dress a credential up as configuration and leave it there. So the stack's
+  # default is the local container the README already describes; pointing it at
+  # a room with a fresh token is two lines in CHEATSHEET.md.
+  # =======================================================================
+  stratigraph-chatbot:
+    build:
+      context: ../../stratigraph-chatbot
+      dockerfile: Dockerfile
+    image: stratigraph-chatbot:dev
+    container_name: em-dev-chatbot
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      # --- the object store: the SAME variables the server reads --------------
+      # Reused rather than paralleled: two spellings of one bucket is how one of
+      # them ends up pointing somewhere else.
+      MINIO_ENDPOINT: "http://minio:9000"
+      MINIO_ACCESS_KEY: "${MINIO_ROOT_USER}"
+      MINIO_SECRET_KEY: "${MINIO_ROOT_PASSWORD}"
+      MINIO_BUCKET: "${MINIO_BUCKET}"
+      MINIO_SECURE: "false"
+      # --- where what is said ends up ----------------------------------------
+      # A container on a volume, not a room: see the note above. The path is
+      # under the data volume so a node that loses power keeps what was recorded.
+      EM_CHATBOT_CONTAINER: "/srv/chatbot-data/scavo.em.json"
+      EM_CHATBOT_STUDY: "${EM_CHATBOT_STUDY:-Scavo}"
+      # …and the room, EMPTY unless you fill both of these in `.env.dev`. With a
+      # room and no token the service refuses to start, which is correct and is
+      # why neither has a default here.
+      EM_SERVER_URL: "${EM_CHATBOT_SERVER_URL:-}"
+      EM_CHATBOT_ROOM: "${EM_CHATBOT_ROOM:-}"
+      EM_CHATBOT_TOKEN: "${EM_CHATBOT_TOKEN:-}"
+    volumes:
+      # A field node is switched off by pulling the plug. What was recorded has
+      # to survive that.
+      - chatbot_data:/srv/chatbot-data
+      # …and the CODE you are editing, like the other two services: without it a
+      # change to the page is invisible until the image is rebuilt.
+      - ../../stratigraph-chatbot/app:/srv/stratigraph-chatbot/app:ro
+      - ../../stratigraph-chatbot/web:/srv/stratigraph-chatbot/web:ro
+    restart: unless-stopped
+
+  # =======================================================================
   # THE ENGINE — NodeODM, the photogrammetric reconstruction
   #
   # A PULLED DEPENDENCY, not our code (design §7-bis): the processing connector
@@ -526,3 +584,4 @@ volumes:
   em_data:
   cantaloupe_cache:   # derivatives: a cache, recomputable — not study data
   nodeodm_data:       # the engine's tasks and the archives it still serves
+  chatbot_data:       # what the field assistant recorded — study data
