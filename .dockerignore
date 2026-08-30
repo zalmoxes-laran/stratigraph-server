@@ -1,0 +1,43 @@
+# What the image is NOT built from.
+#
+# Measured, not guessed: `docker build` streams the WHOLE directory to the daemon
+# before it reads the first instruction, so anything left in here is paid on
+# every build — and it was being paid. The context was 353.6MB, almost all of it
+# `.venv`, which the image never touches: the Dockerfile installs from
+# `pyproject.toml` into its own environment, and a host venv full of
+# macOS-compiled wheels would be useless inside Linux even if it were copied.
+#
+# THE RULE for editing this file: open the Dockerfile and read the `COPY` lines
+# first. Everything they name must stay reachable; everything else is weight.
+# What this image copies:
+#   pyproject.toml · README.md · app/
+
+# ── the big one ──────────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── build and test leavings ──────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+
+# ── history and working notes, which no image needs ──────────────────────────
+.git/
+.gitignore
+.github/
+.claude/
+
+# ── this repo's own weight ───────────────────────────────────────────────────
+# The dev stack is compose files, a Caddyfile, scripts and smokes that RUN the
+# image from outside — none of it goes in.
+dev-stack/
+docs/
+tests/
+*.sh
+.DS_Store
