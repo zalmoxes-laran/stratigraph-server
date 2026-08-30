@@ -1,41 +1,65 @@
-/* Only what the console's stylesheet does not already say. Everything visual
-   that both pages share is imported from `../admin/console.css`: two stylesheets
-   that drift are two products. */
+/* The room browser's own layout. Everything VISUAL that this page shares with
+   the node console next door comes from `console.css`, which the page imports
+   first — and that file now imports the StratiGraph theme, so both faces wear
+   one identity and there is one place to change it.
+
+   Nothing here names a colour. The roles are the theme's
+   (`brand/stratigraph-theme.css`, vendored from `stratigraph-brand/`, which
+   reads the WP1 guidebook); this file only says where things go.
+*/
 .gate { max-width: 32rem; margin: 14vh auto; text-align: center; }
-.gate h1 { margin-bottom: .4rem; }
+.gate h1 { font-family: var(--sg-font-display);
+           font-weight: var(--sg-weight-headline); }
+.gate h1 + p { margin-bottom: 1.2rem; }
 .toolbar { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap;
            margin: 1.2rem 0 1.6rem; }
 .toolbar input { flex: 1 1 16rem; padding: .5rem .7rem; font: inherit;
-                 border-radius: 6px; border: 1px solid currentColor;
-                 background: transparent; color: inherit; }
-.room { border: 1px solid rgba(127,127,127,.35); border-radius: 8px;
+                 border-radius: var(--sg-radius-sm);
+                 border: 1px solid var(--sg-line);
+                 background: var(--sg-surface); color: var(--sg-text); }
+.room { background: var(--sg-surface); border: 1px solid var(--sg-line);
+        border-radius: var(--sg-radius); box-shadow: var(--sg-shadow);
         padding: .9rem 1rem; margin-bottom: .7rem; }
 .room-head { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
-.room-title { font-weight: 650; }
-.room-id { opacity: .6; font-size: .88em; font-family: ui-monospace, monospace; }
-.role { font-size: .78em; text-transform: uppercase; letter-spacing: .04em;
-        border: 1px solid currentColor; border-radius: 99px; padding: .05em .5em;
-        opacity: .8; }
+.room-title { font-family: var(--sg-font-display);
+              font-weight: var(--sg-weight-subtitle); font-size: 1.05rem; }
+/* the id is read character by character: mono, which is the job the guidebook
+   gives mono ("coded fragments, technical modules, numeric elements") */
+.room-id { font-family: var(--sg-font-mono); font-size: .84em;
+           color: var(--sg-muted); }
+/* the role as a TAG: a wash of the info accent with its own ink, never text on
+   the pure accent (2.27 against the ground — the theme's table). Measured on the
+   real wash: 6.28. Sentence case would lose the chip's shape, so this is the one
+   place the page raises its voice, and it does it in mono at .74em. */
+.role { font-family: var(--sg-font-mono); font-size: .74em;
+        text-transform: uppercase; letter-spacing: .06em;
+        padding: .12em .6em; border-radius: var(--sg-radius-pill);
+        background: color-mix(in srgb, var(--sg-info) 16%, transparent);
+        color: var(--sg-info-ink); }
 .room-actions { display: flex; gap: .5rem; margin-top: .6rem; flex-wrap: wrap;
                 align-items: center; }
-.note { opacity: .72; font-size: .9em; }
-.warn { color: #c0392b; }
+.note { color: var(--sg-muted); font-size: .9em; }
+/* the signed-in identity is an ORCID: read digit by digit, so mono — the job
+   the guidebook gives mono, and the same treatment the room ids get. */
+.who { font-family: var(--sg-font-mono); font-size: .82em; color: var(--sg-muted); }
+.warn { color: var(--sg-warn); }
 .hidden { display: none !important; }
 .grow { flex: 1; }
 .link-row { margin-top: .55rem; display: flex; gap: .5rem; align-items: center; }
-.link-row code { flex: 1; font-size: .8em; opacity: .75; overflow: hidden;
+.link-row code { flex: 1; font-family: var(--sg-font-mono); font-size: .78em;
+                 color: var(--sg-muted); overflow: hidden;
                  text-overflow: ellipsis; white-space: nowrap; }
 
 /* A tool is a NAME with up to two doors. Grouped so the eye reads
    "EMStudio: desktop | browser" rather than six loose buttons in a row — and so
    a tool with only one door does not look like a tool that is missing one. */
 .tool { display: inline-flex; align-items: center; gap: 0;
-        border: 1px solid rgba(127,127,127,.35); border-radius: 6px;
+        border: 1px solid var(--sg-line); border-radius: var(--sg-radius-sm);
         overflow: hidden; }
-.tool-name { padding: .3rem .6rem; font-size: .88em; opacity: .85;
-             border-right: 1px solid rgba(127,127,127,.35); }
+.tool-name { padding: .3rem .6rem; font-size: .88em; color: var(--sg-muted);
+             border-right: 1px solid var(--sg-line); }
 .tool button { border: 0; border-radius: 0; padding: .32rem .7rem;
-               font-size: .82em; background: transparent; color: inherit;
-               cursor: pointer; }
-.tool button + button { border-left: 1px solid rgba(127,127,127,.35); }
-.tool button:hover { background: rgba(127,127,127,.14); }
+               font-size: .82em; background: transparent;
+               color: var(--sg-text); cursor: pointer; }
+.tool button + button { border-left: 1px solid var(--sg-line); }
+.tool button:hover { background: color-mix(in srgb, var(--sg-quiet) 30%, transparent); }

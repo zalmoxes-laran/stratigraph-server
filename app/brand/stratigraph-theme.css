@@ -1,0 +1,219 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   StratiGraph — the shared theme. ONE source of truth for every StratiGraph
+   tool: the field assistant, the room browser, the node console, the Catalog.
+
+   Authority: `StratiGraph_full_guidebook.pdf` (WP1). Every hex and every font
+   below is read out of it — nothing here is a designer's choice made twice.
+   If a value disagrees with the guidebook, the guidebook is right.
+
+   NOT for EMStudio or EMtools. Those are Extended Matrix tools and keep the EM
+   look; StratiGraph is the project around them. Two identities on purpose.
+
+   ── How this reaches an app ───────────────────────────────────────────────
+   VENDORED, exactly as the datamodels are (`sync-datamodels.sh`): each app runs
+   its own `sync-brand.sh`, which copies this file, the woff2 and the logos into
+   the app. Offline-first is the reason and it is not negotiable — a Field
+   Computing Node in a trench has no CDN and may have no server, and a theme
+   that arrived over a `<link>` would leave the assistant unstyled exactly where
+   it matters most. A node MAY additionally serve `/em/theme/…` for web
+   consumers; the vendored copy stays the base.
+
+   ── How to use it ─────────────────────────────────────────────────────────
+   Reach for the SEMANTIC tokens (`--sg-bg`, `--sg-accent`, `--sg-info`), not
+   the palette ones. The palette says what a colour IS; the roles say what it is
+   FOR, and only the roles survive a rebrand.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── the three faces ─────────────────────────────────────────────────────────
+   A minimal 3-font system: one serif, one sans, one mono — "to reflect both
+   heritage and digital structure" (guidebook, Typography).
+
+   Self-hosted woff2, never a CDN link: see the offline argument above. Erode is
+   free for personal and commercial use (fontshare); IBM Plex is SIL OFL 1.1.
+   `font-display: swap` so a slow device shows the fallback rather than nothing —
+   and the fallback is ARIAL, which is the guidebook's own instruction for when
+   the primary faces are unavailable. */
+
+@font-face { font-family:"Erode"; font-style:normal; font-weight:400;
+  font-display:swap; src:url("./fonts/erode-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family:"Erode"; font-style:normal; font-weight:500;
+  font-display:swap; src:url("./fonts/erode-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family:"Erode"; font-style:normal; font-weight:600;
+  font-display:swap; src:url("./fonts/erode-latin-600-normal.woff2") format("woff2"); }
+
+@font-face { font-family:"IBM Plex Sans"; font-style:normal; font-weight:400;
+  font-display:swap; src:url("./fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family:"IBM Plex Sans"; font-style:normal; font-weight:500;
+  font-display:swap; src:url("./fonts/ibm-plex-sans-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family:"IBM Plex Sans"; font-style:normal; font-weight:600;
+  font-display:swap; src:url("./fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2"); }
+
+@font-face { font-family:"IBM Plex Mono"; font-style:normal; font-weight:400;
+  font-display:swap; src:url("./fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family:"IBM Plex Mono"; font-style:normal; font-weight:500;
+  font-display:swap; src:url("./fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2"); }
+
+:root {
+  /* ── PALETTE · the guidebook's own names and hexes ──────────────────────── */
+
+  /* Core monochrome — "the foundation for clarity & readability" */
+  --sg-off-white:      #F1EBE3;
+  --sg-soft-dust:      #D9D1CF;
+  --sg-deep-gray:      #383838;
+  --sg-deep-charcoal:  #2E2D2C;
+
+  /* Earthy archaeology tones — "heritage, context and organic textures" */
+  --sg-clay-beige:     #C4B282;
+  --sg-olive-earth:    #8A8021;
+  --sg-terracotta:     #A64724;
+  --sg-burnt-orange:   #E85B1A;
+
+  /* Digital accents — "coded logic, modules, tool categories and system
+     navigation. They should feel digital, glowing and intentional." Which is
+     also the rule for USING them: by category, never for decoration. */
+  --sg-soft-neon-green:#CAD531;
+  --sg-thermal-blue:   #4AA7D9;
+  --sg-deep-blue:      #1E275C;
+
+  /* The thermal gradient the guidebook names: dark grey → deep blue → thermal
+     blue → off-white → burnt orange. One decorative element, one definition. */
+  --sg-thermal-gradient: linear-gradient(90deg,
+    var(--sg-deep-gray) 0%, var(--sg-deep-blue) 22%, var(--sg-thermal-blue) 45%,
+    var(--sg-off-white) 68%, var(--sg-burnt-orange) 100%);
+
+  /* ── ROLES · what a colour is FOR. Consumers use THESE. ─────────────────── */
+  --sg-bg:            var(--sg-off-white);
+  --sg-surface:       #FFFFFF;
+  --sg-surface-sunk:  var(--sg-soft-dust);
+  --sg-line:          var(--sg-soft-dust);
+  --sg-text:          var(--sg-deep-charcoal);
+  --sg-muted:         var(--sg-deep-gray);
+
+  --sg-accent:        var(--sg-burnt-orange);   /* the primary action */
+  --sg-accent-quiet:  var(--sg-terracotta);     /* a secondary action */
+  --sg-info:          var(--sg-thermal-blue);   /* a stated fact, an id       */
+  --sg-ok:            var(--sg-soft-neon-green);/* something landed           */
+  --sg-warn:          var(--sg-terracotta);     /* something needs a person   */
+  --sg-quiet:         var(--sg-clay-beige);     /* the reader's own words     */
+
+  /* CONTRAST-SAFE ink for the accents that cannot carry text.
+     MEASURED against Off-White (#F1EBE3), not guessed — the whole table, so the
+     next person does not re-derive it:
+
+         Deep Charcoal 11.61  AA      Burnt Orange     2.98  fails even AA-large
+         Deep Gray      9.90  AA      Thermal Blue     2.27  fails
+         Terracotta     5.00  AA      Soft Neon Green  1.36  fails
+                                      Olive Earth      3.42  AA-large only
+
+     So the three "digital accents" are FILLS and WASHES, never text ink. A tag
+     uses the accent at 16-22% as its background and one of these as its ink;
+     measured on the real wash, that is 6.28 (info) and 5.76 (ok) — both AA.
+
+     On a filled control the ink is white, and there the rule is different: an
+     ICON is a graphical object and needs 3:1, not 4.5:1. White on Burnt Orange
+     is 3.53 — enough for the glyph, NOT enough if it were a word. Hence icon
+     buttons carry an `aria-label` rather than a caption. */
+  --sg-info-ink:      #1F5D78;
+  --sg-ok-ink:        #5C6410;
+
+  /* ── TYPE ───────────────────────────────────────────────────────────────── */
+  /* Display / headlines — "a serif with subtle organic distortion, echoing
+     erosion, time and stratigraphic layers". Arial is the guidebook's own
+     named substitute, so it is the fallback rather than a generic serif. */
+  --sg-font-display: "Erode", Arial, Georgia, serif;
+  /* Body / UI — "clean, modern, excellent readability" */
+  --sg-font-sans:    "IBM Plex Sans", Arial, system-ui, sans-serif;
+  /* Code, ids, numbers — "the computational, coded dimension" */
+  --sg-font-mono:    "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* The hierarchy is the guidebook's (Typography | Hierarchy), in ratios rather
+     than the print points it lists, so it scales on a phone in a trench. */
+  --sg-text-xs:   0.72rem;
+  --sg-text-sm:   0.82rem;
+  --sg-text-base: 1rem;
+  --sg-text-lg:   1.18rem;
+  --sg-text-xl:   1.45rem;
+  --sg-weight-headline: 600;   /* Erode Semibold */
+  --sg-weight-subtitle: 500;   /* Erode Medium   */
+  --sg-weight-body:     400;
+
+  /* ── SPACE & SHAPE ──────────────────────────────────────────────────────── */
+  --sg-space-1: 4px;  --sg-space-2: 8px;  --sg-space-3: 12px;
+  --sg-space-4: 16px; --sg-space-5: 24px; --sg-space-6: 32px;
+  --sg-radius-sm: 6px; --sg-radius: 12px; --sg-radius-lg: 18px;
+  --sg-radius-pill: 999px;
+  --sg-shadow: 0 2px 10px rgba(46, 45, 44, .08);
+  --sg-shadow-lifted: 0 18px 50px rgba(46, 45, 44, .28);
+}
+
+/* ── the dark face ───────────────────────────────────────────────────────────
+   Same roles, the guidebook's dark variants (Logo | Colors shows the identity
+   on Deep Charcoal). Only the ROLES move: the palette is the palette. */
+:root[data-sg-theme="dark"], :root:not([data-sg-theme="light"]) {
+  /* nothing here by default — light is the brand's ground */
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-sg-theme="light"]) {
+    --sg-bg:           var(--sg-deep-charcoal);
+    --sg-surface:      var(--sg-deep-gray);
+    --sg-surface-sunk: #23262b;
+    --sg-line:         #454545;
+    --sg-text:         var(--sg-off-white);
+    --sg-muted:        var(--sg-soft-dust);
+    --sg-info-ink:     var(--sg-thermal-blue);
+    --sg-ok-ink:       var(--sg-soft-neon-green);
+    --sg-shadow:       0 2px 10px rgba(0, 0, 0, .35);
+  }
+}
+:root[data-sg-theme="dark"] {
+  --sg-bg:           var(--sg-deep-charcoal);
+  --sg-surface:      var(--sg-deep-gray);
+  --sg-surface-sunk: #23262b;
+  --sg-line:         #454545;
+  --sg-text:         var(--sg-off-white);
+  --sg-muted:        var(--sg-soft-dust);
+  --sg-info-ink:     var(--sg-thermal-blue);
+  --sg-ok-ink:       var(--sg-soft-neon-green);
+  --sg-shadow:       0 2px 10px rgba(0, 0, 0, .35);
+}
+
+/* ── the few shared primitives ───────────────────────────────────────────────
+   Deliberately small. This is a THEME, not a component library: it says what
+   things look like, and each app lays itself out. Everything here is a thing
+   every StratiGraph surface has. */
+
+.sg-h1, .sg-h2, .sg-h3 {
+  font-family: var(--sg-font-display);
+  font-weight: var(--sg-weight-headline);
+  line-height: 1.2;
+  letter-spacing: .2px;
+  margin: 0;
+}
+.sg-h1 { font-size: var(--sg-text-xl); }
+.sg-h2 { font-size: var(--sg-text-lg); }
+.sg-h3 { font-size: var(--sg-text-base); font-weight: var(--sg-weight-subtitle); }
+
+/* IDs, digests, node types. Mono because they are read character by character
+   and because the guidebook gives mono exactly this job. */
+.sg-mono { font-family: var(--sg-font-mono); font-size: .92em; }
+
+/* A tag: a WASH of an accent with a readable ink of the same family. The wash
+   is what makes it "digital, glowing"; the ink is what makes it legible. */
+.sg-tag {
+  display: inline-flex; align-items: center; gap: var(--sg-space-1);
+  font-family: var(--sg-font-mono); font-size: var(--sg-text-xs);
+  font-weight: 500; padding: 3px 9px; border-radius: var(--sg-radius-pill);
+  background: color-mix(in srgb, var(--sg-info) 16%, transparent);
+  color: var(--sg-info-ink);
+}
+.sg-tag--ok  { background: color-mix(in srgb, var(--sg-ok) 22%, transparent);
+               color: var(--sg-ok-ink); }
+.sg-tag--warn{ background: color-mix(in srgb, var(--sg-warn) 14%, transparent);
+               color: var(--sg-warn); }
+
+/* The focus ring, once. An app that draws its own gets it wrong on one control. */
+.sg-focusable:focus-visible, button:focus-visible, input:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--sg-accent);
+  outline-offset: 2px;
+}

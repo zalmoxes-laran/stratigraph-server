@@ -22,12 +22,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>em-server · node console</title>
+  <title>StratiGraph Server · node console</title>
+  <link rel="icon" href="../brand/logo/favicon-deep-charcoal.svg" type="image/svg+xml">
+  <meta name="theme-color" content="#F1EBE3" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#2E2D2C" media="(prefers-color-scheme: dark)">
+  <!-- The brand arrives THROUGH console.css (`@import "../brand/…"`), relative
+       so it resolves the same at `/admin/` and behind a proxy at `/em/admin/`.
+       Vendored and same-origin: see `sync-brand.sh`. -->
   <link rel="stylesheet" href="./console.css">
 </head>
 <body>
   <header class="bar">
-    <span class="wordmark">em-server</span>
+    <img class="mark" src="../brand/logo/favicon-deep-charcoal.svg" alt=""
+         width="22" height="22">
+    <span class="wordmark">StratiGraph</span>
     <span class="sub">node console</span>
     <span class="spacer"></span>
     <span id="who" class="who">…</span>

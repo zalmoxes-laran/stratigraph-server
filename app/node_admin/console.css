@@ -1,32 +1,62 @@
-/* The node console's chrome. One file, no build, and deliberately plain: this is
-   an operator's instrument panel, not a product surface. Light and dark both
-   answered from tokens, because a console gets opened at three in the morning. */
+/* The node console's chrome — now wearing the StratiGraph identity.
+   One file, no build, and still deliberately plain: this is an operator's
+   instrument panel, not a product surface.
+
+   THE COLOURS ARE NOT DECIDED HERE. `brand/stratigraph-theme.css` (vendored from
+   `stratigraph-brand/`, which reads the WP1 guidebook) owns the palette, the
+   three faces and the contrast table. What this file does is MAP this console's
+   own vocabulary — ink, paper, card, good/warn/bad — onto the theme's roles, so
+   every class the modules already use keeps working and none of them names a
+   colour.
+
+   Light and dark are both the theme's: a console gets opened at three in the
+   morning, and the brand ships both grounds.
+
+   ── The three choices this mapping had to make, with their measurements ──────
+   · A FILLED button is Deep Charcoal, not Burnt Orange. White on Burnt is 3.53
+     — below AA for 14px text — while Off-White on Charcoal is 11.61. Burnt is
+     the guidebook's ACTION colour and it stays that: it is the fill of a
+     primary, at a size where 3:1 applies (see the field assistant), and there
+     is no primary on this panel today, so it is not used as one here.
+   · A GHOST button is Terracotta text: 5.92 on the card, 5.00 on the ground.
+   · A TAG is a wash with an ink of its own family, never text on a pure accent.
+     Measured on the real wash: info 6.28 · good 5.76 · warn 10.82 · bad 4.82.
+*/
+
+@import url("../brand/stratigraph-theme.css");
 
 :root {
-  --ink: #1a1d21;
-  --ink-soft: #5c6672;
-  --paper: #f7f8fa;
-  --card: #ffffff;
-  --line: #dfe3e8;
-  --accent: #1f5f8b;
-  --good: #2c6e49;
-  --warn: #8a6d1f;
-  --bad: #9b3333;
-  --nav: #eef1f4;
+  /* the console's words → the brand's roles. RELATIVE import above, so this
+     resolves the same at `/admin/` and behind a proxy at `/em/admin/`. */
+  --ink:      var(--sg-text);
+  --ink-soft: var(--sg-muted);
+  --paper:    var(--sg-bg);
+  --card:     var(--sg-surface);
+  --line:     var(--sg-line);
+  --nav:      var(--sg-surface-sunk);
+
+  /* the action, and the three states — inks that can carry text, never the
+     pure accents (the theme's table says why) */
+  --accent:   var(--sg-accent-quiet);   /* Terracotta: readable as text */
+  --fill:     var(--sg-deep-charcoal);  /* what a filled button is made of */
+  --on-fill:  var(--sg-off-white);
+  --good:     var(--sg-ok-ink);
+  --warn:     var(--sg-accent-quiet);
+  --bad:      var(--sg-terracotta);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --ink: #e6e9ee;
-    --ink-soft: #99a3ae;
-    --paper: #14171b;
-    --card: #1b1f24;
-    --line: #2c333a;
-    --accent: #6fb3e0;
-    --good: #7cc59b;
-    --warn: #d9bd7a;
-    --bad: #e08d8d;
-    --nav: #1b1f24;
+    /* Only what must move. The theme already flips `--sg-*` for dark; these are
+       the two that cannot follow it blindly: on a dark ground a filled button
+       inverts, and the state inks become the accents themselves (which are
+       legible there — the contrast problem is against the LIGHT ground). */
+    --fill:    var(--sg-off-white);
+    --on-fill: var(--sg-deep-charcoal);
+    --good:    var(--sg-soft-neon-green);
+    --warn:    var(--sg-clay-beige);
+    --bad:     var(--sg-burnt-orange);
+    --accent:  var(--sg-clay-beige);
   }
 }
 
@@ -36,7 +66,7 @@ body {
   margin: 0;
   background: var(--paper);
   color: var(--ink);
-  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font: var(--sg-weight-body) 14px/1.5 var(--sg-font-sans);
 }
 
 .bar {
@@ -51,7 +81,16 @@ body {
   z-index: 2;
 }
 
-.wordmark { font-weight: 650; letter-spacing: .01em; }
+.wordmark { font-family: var(--sg-font-display);
+            font-weight: var(--sg-weight-headline); letter-spacing: .2px;
+            font-size: 1.05rem; }
+/* the hourglass, from the vendored logo. Dark ink on the light ground and
+   off-white on the dark one — the guidebook ships both, so neither is a filter
+   over the other. */
+.mark { width: 22px; height: 22px; flex: none; }
+@media (prefers-color-scheme: dark) {
+  .mark { content: url("../brand/logo/favicon-off-white.svg"); }
+}
 .sub { color: var(--ink-soft); }
 .spacer { flex: 1; }
 .who { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
@@ -87,11 +126,13 @@ nav {
 main { flex: 1; padding: 1.2rem 1.4rem; min-width: 0; }
 main:focus { outline: none; }
 
-h1 { font-size: 1.25rem; margin: 0 0 .2rem; }
-h2 { font-size: 1rem; margin: 0 0 .4rem; }
+h1 { font-family: var(--sg-font-display); font-weight: var(--sg-weight-headline);
+     font-size: 1.25rem; margin: 0 0 .2rem; }
+h2 { font-family: var(--sg-font-display); font-weight: var(--sg-weight-subtitle);
+     font-size: 1rem; margin: 0 0 .4rem; }
 .head { margin-bottom: 1rem; }
 .muted { color: var(--ink-soft); margin: .2rem 0; }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.mono { font-family: var(--sg-font-mono); }
 .small { font-size: .85em; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .right { text-align: right; }
@@ -100,7 +141,7 @@ h2 { font-size: 1rem; margin: 0 0 .4rem; }
 .card {
   background: var(--card);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--sg-radius);
   padding: .8rem 1rem;
   margin-bottom: .8rem;
 }
@@ -116,15 +157,23 @@ tr:last-child td { border-bottom: none; }
 
 .tag {
   display: inline-block;
-  padding: 0 .4em;
-  border: 1px solid var(--line);
-  border-radius: 999px;
+  padding: .05em .5em;
+  border: 0;
+  border-radius: var(--sg-radius-pill);
+  font-family: var(--sg-font-mono);
   font-size: .8em;
-  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--sg-info) 16%, transparent);
+  color: var(--sg-info-ink);
 }
-.tag.warn { color: var(--warn); border-color: currentColor; }
-.tag.bad { color: var(--bad); border-color: currentColor; }
-.tag.good { color: var(--good); border-color: currentColor; }
+/* Each state is a WASH of its accent with an ink of the same family. Measured
+   on the real wash: good 5.76 · warn 10.82 · bad 4.82 — all AA. Text on the
+   pure accent would be 1.36 (neon), 2.27 (thermal), 2.98 (burnt). */
+.tag.good { background: color-mix(in srgb, var(--sg-ok) 22%, transparent);
+            color: var(--good); }
+.tag.warn { background: color-mix(in srgb, var(--sg-quiet) 35%, transparent);
+            color: var(--sg-text); }
+.tag.bad  { background: color-mix(in srgb, var(--sg-terracotta) 14%, transparent);
+            color: var(--bad); }
 /* «not configured» is not a failure: it reads as quiet, not as red. A health
    page that paints an absent optional service alarming teaches an operator to
    ignore the colour that matters. */
@@ -133,14 +182,15 @@ tr:last-child td { border-bottom: none; }
 button {
   font: inherit;
   padding: .3rem .7rem;
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: var(--card);
-  border-radius: 6px;
+  border: 1px solid var(--fill);
+  background: var(--fill);
+  color: var(--on-fill);
+  border-radius: var(--sg-radius-sm);
   cursor: pointer;
 }
 
-button.ghost { background: transparent; color: var(--accent); }
+button.ghost { background: transparent; color: var(--accent);
+               border-color: var(--accent); }
 button:hover { filter: brightness(1.08); }
 
 select, input, textarea {
@@ -173,7 +223,7 @@ dialog {
   color: var(--ink);
   max-width: 32rem;
 }
-dialog textarea { width: 100%; font-family: ui-monospace, monospace; font-size: .8em; }
+dialog textarea { width: 100%; font-family: var(--sg-font-mono); font-size: .8em; }
 dialog menu { padding: 0; margin: .6rem 0 0; display: flex; justify-content: flex-end; }
 
 /* the signed-out card: one button, and the paste box folded under it */

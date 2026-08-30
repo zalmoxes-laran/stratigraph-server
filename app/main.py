@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, FastAPI, HTTPException, Query, Response
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from html import escape as html_escape
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -2785,6 +2786,27 @@ def open_page(server: str = Query(default=""),
 """)
 
 
+# ── static, and never stale ──────────────────────────────────────────────────
+#
+# MEASURED 2026-08-30, while restyling: an edited `console.css` did NOT reach a
+# browser that already had the page open — it kept parsing yesterday's rules and
+# the new theme simply did not appear. The mount sends an `ETag` and a
+# `Last-Modified` but no `Cache-Control`, so a browser applies HEURISTIC
+# freshness and may serve a stale copy without asking.
+#
+# `no-cache` does not mean "do not store": it means "store, but revalidate". With
+# the ETag already there, that is a 304 and a few bytes — and the operator never
+# opens a console that is a version behind, which for an instrument panel is the
+# failure that matters. The fonts and the logos pay the same conditional request
+# and are answered 304 too; a device that is offline still gets them out of its
+# own cache, because that is what a failed revalidation falls back to.
+class _FreshStatic(StaticFiles):
+    async def get_response(self, path: str, scope):        # type: ignore[override]
+        response = await super().get_response(path, scope)
+        response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
+
 # ── the NODE CONSOLE, served by the process it administers ───────────────────
 #
 # Static files, no build step, mounted OUTSIDE `/v1` because it is not the API: it
@@ -2798,8 +2820,7 @@ def open_page(server: str = Query(default=""),
 # just a shell.
 _CONSOLE = pathlib.Path(__file__).resolve().parent / "node_admin"
 if _CONSOLE.is_dir():
-    from fastapi.staticfiles import StaticFiles
-    app.mount("/admin", StaticFiles(directory=str(_CONSOLE), html=True),
+    app.mount("/admin", _FreshStatic(directory=str(_CONSOLE), html=True),
               name="node-console")
 
 # …and the MEMBER-facing one beside it. A second page rather than a panel in the
@@ -2808,10 +2829,21 @@ if _CONSOLE.is_dir():
 # about YOUR rooms and needs only that you are somebody. It imports the console's
 # sign-in module relatively (`../admin/auth.js`), so there is ONE PKCE
 # implementation and it survives the prefix a proxy adds.
+# The BRAND both faces wear, served beside them. Vendored from
+# `stratigraph-brand/` by `sync-brand.sh` — same-origin and never a CDN, because
+# a node may be deployed where there is no route out and a console that lost its
+# typeface with the uplink would lose it exactly when somebody is trying to find
+# out why.
+#
+# Mounted rather than listed file by file: the set is data, and adding a font
+# weight to the brand should not mean editing this module.
+_BRAND = pathlib.Path(__file__).resolve().parent / "brand"
+if _BRAND.is_dir():
+    app.mount("/brand", _FreshStatic(directory=str(_BRAND)), name="brand")
+
 _ROOMS_UI = pathlib.Path(__file__).resolve().parent / "rooms_ui"
 if _ROOMS_UI.is_dir():
-    from fastapi.staticfiles import StaticFiles
-    app.mount("/rooms", StaticFiles(directory=str(_ROOMS_UI), html=True),
+    app.mount("/rooms", _FreshStatic(directory=str(_ROOMS_UI), html=True),
               name="rooms-browser")
 
 app.include_router(v1_public)

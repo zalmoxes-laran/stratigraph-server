@@ -25,14 +25,21 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>My rooms · StratiGraph</title>
+  <link rel="icon" href="../brand/logo/favicon-deep-charcoal.svg" type="image/svg+xml">
+  <meta name="theme-color" content="#F1EBE3" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#2E2D2C" media="(prefers-color-scheme: dark)">
+  <!-- The console's stylesheet FIRST, because it is the one that imports the
+       StratiGraph theme (`../brand/…`, vendored and same-origin). One import
+       chain, so the two faces of this server cannot drift apart. -->
   <link rel="stylesheet" href="../admin/console.css">
   <link rel="stylesheet" href="./rooms.css">
 </head>
 <body>
   <header class="bar">
+    <img class="mark" src="../brand/logo/favicon-deep-charcoal.svg" alt=""
+         width="22" height="22">
     <span class="wordmark">StratiGraph</span>
-    <span class="sep">·</span>
-    <span class="where">my rooms</span>
+    <span class="sub">my rooms</span>
     <span class="grow"></span>
     <span id="who" class="who"></span>
     <button id="btn-signout" class="ghost hidden">Sign out</button>
