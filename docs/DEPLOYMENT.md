@@ -262,6 +262,32 @@ index is derivable; the studies are not.
 
 ---
 
+## Changing the realm after the first deploy
+
+**Editing the realm JSON does not change a realm that already exists.** Keycloak's
+`--import-realm` imports only when the realm is *absent*; on every later boot it
+finds the realm and skips the file. So a change written into the repository,
+committed and deployed, can sit there looking done and never be in effect —
+and nothing says so. The symptom arrives later and elsewhere: a redirect URI
+that is "clearly configured" and still refused, a mapper that is in git and not
+in the token.
+
+Measured on the dev stack, 2026-08-31, while adding the field assistant's client
+configuration: the change had to be applied **twice** to be both real and
+durable —
+
+* **to the running realm**, through Keycloak's admin API, which is what takes
+  effect now;
+* **into the JSON**, which is what a *new* deployment (or a `--wipe`) will get.
+
+Neither half is optional. The JSON alone is a plan; the admin API alone is a
+change that the next fresh node will not inherit. Whoever edits a realm on a
+live host should say, in the same breath, that they did both — and a realm
+change that cannot be verified in a token is not verified at all: decode one and
+look.
+
+---
+
 ## What this page does not cover
 
 * **Turning the host on** — provisioning the machine, the DNS record, the

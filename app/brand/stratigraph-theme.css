@@ -182,6 +182,20 @@
    things look like, and each app lays itself out. Everything here is a thing
    every StratiGraph surface has. */
 
+/* `hidden` HAS TO WIN, and this is not pedantry — it is a bug that already
+   happened. The browser's own `[hidden] { display: none }` lives in the USER
+   AGENT origin, and every declaration an app writes lives in the AUTHOR origin,
+   which beats it outright: not on specificity, on origin. So one `.card {
+   display: flex }` anywhere and an element with `hidden` correctly set stays on
+   screen — the attribute is right, the state is right, the screen is wrong, and
+   no test that reads source can see it.
+
+   Measured on the field assistant, where the signature strip said «firmato» and
+   offered an «Esci» button TO SOMEBODY WHO HAD NOT SIGNED: precisely the
+   sentence that page exists in order not to say. Fixing it in the page would
+   have fixed it once; it belongs here, where the four faces read it. */
+[hidden] { display: none !important; }
+
 .sg-h1, .sg-h2, .sg-h3 {
   font-family: var(--sg-font-display);
   font-weight: var(--sg-weight-headline);

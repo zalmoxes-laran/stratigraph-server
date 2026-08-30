@@ -359,6 +359,27 @@ services:
       minio-init:
         condition: service_completed_successfully
     environment:
+      # --- identity: WHO IS DICTATING, and the reason this is not optional ----
+      # No ingestion without an author. The assistant refuses to write without a
+      # verified identity (`contract.py`), so a node with no provider is a node
+      # whose field page can only show a gate — correct, and useless. The same
+      # three variables the room server reads, from the SAME sources, because
+      # two spellings of one realm is how one of them ends up wrong.
+      OIDC_ISSUER: "${OIDC_ISSUER:-https://em.localhost:${HTTPS_PORT:-8443}/auth/realms/${DEV_REALM}}"
+      # The internal address the keys come from — `iss` is a NAME the token
+      # carries, the JWKS URI is a machine we dial. Same split as the server's.
+      OIDC_JWKS_URI: "http://keycloak:8080/auth/realms/${DEV_REALM}/protocol/openid-connect/certs"
+      # …and NOT `${DEV_CLIENT_ID}`, which is the room server's name. This
+      # service checks its OWN: the realm's `em-console` carries two audience
+      # mappers, `em-server` and `em-chatbot`, so ONE token minted by the field
+      # page satisfies the assistant here and the room next door. Requiring
+      # `em-server` instead would have made this service accept anything minted
+      # for the stack, which is not the question `auth.py` says it answers.
+      OIDC_AUDIENCE: "em-chatbot"
+      # The PUBLIC browser client the field page signs in as. `em-console` is the
+      # one this stack already has: the realm enforces PKCE S256 on it and it
+      # carries the mappers above. A second public client would duplicate both.
+      EM_CHATBOT_CLIENT_ID: "${EM_CHATBOT_CLIENT_ID:-em-console}"
       # --- the object store: the SAME variables the server reads --------------
       # Reused rather than paralleled: two spellings of one bucket is how one of
       # them ends up pointing somewhere else.
