@@ -36,3 +36,40 @@ container is recreated:
 The re-import mints **new realm keys**: every token issued before it stops
 verifying. That is expected, and it is why a room that suddenly answers 4401
 right after a realm change is not a bug — ask for a token again.
+
+## Re-importing the realm after you change it — no `--wipe` needed
+
+MEASURED 2026-08-29, because "import happens once" had become folklore here and
+the folklore was costing a `--wipe` (which erases the studies, the rooms and the
+bucket) every time somebody added a redirect URI.
+
+This Keycloak has **no data volume**: the service mounts only
+`realm-em-dev.json`, read-only, and `start-dev` keeps its database inside the
+container. So the realm is re-imported whenever the CONTAINER is recreated:
+
+```bash
+docker compose --env-file .env.dev -f docker-compose.dev.yml \
+  up -d --force-recreate --no-build keycloak
+```
+
+Healthy in ~30s, and the new realm is live. `--wipe` is for when you want the
+DATA gone, which is a different intention and should stay a different command.
+
+The trade-off, stated: nothing you do in the admin console survives a recreate
+either. Edit the JSON, not the running realm — the JSON is the one that is in
+git.
+
+## `/auth`, and why Keycloak has ONE public URL
+
+Keycloak serves under `KC_HTTP_RELATIVE_PATH=/auth` so Caddy's `handle /auth/*`
+lands (with `handle`, the prefix is KEPT, so Keycloak must expect it — with
+`handle_path` it is stripped and Keycloak must not). And `KC_HOSTNAME_URL` fixes
+the FRONTEND url, which is what decides the `iss` a token carries.
+
+That last part is the fix to a real bug, not tidiness. `app/auth.py` verifies
+`iss` strictly against `OIDC_ISSUER`; with two spellings of the realm (the proxy
+on 8443 and the direct port on 8085) tokens from one door are refused by a
+service configured for the other. One frontend URL means one `iss`, whichever
+door it came through — measured: a token from `token.sh` (direct port) carries
+`iss = https://em.localhost:8443/auth/realms/em-dev` and `GET /v1/whoami` answers
+200.
