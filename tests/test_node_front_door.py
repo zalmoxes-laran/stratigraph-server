@@ -74,9 +74,18 @@ def test_the_public_answer_carries_NO_internal_map(client, monkeypatch):
     monkeypatch.setenv("EM_CATALOG_INTERNAL", "http://stratigraph-catalog:8000")
     payload = client.get("/v1/node").json()
     for offer in payload["offers"]:
-        assert set(offer) == {"name", "label", "state", "url", "detail"}
+        assert set(offer) == {"name", "label", "state", "url", "detail",
+                              "capabilities"}
     assert "stratigraph-catalog:8000" not in str(payload), \
         "an internal hostname reached a public answer"
+    # `capabilities` is the neighbour's own declaration, carried through — and it
+    # is a reduction too: `node_health._reduce_capabilities` keeps objects with
+    # string (or list-of-string) values and drops any shape it cannot vouch for.
+    for offer in payload["offers"]:
+        for capability in offer["capabilities"]:
+            assert isinstance(capability, dict)
+            for value in capability.values():
+                assert isinstance(value, (str, list, bool)) or value is None
 
 
 def test_the_tools_you_install_are_a_DIFFERENT_half(client):
