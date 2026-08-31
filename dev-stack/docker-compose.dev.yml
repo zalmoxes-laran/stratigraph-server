@@ -289,6 +289,17 @@ services:
       # Catalog: the panel then says «not configured», which is a fact about the
       # deployment and not a failure.
       EM_CATALOG_INTERNAL: "http://stratigraph-catalog:8000"
+      # …and the field assistant, which runs here too. Same rule as the Catalog:
+      # a service BESIDE this one, watched only because a deployment named it.
+      EM_CHATBOT_INTERNAL: "http://stratigraph-chatbot:8000"
+      # --- and where a BROWSER should go for each of them ----------------------
+      # The internal addresses above are machines we dial; these are names we
+      # hand out, and `/v1/node` publishes them so the entrance page can compose
+      # this node's faces WITHOUT carrying a list of paths in its own source —
+      # which would be a fifth place to keep aligned. Unset on a deployment that
+      # does not publish that face: the page then shows it with no link, rather
+      # than with a guessed one.
+      EM_CATALOG_PUBLIC: "${EM_CATALOG_PUBLIC:-https://em.localhost:${HTTPS_PORT:-8443}/catalog}"
       # --- this node's own PUBLIC address, for handoff links -------------------
       # What `stratigraph://open?server=…` names. Behind Caddy the server lives
       # under /em, and the link has to say so or the tool that follows it dials a
@@ -305,7 +316,11 @@ services:
       # failure this is meant to prevent. Fill them in `.env.dev` when the web
       # builds are up (5177 / 8020 are the usual dev ports).
       EM_EMSTUDIO_WEB_URL: "${EM_EMSTUDIO_WEB_URL:-}"
-      EM_FIELD_ASSISTANT_URL: "${EM_FIELD_ASSISTANT_URL:-}"
+      # …but the field assistant is NOT one of those: it is a container in this
+      # stack, up whenever the stack is, served by Caddy at /chat/. The reason
+      # for the empty default above does not apply to it, and leaving it empty
+      # cost a door that works and a public address `/v1/node` could publish.
+      EM_FIELD_ASSISTANT_URL: "${EM_FIELD_ASSISTANT_URL:-https://em.localhost:${HTTPS_PORT:-8443}/chat/}"
       # --- the photogrammetric engine ----------------------------------------
       # An ENDPOINT, not a host: today the `nodeodm` service beside us, tomorrow
       # a ClusterODM broker in front of a CPU worker and a GPU one — the same

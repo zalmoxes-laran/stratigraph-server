@@ -56,12 +56,20 @@ def main() -> int:
     base = args.base.rstrip("/").removesuffix("/v1").removesuffix("/em")
     tally = Tally()
 
-    print(f"\n1 · the root is a banner, for a person\n   {base}/")
+    print(f"\n1 · the root is a DOOR, for a person\n   {base}/")
+    # It used to be a banner listing routes. It is now a redirect to the node's
+    # front door — still "for a person", and more so: the banner told you the
+    # paths, the door takes you to a page that knows what this node offers.
+    # What has NOT changed is the split this file exists to defend: the root is
+    # answered, everything else unrouted is 404.
+    # `call` FOLLOWS redirects (urllib does), so what is measured here is where a
+    # person LANDS — which is the better measurement anyway: the root is not
+    # interesting, the door it opens is.
     status, _headers, body = call("GET", f"{base}/")
     text = body.decode("utf-8", "replace")
-    tally.ok(status == 200, "GET / answers 200", f"status {status}")
-    tally.ok("/em/v1/health" in text,
-             "…and it names the routes there are", text[:60])
+    tally.ok(status == 200, "GET / lands somewhere", f"status {status}")
+    tally.ok("<title>This node" in text,
+             "…and that somewhere is the node's front door", text[:80])
     # a query string is not a different path: the root matcher is exact, not
     # prefix — which is the whole reason this can be split from the 404 below
     status, _headers, _body = call("GET", f"{base}/?anything=1")
@@ -74,6 +82,9 @@ def main() -> int:
         # …and it must not look like success to a parser
         tally.ok(b"em dev stack" not in body,
                  f"…{path} is not answered with the banner")
+        # …nor with a redirect to the door, which a parser would follow into HTML
+        tally.ok(b"<html" not in body.lower(),
+                 f"…{path} is not answered with a page")
     # The one that cost an afternoon: a POST to a plausible-looking path.
     status, _headers, body = call("POST", f"{base}/v1/say",
                                   json_body={"transcript": "crea una nuova scheda"})

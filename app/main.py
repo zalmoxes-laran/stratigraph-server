@@ -65,7 +65,7 @@ from .blend_backups import (BLEND_MEDIA_TYPE, BlendBackups,
                             blobs_from_env as backup_blobs_from_env,
                             describe as backup_describe,
                             register_from_env as backup_register_from_env)
-from .node_health import node_health
+from .node_health import node_health, node_services
 from .rooms import RoomDescriptor
 from .store import describe as snapshot_describe
 from .store import describe_rooms as room_describe
@@ -328,6 +328,112 @@ def auth_config() -> AuthConfig:
                               if issuer else ""),
         scope=os.environ.get("EM_CONSOLE_SCOPE", "openid profile email").strip(),
         enforcing=bool(getattr(settings, "enforcing", False)),
+    )
+
+
+class NodeOffer(BaseModel):
+    """One face this node offers, as somebody arriving needs to see it."""
+
+    name: str
+    label: str
+    #: ok · degraded · unreachable · not configured — from the SAME probes the
+    #: operator report runs, so a service cannot be up on one page and down on
+    #: the other.
+    state: str = "not configured"
+    #: where a browser should go, or "" when this deployment published no
+    #: address. Empty means the page draws no link: a guessed path is a button
+    #: that 404s and a claim about where things are that nobody made.
+    url: str = ""
+    detail: str = ""
+
+
+class NodeTool(BaseModel):
+    """A tool you run on YOUR machine, which this node can only point at.
+
+    The node cannot know whether EMStudio is installed on the laptop reading
+    this, so it says nothing about state — two honest links beat a list that
+    pretends to know. They are here rather than written into the page for the
+    same reason the addresses above are: a page that carried them would be a
+    place to keep aligned, and an air-gapped deployment could not point them at
+    its own mirror.
+    """
+
+    name: str
+    label: str
+    download: str = ""
+    manual: str = ""
+
+
+class NodeOffers(BaseModel):
+    """What this node is, and what it offers."""
+
+    service: str = "stratigraph-server"
+    version: str
+    #: what the node calls itself publicly — `EM_PUBLIC_BASE`, which is also
+    #: what the handoff links are built from. Empty on a node that never said.
+    public_base: str = ""
+    #: whether tokens are actually being checked here. `dev-no-auth` is not a
+    #: detail to bury: it changes what every list on the page means.
+    auth: str = "dev-no-auth"
+    offers: List[NodeOffer] = Field(default_factory=list)
+    #: …and what you install yourself. A different KIND of thing from `offers`,
+    #: and kept apart on purpose: one is what this node runs, the other is what
+    #: you run.
+    tools: List[NodeTool] = Field(default_factory=list)
+
+
+#: Where the desktop tools come from. Overridable per deployment (`EM_TOOLS_*`)
+#: because a node on a dig with no route out should be able to point at the
+#: mirror on its own disk instead of at a domain nobody can reach.
+_TOOLS = (
+    ("emstudio", "EMStudio", "EM_TOOLS_EMSTUDIO_DOWNLOAD",
+     "https://extendedmatrix.org/download",
+     "EM_TOOLS_EMSTUDIO_MANUAL", "https://docs.extendedmatrix.org"),
+    ("blender", "EMtools (Blender)", "EM_TOOLS_BLENDER_DOWNLOAD",
+     "https://blender.extendedmatrix.org",
+     "EM_TOOLS_BLENDER_MANUAL",
+     "https://docs.extendedmatrix.org/projects/EM-tools/en/1.5/installation.html"),
+)
+
+
+@v1_public.get("/node", response_model=NodeOffers, tags=["meta"])
+def node_offers() -> NodeOffers:
+    """What this node offers, and where. Public, and reduced on purpose.
+
+    Three health questions live on this server and they are not the same one:
+
+    * `/v1/health` — is this process up, and what can this build do (a probe for
+      an orchestrator);
+    * `/v1/admin/health` — what does StratiGraph Server depend on, how much is it
+      holding, at which internal address. That is an infrastructure map, and it
+      is operator-scoped for exactly that reason;
+    * this one — what does this node OFFER, and where does a browser go. It is a
+      REDUCTION of the second: same probes, same states, and then every internal
+      hostname, latency and bucket count dropped.
+
+    Why it exists at all, when the design note said no new endpoint: because the
+    entrance page has to compose the node's faces without OWNING a list of where
+    they live. A page that carried `/catalog` and `/chat` in its own source would
+    be a fifth place to keep aligned, and would be wrong the day a deployment
+    moves one. This route holds no new truth — every value in it is configuration
+    the node already reads — it only publishes what the node already knows. Same
+    argument as `/v1/auth-config`, and the same shape.
+    """
+    from . import handoff as ho
+
+    return NodeOffers(
+        version=__version__,
+        # Empty when nobody configured it — `public_base` already returns "" in
+        # that case rather than guessing `localhost`, and the page then says the
+        # node has no public name instead of printing one that only works here.
+        public_base=ho.public_base(),
+        auth=authenticator.settings.describe(),
+        offers=[NodeOffer(**offer) for offer in node_services()],
+        tools=[NodeTool(name=name, label=label,
+                        download=os.environ.get(dl_var, dl_default).strip(),
+                        manual=os.environ.get(man_var, man_default).strip())
+               for name, label, dl_var, dl_default, man_var, man_default
+               in _TOOLS],
     )
 
 

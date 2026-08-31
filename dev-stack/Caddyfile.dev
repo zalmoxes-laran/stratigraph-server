@@ -117,13 +117,37 @@
 	# `*` is not a prefix (measured below, not assumed: `/anything` falls
 	# through to the 404). So the banner keeps helping a person who lands here,
 	# and a program that missed the route is told it missed.
+	# …and what it points at is now the NODE'S FRONT DOOR: the room browser,
+	# grown a head — who you are, what this node runs, and the three scopes.
+	#
+	# A REDIRECT and not a proxy, and that is the whole care of these four lines.
+	# The page is served at `/em/rooms/` and asks for its neighbours relatively
+	# (`../admin/console.css`, `../brand/…`): proxied onto `/` those would resolve
+	# to `/admin/…` and `/brand/…`, which are not routes on this origin — so the
+	# page would arrive unstyled, and the 404 below would be blamed.
+	#
+	# It also keeps the page from PRESUMING it owns the root. In production it
+	# does not: `role/templates/Caddyfile.j2` opens with `redir / /a/heriverse`,
+	# because on a node that also carries Heriverse the root is Heriverse's.
+	# Where this page sits is a routing decision per deployment, never a property
+	# of the page — which is why the page derives its API base from its own URL.
 	handle / {
-		respond "em dev stack — try /em/v1/health, /catalog/health, /chat/, /iiif/3/<sha256>/info.json" 200
+		# `redir * <to> <code>` — the `*` is NOT decoration. `redir` reads a
+		# leading `/` as a PATH MATCHER, so `redir /em/rooms/ 302` parses as
+		# "match /em/rooms/, redirect to 302" and answers 200 with an empty body:
+		# measured, and it looks exactly like a working root until you read the
+		# content-length. Inside `handle /` the path is already decided, so the
+		# matcher is `*`.
+		redir * /em/rooms/ 302
 	}
 
 	handle {
 		# Plain text on purpose: a JSON body here would be a guess about who is
 		# asking, and the point is that this route belongs to nobody.
-		respond "no such route on this node — see / for the ones there are" 404
+		#
+		# The list is HERE rather than behind "see /", because / is now a door and
+		# not an index — and a 404 that sends a program to a redirect has told it
+		# nothing.
+		respond "no such route on this node — try /em/rooms/ (the front door), /em/v1/health, /catalog/health, /chat/, /iiif/3/<sha256>/info.json" 404
 	}
 }

@@ -292,6 +292,65 @@ def _probe_catalog(base: Optional[str]) -> Check:
                  detail=f"the Catalog answered {status}")
 
 
+def _probe_field_assistant(base: Optional[str]) -> Check:
+    """The field assistant, which — like the Catalog — is a service BESIDE
+    StratiGraph Server and not one it calls. Same rule: probed only when a
+    deployment names it, and absent means absent rather than assumed."""
+    if not base:
+        return Check(name="stratigraph-chatbot", state=ABSENT,
+                     detail="no field assistant named on this node "
+                            "(set EM_CHATBOT_INTERNAL to watch one)")
+    status, payload, error = _fetch(base.rstrip("/") + "/health", expect_json=True)
+    target = _host_of(base)
+    if error:
+        return Check(name="stratigraph-chatbot", state=UNREACHABLE, target=target,
+                     detail=f"the field assistant did not answer — {error}")
+    if status != 200:
+        return Check(name="stratigraph-chatbot", state=DEGRADED, target=target,
+                     detail=f"the field assistant answered {status}")
+    facts: Dict[str, Any] = {}
+    if isinstance(payload, dict):
+        for key in ("version", "auth", "accepts_dictation"):
+            if key in payload:
+                facts[key] = payload[key]
+    # A node whose assistant cannot attribute a dictation is not "ok": it is
+    # running and it will refuse every write. Saying `ok` there would be the
+    # health page telling the comfortable half of the truth.
+    if facts.get("accepts_dictation") is False:
+        return Check(name="stratigraph-chatbot", state=DEGRADED, target=target,
+                     detail="the field assistant is up but has no identity "
+                            "provider, so it can accept no dictation",
+                     facts=facts)
+    return Check(name="stratigraph-chatbot", state=OK, target=target,
+                 detail="the field assistant answered its health probe",
+                 facts=facts)
+
+
+def _probe_engine(base: Optional[str]) -> Check:
+    """NodeODM. `GET /info` is its own liveness answer and carries the version
+    and how many tasks it is holding — which is the number an operator wants
+    when somebody says the reconstruction is slow."""
+    if not base:
+        return Check(name="nodeodm", state=ABSENT,
+                     detail="no photogrammetric engine on this node "
+                            "(set NODEODM_URL to watch one)")
+    status, payload, error = _fetch(base.rstrip("/") + "/info", expect_json=True)
+    target = _host_of(base)
+    if error:
+        return Check(name="nodeodm", state=UNREACHABLE, target=target,
+                     detail=f"the engine did not answer — {error}")
+    if status != 200:
+        return Check(name="nodeodm", state=DEGRADED, target=target,
+                     detail=f"the engine answered {status}")
+    facts = {}
+    if isinstance(payload, dict):
+        for key in ("version", "taskQueueCount", "engine"):
+            if key in payload:
+                facts[key] = payload[key]
+    return Check(name="nodeodm", state=OK, target=target,
+                 detail="the engine answered /info", facts=facts)
+
+
 # ── the report ───────────────────────────────────────────────────────────────
 
 _STARTED_AT = time.time()
@@ -317,6 +376,9 @@ def node_health(*, version: str, s3dgraphy: Optional[str], asset_store: Any,
         _timed(lambda: _probe_iiif(env.get("EM_IIIF_INTERNAL")
                                    or env.get("EM_IIIF_INTERNAL_BASE")), "iiif"),
         _timed(lambda: _probe_catalog(env.get("EM_CATALOG_INTERNAL")), "stratigraph-catalog"),
+        _timed(lambda: _probe_field_assistant(env.get("EM_CHATBOT_INTERNAL")),
+               "stratigraph-chatbot"),
+        _timed(lambda: _probe_engine(env.get("NODEODM_URL")), "nodeodm"),
     ]
 
     # The node's verdict, and the rule is the pessimistic one: anything the node
@@ -358,3 +420,65 @@ def _versions(version: str, s3dgraphy: Optional[str]) -> Dict[str, Any]:
     except Exception:                              # noqa: BLE001
         out["emjson_schema"] = None
     return out
+
+
+# ── what this node OFFERS, for anybody who arrives ───────────────────────────
+#
+# A different question from both health endpoints above, and the reason it is
+# third: `/v1/health` is "is this process up and what can this build do",
+# `/v1/admin/health` is "what does StratiGraph Server depend on and how much is
+# it holding" — an infrastructure map, and operator-scoped for that reason. This
+# one is "what does this node OFFER, and where", which is what somebody who has
+# just been given an address needs before they know anything else.
+#
+# It is a REDUCTION of the probes above, not a second set of them: same functions,
+# same states, and then everything that makes the operator report a map is
+# dropped — no internal hostnames, no latencies, no bucket counts. What is left
+# is a name, whether it is answering, and a PUBLIC address when the deployment
+# published one. A service that is down appears down, which is the diagnostic
+# that was missing; a service whose public address nobody configured appears
+# WITHOUT a link rather than with a guessed one.
+
+#: The faces this node may offer BESIDE itself, and the two variables each needs:
+#: one to know whether it is alive (internal), one to say where a browser should
+#: go (public). Separate on purpose, and the same split as `EM_IIIF_INTERNAL` vs
+#: `EM_IIIF_PUBLIC`: one is a machine we dial, the other is a name we hand out.
+#: The console and the room browser are NOT here — this process serves them, so a
+#: page it also serves reaches them relatively and nobody has to configure that.
+OFFERED = (
+    ("stratigraph-catalog", "Catalogue", "EM_CATALOG_INTERNAL", "EM_CATALOG_PUBLIC"),
+    ("iiif", "Images (IIIF)", "EM_IIIF_INTERNAL", "EM_IIIF_PUBLIC"),
+    ("stratigraph-chatbot", "Field assistant", "EM_CHATBOT_INTERNAL",
+     "EM_FIELD_ASSISTANT_URL"),
+    ("nodeodm", "Photogrammetric engine", "NODEODM_URL", ""),
+)
+
+_PROBES: Dict[str, Callable[[Optional[str]], Check]] = {
+    "stratigraph-catalog": _probe_catalog,
+    "iiif": _probe_iiif,
+    "stratigraph-chatbot": _probe_field_assistant,
+    "nodeodm": _probe_engine,
+}
+
+
+def node_services(*, environ: Optional[Dict[str, str]] = None
+                  ) -> List[Dict[str, Any]]:
+    """What this node offers, reduced to what is safe to show anybody.
+
+    Returns one entry per face: `name`, `label`, `state`, `url` and one sentence.
+    `url` is empty when the deployment named no public address — and the page
+    then shows the service without a link, because a guessed path is a button
+    that 404s and a lie about where things are.
+    """
+    env = environ if environ is not None else os.environ
+    offered: List[Dict[str, Any]] = []
+    for name, label, internal_var, public_var in OFFERED:
+        check = _timed(lambda p=_PROBES[name], v=internal_var: p(env.get(v)), name)
+        offered.append({
+            "name": name,
+            "label": label,
+            "state": check.state,
+            "url": (env.get(public_var) or "").strip().rstrip("/") if public_var else "",
+            "detail": check.detail,
+        })
+    return offered

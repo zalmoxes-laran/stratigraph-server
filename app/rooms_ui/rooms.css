@@ -38,12 +38,26 @@
         color: var(--sg-info-ink); }
 .room-actions { display: flex; gap: .5rem; margin-top: .6rem; flex-wrap: wrap;
                 align-items: center; }
-.note { color: var(--sg-muted); font-size: .9em; }
+/* The console next door styles `.note` as a CALLOUT — padding, a background and
+   a left rule — which is right there, where a note is a message. Here a note is
+   a LINE ON A CARD (authors, a licence, an embargo, what is missing), and a
+   dozen callouts stacked inside a card read as a dozen warnings. So the callout
+   is stripped and only the quiet voice is kept.
+
+   `:empty` is not a nicety: `gate-note` and `create-note` are empty most of the
+   time, and an empty callout drew a grey bar under the sign-in button that
+   looked like a broken element. Measured on screen. */
+.note { color: var(--sg-muted); font-size: .9em;
+        padding: 0; border-left: 0; background: none; margin: .15rem 0; }
+.note:empty { display: none; }
 /* the signed-in identity is an ORCID: read digit by digit, so mono — the job
    the guidebook gives mono, and the same treatment the room ids get. */
 .who { font-family: var(--sg-font-mono); font-size: .82em; color: var(--sg-muted); }
 .warn { color: var(--sg-warn); }
-.hidden { display: none !important; }
+/* `.hidden` is GONE: this page uses the `hidden` ATTRIBUTE, which the vendored
+   theme now makes win (`[hidden]` in `brand/stratigraph-theme.css`). A local
+   class doing the same job would be a second answer to one question — and it is
+   the theme's answer, because all four faces need it. */
 .grow { flex: 1; }
 .link-row { margin-top: .55rem; display: flex; gap: .5rem; align-items: center; }
 .link-row code { flex: 1; font-family: var(--sg-font-mono); font-size: .78em;
@@ -63,3 +77,58 @@
                color: var(--sg-text); cursor: pointer; }
 .tool button + button { border-left: 1px solid var(--sg-line); }
 .tool button:hover { background: color-mix(in srgb, var(--sg-quiet) 30%, transparent); }
+
+/* ── the head, and the three zones ─────────────────────────────────────────
+   Still nothing here names a colour: the roles are the theme's. What this
+   section adds is only WHERE things go, and one shape — the service tile — that
+   the zones below reuse. */
+
+/* Which node this is, said before anything else is asked of the reader. */
+.node-line { font-family: var(--sg-font-mono); font-size: .84em;
+             color: var(--sg-muted); margin: 1rem 0 0; }
+.head .gate { margin: 6vh auto 3vh; }
+
+.zone { margin: 2.4rem 0; }
+.zone-title { font-family: var(--sg-font-display);
+              font-weight: var(--sg-weight-subtitle); font-size: 1.15rem;
+              margin: 0 0 .2rem; }
+/* The scope, beside the name and quieter than it: "dove si lavora adesso" is
+   what distinguishes this list from the two below it, and it is not a heading. */
+.zone-sub { font-family: var(--sg-font-sans); font-weight: 400;
+            font-size: .8rem; color: var(--sg-muted); margin-left: .5rem; }
+
+/* THE VERB — what you do with this card, and the one thing that tells a
+   monument from a study from a room at a glance. Quiet by design: it labels the
+   card, it is not a button. */
+.verb { font-family: var(--sg-font-mono); font-size: .74em;
+        letter-spacing: .06em; color: var(--sg-accent-quiet); }
+
+/* A service tile. `state-*` carries the dot's colour and nothing else — the
+   text says the state too, because a colour alone is not a message. */
+.services { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: .9rem; }
+.service { flex: 1 1 15rem; background: var(--sg-surface);
+           border: 1px solid var(--sg-line); border-radius: var(--sg-radius);
+           padding: .7rem .85rem; }
+.service-head { display: flex; align-items: center; gap: .45rem; }
+.service-name { font-weight: var(--sg-weight-subtitle); }
+.service-state { margin-left: auto; font-family: var(--sg-font-mono);
+                 font-size: .74em; color: var(--sg-muted); }
+.service .note { margin: .35rem 0 .2rem; font-size: .84em; }
+.dot { width: .55rem; height: .55rem; border-radius: 50%; flex: none;
+       background: var(--sg-muted); }
+.state-ok .dot { background: var(--sg-ok); }
+.state-degraded .dot { background: var(--sg-warn); }
+.state-unreachable .dot { background: var(--sg-warn); }
+.state-not-configured .dot { background: var(--sg-quiet); }
+/* A tool you install has NO dot: see `renderServices`. It is set apart by being
+   quieter than a service — the node is pointing, not reporting. */
+.state-install { background: none; border-style: dashed; }
+
+.more { font-family: var(--sg-font-mono); font-size: .8em;
+        color: var(--sg-info-ink); text-decoration: none; margin-right: .8rem; }
+.more:hover { text-decoration: underline; }
+
+/* The studies under a monument: the SAME card, indented, so the nesting is the
+   only thing that differs — a monument is its studies over time. */
+.sub-list { margin: .6rem 0 0 1.1rem; border-left: 2px solid var(--sg-line);
+            padding-left: .8rem; }
