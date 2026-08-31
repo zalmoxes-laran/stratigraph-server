@@ -407,6 +407,33 @@ class ResidentCorpus:
     def __init__(self, store: CorpusStore) -> None:
         self.store = store
         self._lock = threading.Lock()
+        # ── the PARSE, memoised. Not the content. ────────────────────────────
+        #
+        # The docstring above argues against a cached copy, and it is right: the
+        # corpus is consulted by the asset gate and a remembered licence is
+        # exactly the "remembered embargo" `get_asset` refuses to keep.
+        #
+        # THIS IS NOT THAT. What is kept here is the BUILT GRAPH, keyed by the
+        # `version` of the document it was built from — and it is only ever used
+        # when the document read on THIS request hashes to that same version. So
+        # a licence somebody edits invalidates it on the very next call: the
+        # bytes are always fresh, and what is saved is the work of turning them
+        # into a graph again.
+        #
+        # Why it is worth saving: at some tens of thousands of nodes the corpus
+        # is 10–30 MB. Building it once is a second; building it at every click
+        # is what drowns a mini-PC that is also grinding photogrammetry. The
+        # revalidation mechanism was already in the house — `version()` is the
+        # sha256 of the canonical JSON of the whole register, with the comment
+        # saying what it is for.
+        self._parsed_version: Optional[str] = None
+        self._parsed_graph: Any = None
+        self._parse_lock = threading.Lock()
+        #: how many times the parse was REUSED — the number the measurement of
+        #: the second access is about. Not a metric anybody polls: a fact this
+        #: object knows about itself, and the tests read it.
+        self.parse_hits = 0
+        self.parse_builds = 0
 
     # ── reading ──────────────────────────────────────────────────────────────
 
@@ -425,6 +452,38 @@ class ResidentCorpus:
         if not digests:
             return section
         return slice_for(section, digests)
+
+    def graph(self) -> Tuple[Any, str]:
+        """The corpus as a BUILT graph, and the version it was built from.
+
+        Parsed once per version. The document is re-read every time — the bytes
+        are never remembered — and the graph is rebuilt only when those bytes say
+        something different. See the note in `__init__` for why that is not the
+        cached copy this class refuses to keep.
+
+        The reader is the library's own (`api.load_emjson`), so the corpus is
+        turned into a graph the same way a room's document is: one reader, and
+        the two cannot drift into two readings of one format.
+        """
+        from s3dgraphy import api as em
+
+        document = self.read()
+        version = canonical_digest(document)
+        with self._parse_lock:
+            if version == self._parsed_version and self._parsed_graph is not None:
+                self.parse_hits += 1
+                return self._parsed_graph, version
+        # Built OUTSIDE the lock: a 30 MB parse holding a lock would make every
+        # other reader wait for it, and the worst case of two threads building
+        # the same graph once each is two parses — not a stall.
+        graph, _warnings = em.load_emjson({"header": {"format": "em.json",
+                                                     "version": "1.0"},
+                                           "graph": document})
+        with self._parse_lock:
+            self._parsed_version = version
+            self._parsed_graph = graph
+            self.parse_builds += 1
+        return graph, version
 
     def rights_for(self, digest: str, *, today: Any = None) -> Optional[Dict[str, Any]]:
         """What the corpus says about these bytes — or None if it never heard of

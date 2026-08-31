@@ -1100,6 +1100,75 @@ def get_corpus(
         sliced=bool(digests), store=corpus_describe(CORPUS_STORE))
 
 
+class NeighbourhoodOut(BaseModel):
+    """The DTC neighbourhood of one asset — its story, not the register."""
+
+    #: the digest that was asked about, echoed so an answer is self-describing
+    sha256: str
+    #: the node the walk started from, or None when the corpus never heard of
+    #: these bytes. Not an empty neighbourhood: «I do not know this file» and
+    #: «this file has no story» are different answers.
+    start: Optional[str] = None
+    #: the ceiling that was in force, and whether it bit
+    hops: int = 0
+    truncated: bool = False
+    #: which nodes were left unexpanded when it did — said, because a walk that
+    #: stopped and did not say so is a walk whose answer looks complete
+    frontier: List[str] = Field(default_factory=list)
+    #: one card per node reached, each with its `context`: the author, the
+    #: licence, the embargo that hang off THAT node
+    nodes: List[Dict[str, Any]] = Field(default_factory=list)
+    #: the chain edges inside the neighbourhood
+    edges: List[Dict[str, Any]] = Field(default_factory=list)
+    #: the corpus version this answer came out of, as the slice already reports
+    version: str = ""
+
+
+@v1.get("/corpus/neighbourhood", response_model=NeighbourhoodOut, tags=["corpus"])
+def corpus_neighbourhood(
+    request: Request,
+    sha256: str = Query(description="the asset's digest — what a store browser "
+                                    "has in its hand"),
+    hops: int = Query(default=0, ge=0, le=20,
+                      description="how far along the chain to walk; 0 means the "
+                                  "library's own default, which is a safety net "
+                                  "rather than a filter"),
+) -> NeighbourhoodOut:
+    """What made this file, what it went on to make, and through which events.
+
+    **The browser gets the neighbourhood, never the register.** That is the same
+    rule `GET /v1/corpus` already enforces — a whole read is curation, a slice by
+    digest is an ordinary gesture — and here it is not even a rule to enforce:
+    the answer is bounded by construction. The walk follows only the three DTC
+    chain edges (`dtc_had_input`, `dtc_had_output`, `dtc_derived_from`), and
+    anything reached by a `has_*` is an ATTRIBUTE of the node it hangs off rather
+    than a place to continue from.
+
+    Which is why there is no list of node types not to cross, and no ceiling on a
+    node's degree: degree changes by itself as the data grows, so the same
+    question would answer differently in March and in July. A new kind of context
+    — a site, a campaign, a funding body — is non-traversable **by
+    construction**, because it is not one of the three edges. Nothing to update.
+
+    The traversal itself is s3Dgraphy's (`s3dgraphy.dtc.neighbourhood`): the
+    vocabulary and the walk belong to the library, where EMStudio and EMtools
+    reach them too. This route reads the corpus once per version (see
+    `ResidentCorpus.graph`) and hands the graph over.
+    """
+    from s3dgraphy.dtc import neighbourhood_of_digest
+    from s3dgraphy.dtc.neighbourhood import DEFAULT_HOPS
+
+    authenticator.require_token(request)      # a digest is a citation; a name is not
+    digest = str(sha256 or "").strip()
+    if not digest:
+        raise HTTPException(status_code=400,
+                            detail="ask about a digest: sha256=<the asset's hash>")
+    graph, version = RESIDENT.graph()
+    answer = neighbourhood_of_digest(graph, digest,
+                                     hops=hops or DEFAULT_HOPS)
+    return NeighbourhoodOut(sha256=digest, version=version, **answer)
+
+
 @v1.post("/corpus/append", response_model=CorpusAppendOut, tags=["corpus"])
 def append_corpus(request: Request,
                   act: CorpusAct = Body(...)) -> CorpusAppendOut:
