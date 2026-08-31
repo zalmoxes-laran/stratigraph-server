@@ -471,6 +471,40 @@ function renderNodeLine() {
        node.auth !== "keycloak");
 }
 
+/** One capability a face declares about itself: which engine, and what it needs.
+ *
+ *  NOTHING HERE NAMES A CAPABILITY, and that is the whole property: this page
+ *  keeps no list of which capabilities exist in the world, so the day the field
+ *  assistant declares a third one it appears without anybody editing this file.
+ *  Same discipline as the services above — the node declares, the page composes.
+ *
+ *  `name` and `state` are the neighbour's own words and are shown RAW: the line
+ *  drawn on 2026-09-01 is that chrome is translated and what the NODE says is
+ *  not, and a translated capability name would need that list. `engine` is a
+ *  phrase the neighbour wrote; `needs` is the one word this page contributes.
+ *
+ *  A capability that is absent says WHAT WOULD CONFIGURE IT, because the whole
+ *  rule this serves is that a function you do not have is named rather than
+ *  hidden: «if the node has an AI you have functions; if it does not, you do not
+ *  — and the page says so».
+ */
+function capabilityRow(capability) {
+  const row = el("div", "capability");
+  const head = el("div", "capability-head");
+  head.append(el("span", "capability-name", capability.name || "?"));
+  if (capability.state) {
+    head.append(el("span", "capability-state", capability.state));
+  }
+  row.append(head);
+  if (capability.engine) row.append(el("p", "note", capability.engine));
+  const needs = (capability.missing || []).filter(Boolean);
+  if (needs.length) {
+    row.append(el("p", "note needs",
+                  t("here.capability.needs") + ": " + needs.join(" · ")));
+  }
+  return row;
+}
+
 /** What the node RUNS — states and all — and what you install yourself. The two
  *  halves are kept apart because they answer different questions: the node knows
  *  whether its own services are up, and cannot know anything about the tool on
@@ -492,6 +526,10 @@ function renderServices() {
     // and in the source language, and it is shown only when there is something
     // to diagnose. On a healthy service the state word is the whole answer.
     if (offer.state !== "ok") item.append(el("p", "note", offer.detail));
+    // …and WHAT THAT FACE CAN DO, when it declares it.
+    for (const capability of offer.capabilities || []) {
+      item.append(capabilityRow(capability));
+    }
     if (offer.url) {
       const link = el("a", "more", t("here.go"));
       link.href = offer.url;

@@ -345,6 +345,17 @@ class NodeOffer(BaseModel):
     #: that 404s and a claim about where things are that nobody made.
     url: str = ""
     detail: str = ""
+    #: What that face declares it CAN DO — the shape the neighbour publishes,
+    #: carried through. `List[Dict]` and NOT a typed model, deliberately: a typed
+    #: model would silently DROP a field the neighbour adds, and forwarding what
+    #: the neighbour declares is this route's entire job. The day the field
+    #: assistant declares a third capability it must arrive here, and reach the
+    #: page, without anybody editing either.
+    #:
+    #: Shaped down in `node_health._reduce_capabilities` — objects only, strings
+    #: and lists of strings only — so a public answer stays one this node can
+    #: vouch for.
+    capabilities: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class NodeTool(BaseModel):

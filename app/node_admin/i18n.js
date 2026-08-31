@@ -58,6 +58,11 @@ const STRINGS = {
     "here.yours": "on your own machine",
     "here.cannotKnow": "This node cannot know whether you have it — only where it is.",
     "here.download": "download →",
+    // A capability's NAME and STATE come from the neighbour and are shown raw:
+    // translating them would mean this page keeping a list of which capabilities
+    // exist in the world, and then a third one would not appear until somebody
+    // edited it. The only chrome here is this one word.
+    "here.capability.needs": "needs",
     // The service LABELS are chrome and are translated. Their `detail` is the
     // NODE talking (a probe's sentence) and is not: it is diagnostic prose in
     // the source language, like an answer from the field assistant's node, and
@@ -146,6 +151,7 @@ const STRINGS = {
     "here.yours": "sul tuo computer",
     "here.cannotKnow": "Questo nodo non può sapere se ce l'hai: può solo dirti dov'è.",
     "here.download": "scarica →",
+    "here.capability.needs": "serve",
     "service.stratigraph-catalog": "Catalogo",
     "service.iiif": "Immagini (IIIF)",
     "service.stratigraph-chatbot": "Assistente di campo",

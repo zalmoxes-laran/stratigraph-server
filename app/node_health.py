@@ -310,7 +310,13 @@ def _probe_field_assistant(base: Optional[str]) -> Check:
                      detail=f"the field assistant answered {status}")
     facts: Dict[str, Any] = {}
     if isinstance(payload, dict):
-        for key in ("version", "auth", "accepts_dictation"):
+        # `capabilities` is the field the field assistant grew on 2026-09-02:
+        # which transcription engine, which intent model, and — when absent —
+        # which variable would configure it. Forwarded and NOT re-formatted:
+        # inventing a second shape here would be the second place to keep
+        # aligned, which is the mistake `auth-config` and `/v1/node` exist to
+        # avoid. The neighbour declares; this carries.
+        for key in ("version", "auth", "accepts_dictation", "capabilities"):
             if key in payload:
                 facts[key] = payload[key]
     # A node whose assistant cannot attribute a dictation is not "ok": it is
@@ -439,6 +445,40 @@ def _versions(version: str, s3dgraphy: Optional[str]) -> Dict[str, Any]:
 # that was missing; a service whose public address nobody configured appears
 # WITHOUT a link rather than with a guessed one.
 
+def _reduce_capabilities(facts: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The neighbour's declared capabilities, carried through and shaped down.
+
+    GENERIC on purpose, and this is the property that matters: the day a service
+    declares a THIRD capability — or an existing one grows a field — it must
+    appear without anybody editing this function or the page. So nothing here
+    names `speech` or `intent`, and no key is enumerated.
+
+    What it does do is keep the answer publishable: entries must be objects, and
+    a value must be a string or a list of strings. A public route that forwarded
+    whatever a neighbour put in a nested structure would be a reduction in name
+    only — this one drops the shape it cannot vouch for rather than passing it on.
+    """
+    declared = facts.get("capabilities")
+    if not isinstance(declared, list):
+        return []
+    reduced: List[Dict[str, Any]] = []
+    for entry in declared:
+        if not isinstance(entry, dict):
+            continue
+        clean: Dict[str, Any] = {}
+        for key, value in entry.items():
+            if isinstance(value, str):
+                clean[str(key)] = value
+            elif isinstance(value, (list, tuple)):
+                clean[str(key)] = [str(item) for item in value
+                                   if isinstance(item, (str, int, float))]
+            elif isinstance(value, bool) or value is None:
+                clean[str(key)] = value
+        if clean:
+            reduced.append(clean)
+    return reduced
+
+
 #: The faces this node may offer BESIDE itself, and the two variables each needs:
 #: one to know whether it is alive (internal), one to say where a browser should
 #: go (public). Separate on purpose, and the same split as `EM_IIIF_INTERNAL` vs
@@ -480,5 +520,9 @@ def node_services(*, environ: Optional[Dict[str, str]] = None
             "state": check.state,
             "url": (env.get(public_var) or "").strip().rstrip("/") if public_var else "",
             "detail": check.detail,
+            # …and what that face declares it CAN DO. Empty for a service that
+            # declares nothing, which is most of them: this route publishes what
+            # neighbours say about themselves and never a guess about them.
+            "capabilities": _reduce_capabilities(check.facts),
         })
     return offered
