@@ -115,7 +115,7 @@ fi
 # ── 5 · indirizzi + promemoria ───────────────────────────────────────────────
 cat <<EOF
 
-✔ FCN acceso${LOCAL_S3D:+ (s3Dgraphy locale)}. Caddy serve: ${EM_SITE}
+✔ FCN acceso$( [ "$LOCAL_S3D" = "yes" ] && echo " (s3Dgraphy locale)" ). Caddy serve: ${EM_SITE}
   Su questo computer:   https://${PRIMARY}:${HTTPS_PORT}/em/v1/health
   Le mie stanze:        https://${PRIMARY}:${HTTPS_PORT}/em/rooms/
   Console del nodo:     https://${PRIMARY}:${HTTPS_PORT}/em/admin/

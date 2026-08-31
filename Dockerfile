@@ -3,12 +3,18 @@
 # Stateless by construction: no volume, no writable path the app depends on, no
 # state in the container. Scale it by adding replicas.
 #
-#   docker build -t em-server .
+#   docker build --build-arg S3DGRAPHY_VERSION=<version> -t em-server .
 #   docker run --rm -p 8000:8000 em-server
 #
-# Point it at a s3Dgraphy CHECKOUT instead of the published wheel while the
-# language and the service move together:
-#   docker build --build-arg S3DGRAPHY_SPEC="" -t em-server .   # then mount + pip -e
+# The build argument is REQUIRED — see the note on it below.
+#
+# To run against a s3Dgraphy CHECKOUT instead of the published wheel while the
+# language and the service move together, do NOT try to build without one: this
+# line used to say `--build-arg S3DGRAPHY_SPEC=""`, and pip refuses an empty
+# requirement ("Expected package name at the start of dependency specifier") —
+# measured, so the escape hatch never worked. The mechanism that does is the
+# dev-stack overlay, which mounts the checkout and puts it first on PYTHONPATH:
+#   ./dev-stack/fcn-up.sh --local-s3d
 #
 FROM python:3.12-slim AS base
 
@@ -22,29 +28,50 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # the first release carrying `s3dgraphy/api.py`, and the extras are what make
 # /v1/reproject and /v1/export-ttl work rather than 501.
 #
-# Build with --build-arg S3DGRAPHY_SPEC='s3dgraphy==1.6.0.dev12' for a slimmer,
-# less capable image: it starts and serves, and /v1/health reports which ops it
-# cannot do.
-ARG S3DGRAPHY_SPEC="s3dgraphy[geo,rdf]==1.6.0.dev12"
+# Build with --build-arg S3DGRAPHY_EXTRAS='' for a slimmer, less capable image:
+# it starts and serves, and /v1/health reports which ops it cannot do.
+# The s3Dgraphy this image installs: the VERSION from one place, the EXTRAS
+# from this service.
+#
+# `S3DGRAPHY_VERSION` has NO DEFAULT, and that is the whole point rather than an
+# omission. A default here would be a second spelling of a number that must agree
+# with `dev-stack/.env.dev`, and two spellings of one version are two versions the
+# day somebody edits one — which is exactly what happened: this image sat
+# on dev12 while the catalogue and the field assistant had drifted to dev16, in a
+# stack that shares em.json files and one semantic vocabulary. A build without the
+# argument REFUSES, the way `auth.py` refuses a half-configured realm, instead of
+# falling back to a pin nobody chose.
+#
+#   docker build --build-arg S3DGRAPHY_VERSION=<version> -t em-server .
+#
+# The EXTRAS stay here because they are legitimately this service's own: `[geo]`
+# and `[rdf]` are what make /v1/reproject and /v1/export-ttl work rather than
+# answer 501. A service may choose what it needs; it may not move the version by
+# itself.
+ARG S3DGRAPHY_VERSION
+ARG S3DGRAPHY_EXTRAS="geo,rdf"
 
 WORKDIR /srv/em-server
 
 # Dependencies first, in their own layer: application edits then rebuild in
 # seconds instead of re-resolving the world.
 COPY pyproject.toml README.md ./
-# The explicit rdflib/pyproj lines are GONE, and that is the point of dev12: the
-# previous release predated the `[geo]` extra, so `s3dgraphy[rdf,geo]` silently
-# skipped pyproj (pip warns about an unknown extra, it does not fail) and the
-# image answered `reproject: false`. dev12 declares both extras, so the pin alone
-# is enough — verified in the container, not assumed.
+# The explicit rdflib/pyproj lines are GONE, and the extras above are why: before
+# dev12 there was no `[geo]`, so `s3dgraphy[rdf,geo]` silently skipped pyproj (pip
+# WARNS about an unknown extra, it does not fail) and the image answered
+# `reproject: false`. From dev12 on both extras are declared, so naming them is
+# enough — verified in the container, not assumed.
 # PyJWT[crypto] is here and NOT behind a build arg on purpose: an image that
 # cannot verify a token is an image that would come up in the open dev mode on
 # the shared infrastructure. The auth dependency is not optional (P1).
 # `minio` is here and not behind a build arg for the same reason PyJWT is: an
 # image that cannot reach the object store would come up serving assets from a
 # container filesystem that disappears with the container. 400 KB.
-RUN pip install --upgrade pip && \
-    pip install "${S3DGRAPHY_SPEC}" "fastapi>=0.110" "uvicorn[standard]>=0.27" \
+RUN set -eu; \
+    : "${S3DGRAPHY_VERSION:?required — dev-stack/.env.dev holds it}"; \
+    spec="s3dgraphy${S3DGRAPHY_EXTRAS:+[${S3DGRAPHY_EXTRAS}]}==${S3DGRAPHY_VERSION}"; \
+    pip install --upgrade pip && \
+    pip install "$spec" "fastapi>=0.110" "uvicorn[standard]>=0.27" \
                 "PyJWT[crypto]>=2.8" "minio>=7.2"
 
 COPY app ./app

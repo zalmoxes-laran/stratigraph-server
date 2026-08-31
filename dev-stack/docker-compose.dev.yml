@@ -16,6 +16,25 @@
 
 name: em-dev
 
+# ── the graph language: ONE version for the whole stack, written ONCE ────────
+#
+# The three services install s3Dgraphy separately, and their EXTRAS legitimately
+# differ (the room server wants [geo,rdf] and pyproj with it; the field assistant
+# wants neither and should not ship them to a tablet's node). The VERSION is not
+# theirs to choose: they share em.json files and one semantic vocabulary, and the
+# day the differences stop being additive the symptom is a study the catalogue
+# indexes differently from how the server wrote it — a very long bug to chase.
+#
+# It was already true. Read out of the build log of 2026-08-30: the room server
+# on `==1.6.0.dev12`, the catalogue and the assistant drifted to dev16 behind two
+# `>=` specs that moved by themselves at every rebuild.
+#
+# EXACT, never `>=`. HERE and not in `.env.dev`, which is gitignored — a version
+# in a file a fresh clone does not have is a version nobody else has. An anchor
+# and not three copies, for the reason this whole change exists. The environment
+# may still override it for a deliberate experiment; what it cannot do is drift.
+x-s3dgraphy-version: &s3dgraphy_version "${S3DGRAPHY_VERSION:-1.6.0.dev16}"
+
 services:
   # =======================================================================
   # OBJECT STORE — where the assets actually live (content-addressed)
@@ -225,6 +244,10 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        # The extras stay in this service's Dockerfile; the version comes from
+        # the anchor at the top of this file, and is not a service's to choose.
+        S3DGRAPHY_VERSION: *s3dgraphy_version
     image: stratigraph-server:dev
     container_name: em-dev-server
     depends_on:
@@ -368,6 +391,10 @@ services:
     build:
       context: ../../stratigraph-chatbot
       dockerfile: Dockerfile
+      args:
+        # The extras stay in this service's Dockerfile; the version comes from
+        # the anchor at the top of this file, and is not a service's to choose.
+        S3DGRAPHY_VERSION: *s3dgraphy_version
     image: stratigraph-chatbot:dev
     container_name: em-dev-chatbot
     depends_on:
@@ -525,6 +552,10 @@ services:
     build:
       context: ../../stratigraph-catalog
       dockerfile: Dockerfile
+      args:
+        # The extras stay in this service's Dockerfile; the version comes from
+        # the anchor at the top of this file, and is not a service's to choose.
+        S3DGRAPHY_VERSION: *s3dgraphy_version
     image: stratigraph-catalog:dev
     container_name: em-dev-catalog
     depends_on:
