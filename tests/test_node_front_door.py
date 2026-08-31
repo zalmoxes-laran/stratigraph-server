@@ -147,7 +147,10 @@ def test_there_is_exactly_ONE_card_component():
     """A monument, a study and a room are the same object at three distances. A
     second card would be the road that multiplies."""
     assert len(re.findall(r"^function card\(", CODE, re.M)) == 1
-    for verb in ('"enter"', '"read"', '"explore"'):
+    # the three verbs are KEYS now, and they must stay three DIFFERENT words in
+    # every language: they are the only thing telling three look-alike cards
+    # apart (see `stratigraph-brand/GLOSSARY.md`).
+    for verb in ('t("rooms.verb")', 't("studies.verb")', 't("hdt.verb")'):
         assert verb in CODE, verb
 
 

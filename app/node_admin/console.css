@@ -229,3 +229,8 @@ dialog menu { padding: 0; margin: .6rem 0 0; display: flex; justify-content: fle
 /* the signed-out card: one button, and the paste box folded under it */
 details.small summary { cursor: pointer; color: var(--ink-soft); margin-top: .8rem; }
 details.small button { margin-top: .4rem; }
+
+/* The language picker, in the bar. Quiet: it is not an operator control. */
+.lang { font: inherit; font-size: .82em; padding: .2rem .4rem;
+        border-radius: 6px; border: 1px solid var(--line);
+        background: var(--card); color: var(--ink); }

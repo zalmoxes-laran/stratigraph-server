@@ -124,6 +124,13 @@
    quieter than a service — the node is pointing, not reporting. */
 .state-install { background: none; border-style: dashed; }
 
+/* The language picker: in the bar, one touch away, and quiet. A device that
+   changes hands changes language with it, and a settings screen is a place
+   nobody looks. */
+.lang { font: inherit; font-size: .82em; padding: .25rem .4rem;
+        border-radius: var(--sg-radius-sm); border: 1px solid var(--sg-line);
+        background: var(--sg-surface); color: var(--sg-text); }
+
 .more { font-family: var(--sg-font-mono); font-size: .8em;
         color: var(--sg-info-ink); text-decoration: none; margin-right: .8rem; }
 .more:hover { text-decoration: underline; }

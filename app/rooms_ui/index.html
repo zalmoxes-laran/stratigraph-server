@@ -29,7 +29,7 @@
   three distances — what endures, what was said about it, where it is being said
   now — so they share one component and differ by verb: esplora · leggi · entra.
 -->
-<html lang="en">
+<html lang="en"><!-- replaced at boot by the active locale -->
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -48,8 +48,12 @@
     <img class="mark" src="../brand/logo/favicon-deep-charcoal.svg" alt=""
          width="22" height="22">
     <span class="wordmark">StratiGraph</span>
-    <span class="sub">this node</span>
+    <span class="sub" id="app-sub">this node</span>
     <span class="grow"></span>
+    <!-- The language picker, in the bar and not behind a settings screen: it is
+         one touch, and each option is written IN its own language so somebody
+         who cannot read the current one still finds theirs. -->
+    <select id="lang" class="lang"></select>
     <span id="who" class="who"></span>
     <button id="btn-signout" class="ghost" hidden>Sign out</button>
   </header>
@@ -59,9 +63,8 @@
     <section class="head">
       <p id="node-line" class="node-line">…</p>
       <section id="gate" class="gate">
-        <h1>This node</h1>
-        <p id="gate-why">Sign in to see the rooms you work in, and to open one in a
-          tool.</p>
+        <h1 id="gate-title">This node</h1>
+        <p id="gate-why">Sign in to see the rooms you work in, and to open one in a tool.</p>
         <button id="btn-signin" class="primary" hidden>Sign in</button>
         <p id="gate-note" class="note"></p>
       </section>
@@ -69,15 +72,15 @@
 
     <!-- ── what is here: what the node RUNS, and what you install ─────────── -->
     <section class="zone">
-      <h2 class="zone-title">What is here</h2>
-      <p class="note">What this node runs, and what you run.</p>
+      <h2 class="zone-title" id="here-title">What is here</h2>
+      <p class="note" id="here-sub">What this node runs, and what you run.</p>
       <div id="services" class="services"></div>
       <div id="tools-install" class="services"></div>
     </section>
 
     <!-- ── the three scopes, same card, three verbs ───────────────────────── -->
     <section id="zone-rooms" class="zone" hidden>
-      <h2 class="zone-title">Rooms <span class="zone-sub">where the work is happening now</span></h2>
+      <h2 class="zone-title"><span id="rooms-title">Rooms</span> <span class="zone-sub" id="rooms-sub">where the work is happening now</span></h2>
       <div class="toolbar" id="create-row" hidden>
         <input id="new-room-title" type="text" placeholder="A new room's name…"
                autocomplete="off" maxlength="120">
@@ -88,13 +91,13 @@
     </section>
 
     <section id="zone-studies" class="zone" hidden>
-      <h2 class="zone-title">Studies <span class="zone-sub">what has been published</span></h2>
+      <h2 class="zone-title"><span id="studies-title">Studies</span> <span class="zone-sub" id="studies-sub">what has been published</span></h2>
       <div id="studies"></div>
       <p><a id="all-studies" class="more" href="#" hidden>See them all in the catalogue →</a></p>
     </section>
 
     <section id="zone-hdt" class="zone" hidden>
-      <h2 class="zone-title">Monuments <span class="zone-sub">the subject, which endures</span></h2>
+      <h2 class="zone-title"><span id="hdt-title">Monuments</span> <span class="zone-sub" id="hdt-sub">the subject, which endures</span></h2>
       <div id="hdt"></div>
     </section>
   </main>

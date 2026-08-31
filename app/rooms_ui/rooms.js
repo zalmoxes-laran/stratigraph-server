@@ -30,6 +30,11 @@
  */
 
 import * as oidc from "../admin/auth.js";
+// Six languages, English the source — the SAME dictionary the operator console
+// uses, imported the same way `auth.js` is (`../admin/…`, relative so the `/em`
+// prefix a proxy adds comes along). Two faces of one server, one dictionary:
+// two would drift, and the one that drifted would be the one nobody tested.
+import { LOCALE, mountPicker, t } from "../admin/i18n.js";
 
 /** The API, derived from where this page is served — the same reasoning (and the
  *  same measured trap) as the console's: at `/em/rooms/index.html` a naive strip
@@ -52,6 +57,9 @@ let refreshTimer = 0;
 let authConfig = null;
 let node = null;          // what /v1/node answered: this node's own description
 let me = null;
+//: the last room listing, kept ONLY so a change of language repaints without
+//: a round trip to the node. Never a source of truth: every render replaces it.
+let LAST_ROOMS = null;
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, className, text) => {
@@ -107,8 +115,7 @@ function scheduleRefresh(seconds) {
   refreshTimer = window.setTimeout(async () => {
     const result = await oidc.refresh(authConfig, refreshToken);
     if (!result.ok) {
-      note($("gate-note"), `Your session could not be refreshed (${result.error}).`,
-           true);
+      note($("gate-note"), t("session.notRefreshed", { error: result.error }), true);
       return;
     }
     token = result.token;
@@ -172,13 +179,14 @@ function toolGroup(label, doors) {
 // ── zone 1 · the rooms — where the work is happening now ────────────────────
 
 function renderRooms(rooms) {
+  LAST_ROOMS = rooms;
   const host = $("rooms");
   host.innerHTML = "";
   const live = (rooms || []).filter((r) => !r.archived_at);
   $("zone-rooms").hidden = false;
   if (!live.length) {
     host.append(el("p", "note",
-      "No rooms yet. Make one above — you will be its owner."));
+      t("rooms.none")));
     return;
   }
   for (const room of live) host.append(roomCard(room));
@@ -189,11 +197,11 @@ function roomCard(room) {
     title: room.title || room.room_id,
     id: room.room_id,
     tag: room.your_role || "—",
-    verb: "enter",
+    verb: t("rooms.verb"),
     // REPORTED, never hidden: a workspace whose container was moved still
     // exists, and the honest answer is the name of what is missing.
     notes: (room.missing_refs || []).length
-      ? [`container not in the store: ${room.missing_refs.join(", ")}`] : [],
+      ? [t("rooms.missingRefs", { refs: room.missing_refs.join(", ") })] : [],
     build(actions, said, box) {
       // The three consumers, from the server's own list (`handoff.CONSUMERS`).
       // Written out rather than looped from the answer because the answer
@@ -202,13 +210,13 @@ function roomCard(room) {
       for (const [tool, label] of [["emstudio", "EMStudio"],
                                    ["blender", "EMtools"],
                                    ["chatbot", "Field assistant"]]) {
-        const group = toolGroup(label, [["desktop",
-          `Open ${label} on this machine (stratigraph:// handler)`,
+        const group = toolGroup(label, [[t("door.desktop"),
+          t("door.desktop.title", { tool: label }),
           () => void openIn(room, tool, box, said)]]);
         group.dataset.tool = tool;
         actions.append(group);
       }
-      const copy = el("button", "ghost", "Copy link");
+      const copy = el("button", "ghost", t("door.copy"));
       copy.addEventListener("click", () => void copyLink(room, said));
       actions.append(copy);
       // Asked once, up front, so the browser doors are there before anybody
@@ -232,8 +240,8 @@ async function addBrowserDoors(room, box) {
     if (!target.browser) continue;          // no web build: no button, no lie
     const group = box.querySelector(`.tool[data-tool="${tool}"]`);
     if (!group || group.querySelector(".browser")) continue;
-    const button = el("button", "browser", "browser");
-    button.title = `Open ${target.label} in a new tab (${target.browser})`;
+    const button = el("button", "browser", t("door.browser"));
+    button.title = t("door.browser.title", { tool: target.label, url: target.browser });
     button.addEventListener("click", () => {
       // A plain navigation with the same two parameters the scheme carries and
       // the same absence of a token: the web build signs itself in.
@@ -263,9 +271,8 @@ async function openIn(room, tool, box, said) {
   window.setTimeout(() => {
     window.removeEventListener("blur", onBlur);
     if (left) return;
-    note(said,
-         `Nothing opened — no handler for ${targets.scheme.split(":")[0]}:// `
-         + `on this machine. Copy the link and open it inside the tool.`, true);
+    note(said, t("door.nothingOpened",
+                 { scheme: targets.scheme.split(":")[0] }), true);
   }, 1800);
 }
 
@@ -275,7 +282,7 @@ async function copyLink(room, said) {
   catch (error) { note(said, error.message, true); return; }
   try {
     await navigator.clipboard.writeText(targets.web);
-    note(said, "Link copied — it carries no token.");
+    note(said, t("door.copied"));
   } catch { note(said, targets.web); }
 }
 
@@ -300,8 +307,7 @@ async function loadStudies(base) {
     // and the zone vanished with no way to tell that from "no studies yet".
     $("zone-studies").hidden = false;
     $("studies").replaceChildren(el("p", "note warn",
-      `The catalogue at ${base} did not answer this page — ${error.message}. `
-      + `On this node it is reachable, but not from a browser on this origin.`));
+      t("catalog.silent", { base, error: error.message })));
     return;
   }
   const studies = (answer.studies || []).slice(0, 8);
@@ -321,12 +327,13 @@ function studyCard(base, study) {
     title: study.title || study.id,
     id: study.em_id || "",
     tag: study.visibility || "",
-    verb: "read",
+    verb: t("studies.verb"),
     notes: [authors.join(" · "),
-            study.embargo_active ? `under embargo until ${study.embargo}` : "",
+            study.embargo_active
+              ? t("studies.embargo", { date: study.embargo }) : "",
             study.license_effective || ""],
     build(actions, said, box) {
-      const open = el("button", "", "open in…");
+      const open = el("button", "", t("studies.openIn"));
       open.addEventListener("click", () => void studyDoors(base, study, box, said));
       actions.append(open);
     },
@@ -346,16 +353,17 @@ async function studyDoors(base, study, box, said) {
     if (box.querySelector(`.tool[data-tool="${tool}"]`)) continue;
     const openers = [];
     if (target.scheme) {
-      openers.push(["desktop", "Open on the desktop (stratigraph:// handler)",
+      openers.push([t("door.desktop"), t("door.desktop.title", { tool }),
                     () => { showLink(box, target.scheme);
                             window.location.href = target.scheme; }]);
     }
     if (target.web) {
-      openers.push(["browser", `Open in a new tab (${target.web})`,
+      openers.push([t("door.browser"),
+                    t("door.browser.title", { tool, url: target.web }),
                     () => window.open(target.web, "_blank", "noopener")]);
     }
     if (target.emjson) {
-      openers.push(["em.json", "The container, to import by hand",
+      openers.push([t("door.emjson"), t("door.emjson.title"),
                     () => window.open(target.emjson, "_blank", "noopener")]);
     }
     if (!openers.length) continue;      // a tool with no door draws none
@@ -396,12 +404,12 @@ function monumentCard(base, group) {
   const studies = group.studies || [];
   const count = studies.length;
   return card({
-    title: group.label || group.name || group.hdt || group.hc2 || "unnamed",
+    title: group.label || group.name || group.hdt || group.hc2 || t("hdt.unnamed"),
     id: group.hc2 || group.hdt || "",
-    verb: "explore",
-    notes: [`${count} ${count === 1 ? "study" : "studies"}`],
+    verb: t("hdt.verb"),
+    notes: [t("hdt.studies" + (count === 1 ? ".one" : ".many"), { n: count })],
     build(actions, said, box) {
-      const show = el("button", "", "its studies");
+      const show = el("button", "", t("hdt.itsStudies"));
       show.addEventListener("click", () => {
         if (box.querySelector(".sub-list")) { box.querySelector(".sub-list").remove(); return; }
         const list = el("div", "sub-list");
@@ -413,18 +421,53 @@ function monumentCard(base, group) {
   });
 }
 
+// ── the screen, repainted in the active language ────────────────────────────
+//
+// One function, called at boot and on every change of language. It repaints the
+// STATIC labels; everything the page says at a moment is built with `t()` where
+// it is built, so it is already in the right language — except the three lists,
+// which are re-rendered from the data they already hold.
+function paintStrings() {
+  const set = (id, text) => { const n = $(id); if (n) n.textContent = text; };
+  document.documentElement.lang = LOCALE;
+  document.title = t("app.title") + " · StratiGraph";
+  set("app-sub", t("app.sub"));
+  set("gate-title", t("app.title"));
+  set("gate-why", t("gate.why"));
+  set("btn-signin", t("action.signin"));
+  set("btn-signout", t("action.signout"));
+  set("here-title", t("here.title"));
+  set("here-sub", t("here.sub"));
+  set("rooms-title", t("rooms.title"));
+  set("rooms-sub", t("rooms.sub"));
+  set("studies-title", t("studies.title"));
+  set("studies-sub", t("studies.sub"));
+  set("hdt-title", t("hdt.title"));
+  set("hdt-sub", t("hdt.sub"));
+  set("btn-create", t("rooms.create"));
+  set("all-studies", t("studies.all"));
+  const input = $("new-room-title");
+  if (input) input.placeholder = t("rooms.newName");
+  renderNodeLine();
+  renderServices();
+  // …and the three lists, from what they are already holding: a language change
+  // must not cost a round trip to the node.
+  if (LAST_ROOMS) renderRooms(LAST_ROOMS);
+  const catalog = catalogBase();
+  if (catalog && !$("zone-studies").hidden) { void loadStudies(catalog); void loadMonuments(catalog); }
+}
+
 // ── the head: which node is this, and what does it run ──────────────────────
 
 function renderNodeLine() {
   if (!node) {
-    note($("node-line"), "This node did not say who it is.", true);
+    note($("node-line"), t("node.silent"), true);
     return;
   }
   const where = node.public_base || window.location.origin;
-  const auth = node.auth === "keycloak"
-    ? "identities are verified"
-    : "identities are NOT verified (dev mode)";
-  note($("node-line"), `${node.service} ${node.version} · ${where} · ${auth}`,
+  const auth = t(node.auth === "keycloak" ? "node.auth.on" : "node.auth.off");
+  note($("node-line"), t("node.line", { service: node.service,
+                                        version: node.version, where, auth }),
        node.auth !== "keycloak");
 }
 
@@ -438,11 +481,19 @@ function renderServices() {
   for (const offer of node?.offers || []) {
     const item = el("div", `service state-${offer.state.replace(/ /g, "-")}`);
     const head = el("div", "service-head");
-    head.append(el("span", "dot"), el("span", "service-name", offer.label));
+    // The LABEL is chrome, so it is translated — with the node's own as the
+    // fallback, because a node may one day offer a face this page has no word
+    // for, and printing its name beats printing a key.
+    const label = t("service." + offer.name) || offer.label;
+    head.append(el("span", "dot"), el("span", "service-name", label));
     head.append(el("span", "service-state", offer.state));
-    item.append(head, el("p", "note", offer.detail));
+    item.append(head);
+    // …the DETAIL is not translated: it is the node's own sentence, diagnostic
+    // and in the source language, and it is shown only when there is something
+    // to diagnose. On a healthy service the state word is the whole answer.
+    if (offer.state !== "ok") item.append(el("p", "note", offer.detail));
     if (offer.url) {
-      const link = el("a", "more", "go →");
+      const link = el("a", "more", t("here.go"));
       link.href = offer.url;
       item.append(link);
     }
@@ -459,16 +510,15 @@ function renderServices() {
     // A grey dot beside four live ones would read as a fifth service that is
     // down.
     head.append(el("span", "service-name", tool.label));
-    head.append(el("span", "service-state", "on your own machine"));
+    head.append(el("span", "service-state", t("here.yours")));
     item.append(head);
-    item.append(el("p", "note",
-      "This node cannot know whether you have it — only where it is."));
+    item.append(el("p", "note", t("here.cannotKnow")));
     const row = el("p", "");
     if (tool.download) {
-      const a = el("a", "more", "download →"); a.href = tool.download; row.append(a);
+      const a = el("a", "more", t("here.download")); a.href = tool.download; row.append(a);
     }
     if (tool.manual) {
-      const a = el("a", "more", "manual →"); a.href = tool.manual; row.append(a);
+      const a = el("a", "more", t("here.manual")); a.href = tool.manual; row.append(a);
     }
     item.append(row);
     tools.append(item);
@@ -478,17 +528,20 @@ function renderServices() {
 // ── boot ────────────────────────────────────────────────────────────────────
 
 async function boot() {
+  // The language first, with its picker: everything after is drawn once, in the
+  // right language, instead of flickering through English.
+  document.documentElement.lang = LOCALE;
+  mountPicker($("lang"), paintStrings);
   // The node's own description first: everything after it is a decision that
   // needs it — where the catalogue is, whether a sign-in is even possible.
   node = await request("GET", "/node").catch(() => null);
   authConfig = await oidc.loadConfig(BASE).catch(() => null);
-  renderNodeLine();
-  renderServices();
+  paintStrings();
 
   if (authConfig && oidc.returningFromIdp()) {
     const result = await oidc.completeSignIn(authConfig);
     if (result.ok) adoptSession(result);
-    else note($("gate-note"), `Sign-in did not complete: ${result.error}`, true);
+    else note($("gate-note"), t("session.incomplete", { error: result.error }), true);
   }
 
   // The catalogue answers anonymous callers with the PUBLIC studies — not an
@@ -506,7 +559,7 @@ async function boot() {
   } catch (error) {
     if (error.status === 401 || error.status === 403) { showGate(); return; }
     note($("gate-note"),
-         `Cannot reach this node's API at ${BASE} — ${error.message}`, true);
+         t("gate.unreachable", { base: BASE, error: error.message }), true);
     showGate();
     return;
   }
@@ -519,16 +572,15 @@ function showGate() {
   $("btn-signin").hidden = !(authConfig && authConfig.enforcing
                              && authConfig.authorization_endpoint);
   if (!authConfig) {
-    note($("gate-note"),
-         "This node does not say how to sign in, so there is nobody to sign "
-         + "in as.", true);
+    note($("gate-note"), t("gate.noOidc"), true);
   } else if (!authConfig.enforcing) {
     // A node that checks nothing is not a node you sign in to: saying "sign in"
     // there would offer a button that cannot work.
-    note($("gate-note"),
-         "This node is in dev mode: it verifies no identity"
+    note($("gate-note"), t("gate.devMode")
          + (authConfig.missing?.length
-            ? `. Missing: ${authConfig.missing.join(" · ")}.` : "."), true);
+            ? ". " + t("gate.devMode.missing",
+                       { what: authConfig.missing.join(" · ") })
+            : "."), true);
   }
 }
 
@@ -553,7 +605,7 @@ async function enter(rooms) {
 async function createRoom() {
   const input = $("new-room-title");
   const title = (input.value || "").trim();
-  if (!title) { note($("create-note"), "A room needs a name.", true); return; }
+  if (!title) { note($("create-note"), t("rooms.needsName"), true); return; }
   // The id is derived from the name so a person never types two things that must
   // agree. Collisions are the SERVER's to refuse, and its sentence is shown.
   const room_id = title.toLowerCase().replace(/[^a-z0-9]+/g, "-")
@@ -561,14 +613,14 @@ async function createRoom() {
   try { await request("POST", "/rooms", { room_id, title }); }
   catch (error) { note($("create-note"), error.message, true); return; }
   input.value = "";
-  note($("create-note"), "Created — you are its owner.");
+  note($("create-note"), t("rooms.created"));
   renderRooms(await request("GET", "/rooms"));
 }
 
 // ── wiring ──────────────────────────────────────────────────────────────────
 
 $("btn-signin").addEventListener("click", async () => {
-  if (!authConfig) { note($("gate-note"), "This node has no OIDC configuration.", true); return; }
+  if (!authConfig) { note($("gate-note"), t("gate.noOidc"), true); return; }
   await oidc.signIn(authConfig);
 });
 // Signing out has to close the REALM's session, not only this tab. One signature

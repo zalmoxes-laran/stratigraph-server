@@ -36,10 +36,14 @@
     <img class="mark" src="../brand/logo/favicon-deep-charcoal.svg" alt=""
          width="22" height="22">
     <span class="wordmark">StratiGraph</span>
-    <span class="sub">node console</span>
+    <span class="sub" id="app-sub">node console</span>
     <span class="spacer"></span>
+    <!-- The language picker: one touch, each option in its own language. The
+         console's CHROME follows the reader; its modules' diagnostics stay in
+         the source language, because those are the node talking. -->
+    <select id="lang" class="lang"></select>
     <span id="who" class="who">…</span>
-    <button id="reload" class="ghost" title="Re-read everything from the node">↻</button>
+    <button id="reload" class="ghost">↻</button>
   </header>
 
   <div class="shell">
@@ -60,8 +64,8 @@
        not worth that. -->
   <dialog id="ask-token">
     <form method="dialog">
-      <h2>Operator token</h2>
-      <p class="muted">
+      <h2 id="token-title">Operator token</h2>
+      <p class="muted" id="token-why">
         This console reads the node's API with your bearer token. It is kept in
         memory for this tab only — nothing is stored.
       </p>

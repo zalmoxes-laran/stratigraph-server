@@ -16,6 +16,16 @@
  */
 
 import * as oidc from "./auth.js";
+// Six languages, English the source. The dictionary lives HERE and the front
+// door imports it, which is the arrow this codebase already draws: `rooms_ui`
+// imports `../admin/auth.js` and not the reverse. (It briefly pointed the other
+// way and 404'd, because the directory is `rooms_ui` while the mount is
+// `/rooms` — a cross-mount import that knows another mount's URL is a fact
+// waiting to be wrong.)
+//
+// What is localised here is the CHROME. The modules' diagnostics stay in the
+// source language, because a probe's sentence is the NODE talking, not the page.
+import { LOCALE, mountPicker, t } from "./i18n.js";
 
 const MODULES = [];
 let active = null;
@@ -129,7 +139,7 @@ export function say(message, kind = "info") {
 
 /** A deliberate action asks first, and asks with the NAME in it. */
 export function confirmNamed(what, name) {
-  return window.confirm(`${what}\n\n${name}\n\nThis is somebody's workspace. Continue?`);
+  return window.confirm(t("console.confirm", { what, name }));
 }
 
 function drawNav() {
@@ -167,7 +177,7 @@ async function whoami() {
     // where nothing shows it. A 404 here means the API is not where this page
     // thinks it is, and "Loading…" for ever is the worst way to learn that.
     panel.innerHTML = "";
-    say(`Cannot reach this node's API at ${BASE} — ${error.message}`, "bad");
+    say(t("console.unreachable", { base: BASE, error: error.message }), "bad");
     return undefined;                           // …and boot() stops, quietly
   }
 }
@@ -187,7 +197,7 @@ function scheduleRefresh(seconds) {
     if (!result.ok) {
       // Said, not swallowed: the next call would 401 and the page would look
       // broken for a reason that has nothing to do with the node.
-      say(`Your session could not be refreshed (${result.error}). Sign in again.`,
+      say(t("console.session.notRefreshed", { error: result.error }),
           "bad");
       return;
     }
@@ -246,13 +256,12 @@ async function enter(me) {
     // The refusal a person can act on: the capability is not something they can
     // give themselves, so the page says who can. Note what this is NOT: a
     // failure. The sign-in worked; this identity simply does not run the node.
-    say(`You are signed in${me.orcid ? " as " + me.orcid : ""} but you are not an `
-        + `operator of this node. Capability: ${me.capability}. Owning a room does `
-        + `not grant it — ask whoever runs this node.`, "bad");
+    say(t("console.notOperator", {
+      who: me.orcid ? " as " + me.orcid : "", capability: me.capability }), "bad");
     if (authConfig?.end_session_endpoint) {
       const out = document.createElement("button");
       out.className = "ghost";
-      out.textContent = "Sign out";
+      out.textContent = t("action.signout");
       out.addEventListener("click", () => {
         token = "";
         refreshToken = "";
@@ -271,22 +280,20 @@ async function enter(me) {
 
 /** The signed-out screen: one button, and the fallback under it. */
 function showSignIn() {
-  whoEl.textContent = "not signed in";
+  whoEl.textContent = t("console.notSignedIn");
   panel.innerHTML = "";
   const box = document.createElement("section");
   box.className = "card";
   const head = document.createElement("h2");
-  head.textContent = "Sign in";
+  head.textContent = t("action.signin");
   box.appendChild(head);
 
   if (authConfig?.enforcing && authConfig.authorization_endpoint) {
     const line = document.createElement("p");
     line.className = "muted";
-    line.textContent = `This node authenticates against ${authConfig.issuer}. `
-      + `You will come back here signed in — the token stays in this tab and is `
-      + `never stored.`;
+    line.textContent = t("console.signin.where", { issuer: authConfig.issuer });
     const button = document.createElement("button");
-    button.textContent = "Sign in with the node's realm";
+    button.textContent = t("console.signin.realm");
     button.addEventListener("click", () => void oidc.signIn(authConfig));
     box.append(line, button);
   } else {
@@ -294,22 +301,18 @@ function showSignIn() {
     line.className = "muted";
     // A "Sign in" that cannot work is worse than none: say which of the two
     // reasons it is, because they have different fixes.
-    line.textContent = authConfig
-      ? "This node enforces no authentication (dev-no-auth), so there is nothing "
-        + "to sign in to — reload, or use a token below if the node is behind "
-        + "something that does."
-      : "This node did not answer /v1/auth-config, so this console cannot tell "
-        + "where its realm is. Use a token below.";
+    line.textContent = t(authConfig ? "console.signin.devMode"
+                                    : "console.signin.silent");
     box.appendChild(line);
   }
 
   const advanced = document.createElement("details");
   advanced.className = "small";
   const summary = document.createElement("summary");
-  summary.textContent = "Paste a token instead (dev, or when the realm is down)";
+  summary.textContent = t("console.token.pasteInstead");
   const paste = document.createElement("button");
   paste.className = "ghost";
-  paste.textContent = "Paste a bearer token…";
+  paste.textContent = t("console.token.paste");
   paste.addEventListener("click", () => void askForToken());
   advanced.append(summary, paste);
   box.appendChild(advanced);
@@ -326,11 +329,33 @@ async function askForToken() {
   if (!token) return;
   const me = await whoami();
   if (!me) {
-    say("That token was not accepted by this node.", "bad");
+    say(t("console.token.refused"), "bad");
     return;
   }
   await enter(me);
 }
+
+/** The chrome, repainted in the active language. The modules redraw themselves
+ *  from the node, in the source language: see the note on the import above. */
+function paintStrings() {
+  const set = (id, text) => {
+    const n = document.getElementById(id); if (n) n.textContent = text;
+  };
+  document.documentElement.lang = LOCALE;
+  document.title = t("console.title");
+  set("app-sub", t("console.sub"));
+  set("token-title", t("console.token.title"));
+  set("token-why", t("console.token.why"));
+  set("token-ok", t("console.token.use"));
+  const reload = document.getElementById("reload");
+  if (reload) reload.title = t("console.reload");
+  const input = document.getElementById("token-input");
+  if (input) input.placeholder = t("console.token.paste");
+}
+
+document.documentElement.lang = LOCALE;
+mountPicker(document.getElementById("lang"), paintStrings);
+paintStrings();
 
 document.getElementById("reload").addEventListener("click", () => {
   if (active) show(active);
