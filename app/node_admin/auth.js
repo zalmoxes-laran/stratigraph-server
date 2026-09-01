@@ -84,11 +84,30 @@ function base64url(bytes) {
 }
 
 /** Leave for the IdP. Does not return — the browser navigates away. */
-export async function signIn(config) {
+/**
+ * Start a sign-in. `{silent: true}` asks the realm with `prompt=none`.
+ *
+ * WHY A SILENT ROUND EXISTS HERE, added 6 September 2026: the node's face used to
+ * be ONE page, so signing in was one click. The pages then separated by verb —
+ * vestibule, work, tools — and the access token lives in MEMORY (which is the
+ * right place: a token in web storage outlives the person at the keyboard). So
+ * walking from one door to the next asked for a sign-in again, and one click had
+ * become three. That would spend the property the split was for.
+ *
+ * `prompt=none` is the realm answering «you already have a session» without
+ * showing anybody anything. No session and it answers `login_required`, which is
+ * NOT a failure and must not be reported as one — the gate then says its normal
+ * sentence and the button is right there.
+ *
+ * The caller is responsible for trying it AT MOST ONCE per door: a redirect loop
+ * is worse than a refusal. (Same ring, same trap, as EMStudio's `trySilentSignIn`.)
+ */
+export async function signIn(config, { silent = false } = {}) {
   const verifier = randomVerifier();
   const challenge = await challengeFor(verifier);
   const state = randomVerifier();
-  sessionStorage.setItem(VERIFIER_KEY, JSON.stringify({ verifier, state }));
+  sessionStorage.setItem(VERIFIER_KEY,
+                         JSON.stringify({ verifier, state, silent }));
   // …and where we were, so a person who signed in from a panel comes back to it
   sessionStorage.setItem(RETURN_KEY, window.location.hash || "");
   const url = new URL(config.authorization_endpoint);
@@ -99,6 +118,7 @@ export async function signIn(config) {
   url.searchParams.set("code_challenge", challenge);
   url.searchParams.set("code_challenge_method", "S256");
   url.searchParams.set("state", state);
+  if (silent) url.searchParams.set("prompt", "none");
   window.location.assign(url.toString());
 }
 
@@ -118,7 +138,10 @@ export async function completeSignIn(config) {
   const saved = readSaved();
   cleanUrl();
   if (error) {
-    return { ok: false, error: query.get("error_description") || error };
+    // `silent` travels with the ANSWER, read from our own record: a caller cannot
+    // otherwise tell «no session, as expected» from «the sign-in broke».
+    return { ok: false, error: query.get("error_description") || error,
+             code: error, silent: Boolean(saved && saved.silent) };
   }
   if (!code) return { ok: false, error: "no authorization code came back" };
   if (!saved) {

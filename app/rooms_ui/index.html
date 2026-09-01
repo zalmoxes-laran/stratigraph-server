@@ -1,6 +1,24 @@
 <!doctype html>
 <!--
-  THE NODE'S FRONT DOOR — and deliberately not a fifth face.
+  THE NODE'S FRONT DOOR — a VESTIBULE, since 6 September 2026.
+
+  It used to do four jobs at once: what runs on this node, the rooms, the
+  studies, the monuments. Whoever arrived for one walked through the other three.
+  The pages now separate by VERB (design note `EM_design_aprire-entrare-creare.md`):
+
+      consultare    the catalogue — `/catalog/ui/`, the published, citable
+      lavorare      `../work/`    — enter a room, create one, bring a file in
+      attrezzarsi   `../tools/`   — what runs here, and what you install
+      amministrare  `../admin/`   — the console, and the map below
+
+  …and THE DOOR STAYS ONE. Four equal pages would lose the property this page
+  had won: you arrive and you understand where everything is. So it says who you
+  are, how the node is, and where to go — and it SENDS: signed in, to the work;
+  not signed in, to the published, because that is what a visitor can have.
+
+  Measured before cutting anything: `/catalog/ui/` already lists the published
+  studies and already has the by-HDT view. «Somewhere else has it» is the
+  sentence people say about the thing that turns out to exist nowhere.
 
   This is the room browser (`/rooms/`) that grew a head. Before it, arriving at a
   node meant already knowing the addresses: `/em/rooms/`, `/catalog/ui/`,
@@ -70,35 +88,16 @@
       </section>
     </section>
 
-    <!-- ── what is here: what the node RUNS, and what you install ─────────── -->
+    <!-- ── WHERE TO GO ─────────────────────────────────────────────────────
+         Composed, not owned: the catalogue's address is the NODE's own
+         (`/v1/node`, `offers`) and is absent rather than guessed where no
+         catalogue was published; `amministrare` appears only for whoever
+         `/v1/admin/whoami` calls an operator — the same answer that gates the
+         map, so the two cannot disagree about who is one. -->
     <section class="zone">
-      <h2 class="zone-title" id="here-title">What is here</h2>
-      <p class="note" id="here-sub">What this node runs, and what you run.</p>
-      <div id="services" class="services"></div>
-      <div id="tools-install" class="services"></div>
-    </section>
-
-    <!-- ── the three scopes, same card, three verbs ───────────────────────── -->
-    <section id="zone-rooms" class="zone" hidden>
-      <h2 class="zone-title"><span id="rooms-title">Rooms</span> <span class="zone-sub" id="rooms-sub">where the work is happening now</span></h2>
-      <div class="toolbar" id="create-row" hidden>
-        <input id="new-room-title" type="text" placeholder="A new room's name…"
-               autocomplete="off" maxlength="120">
-        <button id="btn-create" class="primary">Create room</button>
-        <span id="create-note" class="note"></span>
-      </div>
-      <div id="rooms"></div>
-    </section>
-
-    <section id="zone-studies" class="zone" hidden>
-      <h2 class="zone-title"><span id="studies-title">Studies</span> <span class="zone-sub" id="studies-sub">what has been published</span></h2>
-      <div id="studies"></div>
-      <p><a id="all-studies" class="more" href="#" hidden>See them all in the catalogue →</a></p>
-    </section>
-
-    <section id="zone-hdt" class="zone" hidden>
-      <h2 class="zone-title"><span id="hdt-title">Monuments</span> <span class="zone-sub" id="hdt-sub">the subject, which endures</span></h2>
-      <div id="hdt"></div>
+      <h2 class="zone-title" id="go-title">Where to go</h2>
+      <p class="note" id="go-sub">This node, and what you came for.</p>
+      <div id="destinations" class="destinations"></div>
     </section>
 
     <!-- ── the NODE MAP · for whoever came to make this work, not to use it ──

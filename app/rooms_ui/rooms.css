@@ -202,18 +202,83 @@
 .st-degraded { border-color: var(--sg-warn); color: var(--sg-warn); }
 .st-unreachable { border-color: var(--sg-warn); color: var(--sg-warn); }
 .st-not-configured { opacity: .6; }
+/* OFF BY CHOICE — quiet, like `not configured`, and for the same reason: it is
+   not a fault. What sets it apart is that the row carries a sentence saying how
+   to switch it on, so the state is a decision on display rather than a gap. */
+.st-off-by-choice { opacity: .75; border-style: dashed; }
 .map-links {
   display: flex; align-items: center; gap: 8px;
   flex-wrap: wrap; margin-top: 5px;
 }
 .map-internal {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* the brand's mono, not a hand-written stack: the page already names one and a
+     second list is a second thing to keep in step */
+  font-family: var(--sg-font-mono);
   font-size: 11px;
-  opacity: .85;
+  color: var(--sg-muted);
   word-break: break-all;
 }
 /* a face with no configured address says so, quietly. It is rule 2 made
    visible: better an honest gap than a link that works on one laptop. */
-.map-nolink { font-style: italic; }
-.map-curl, .map-open { font-size: 11px; }
-.map-facts { margin-top: 4px; font-size: 11px; opacity: .8; }
+.map-nolink { font-style: italic; color: var(--sg-muted); }
+
+/* THE LINKS AND THE BUTTON TAKE THEIR COLOUR FROM THE THEME.
+   Measured in Chrome, from an operator's session: «open →» came out
+   `rgb(0, 0, 238)` — the browser's DEFAULT blue for an unstyled `<a>` — on a
+   dark ground, about 1.6:1. Unreadable.
+
+   How it happened is worth writing down, because it points at the real repair:
+   `test_brand_ui` rightly refused the literal colours I had written, they went,
+   and these anchors were never given the theme's token in exchange. Forbidding
+   an invented colour is only half a rule; the other half is noticing an element
+   that has NONE, which is the quietest way to get this wrong — and that half is
+   now `test_no_interactive_element_inherits_the_user_agent_s_colour`.
+
+   Same shape as the page's own `.more` links, so the map does not invent a
+   second idea of what a link looks like. */
+.map-open {
+  color: var(--sg-info-ink);
+  text-decoration: none;
+  font-size: 11px;
+}
+.map-open:hover { text-decoration: underline; }
+.map-curl {
+  color: var(--sg-text);
+  background: transparent;
+  border: 1px solid var(--sg-line);
+  border-radius: var(--sg-radius-sm);
+  padding: 1px 7px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.map-curl:hover { border-color: var(--sg-info); }
+.map-facts { margin-top: 4px; font-size: 11px; color: var(--sg-muted); }
+
+/* ── THE VESTIBULE'S DESTINATIONS ─────────────────────────────────────────────
+   Same shape as a service card, because it is the same kind of object — a thing
+   this node offers — and inventing a second card would make the page look like
+   two pages.
+
+   EVERY ONE IS AN ANCHOR, so every one needs a colour from the THEME: `a[href]`
+   carries `-webkit-link` from the user agent, a UA declaration beats
+   inheritance, and a link inside a coloured box therefore comes out the
+   browser's blue on a dark ground. That is not a hypothetical — it is what the
+   node map did on 5 September, measured at 1.46:1, and
+   `test_no_interactive_element_inherits_the_user_agent_s_colour` is what makes
+   this rule non-optional rather than remembered. */
+.destinations { display: flex; flex-wrap: wrap; gap: .6rem; }
+.dest { flex: 1 1 15rem; display: block; text-decoration: none;
+        color: var(--sg-text);
+        background: var(--sg-surface);
+        border: 1px solid var(--sg-line); border-radius: var(--sg-radius);
+        padding: .7rem .85rem; }
+.dest:hover { border-color: var(--sg-muted); }
+/* THE EMPHASIS IS A BORDER, not a fill: the guidebook's action colour measures
+   3.53 against white and this card carries a sentence at 14px, so it is a frame
+   here and a fill only where 3:1 applies. Same decision as the filled button. */
+.dest-primary { border-color: var(--sg-accent); border-width: 2px;
+                padding: calc(.7rem - 1px) calc(.85rem - 1px); }
+.dest-label { display: block; font-weight: var(--sg-weight-subtitle);
+              color: var(--sg-text); }
+.dest-sub { display: block; margin-top: .2rem; font-size: .84em;
+            color: var(--sg-muted); }

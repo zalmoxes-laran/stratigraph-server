@@ -18,6 +18,8 @@ can carry one in its userinfo, and this page is a screenshot waiting to happen.
 
 from __future__ import annotations
 
+import pytest
+
 import time
 
 from app import node_health as nh
@@ -156,3 +158,87 @@ def test_a_capped_count_says_that_it_is_capped(monkeypatch):
     assert check.facts["objects"] == 3
     assert check.facts["truncated"] is True
     assert check.facts["count_cap"] == 3
+
+
+# ── the engine: THREE answers, and only one of them is a fault ───────────────
+#
+# Measured on 5 September 2026: the dev stack set `NODEODM_URL` unconditionally
+# while the engine itself is `--profile engine`, so a plain run showed
+# `unreachable` with the neighbour's DNS error. An engine off BY CHOICE looking
+# exactly like a broken one — the inverse of the failure that looks like a
+# success, and it costs the same: it sends somebody hunting a fault that is not
+# there.
+
+def test_an_engine_nobody_named_is_not_configured():
+    check = nh.engine_check({})
+    assert check.state == nh.ABSENT
+    assert "NODEODM_URL" in check.detail
+
+
+def test_an_engine_switched_off_says_so_AND_is_not_dialled():
+    """Asking a service you have been told is off, so as to report that it did
+    not answer, is a fault invented by the person asking."""
+    check = nh.engine_check({"NODEODM_ENABLED": "false",
+                             "NODEODM_URL": "http://nodeodm:3000"})
+    assert check.state == nh.OFF
+    assert check.state != nh.UNREACHABLE
+    assert check.probe is None, "an engine that is off must not be probed"
+    assert check.facts.get("enabled") is False
+
+
+def test_an_engine_switched_off_carries_HOW_TO_TURN_IT_ON():
+    """The node names what it knows; the deployment supplies the sentence,
+    because only it knows whether that is a compose profile or an Ansible flag.
+    Visible debt is worth having for the things that are not faults too."""
+    said = nh.engine_check({"NODEODM_ENABLED": "0",
+                            "NODEODM_URL": "http://nodeodm:3000",
+                            "NODEODM_START_HINT": "run the engine profile"})
+    assert said.detail == "run the engine profile"
+    # …and with nobody supplying one, it still names the variable to flip
+    default = nh.engine_check({"NODEODM_ENABLED": "false"})
+    assert "NODEODM_ENABLED" in default.detail
+
+
+def test_an_engine_that_is_ON_and_silent_is_a_FAULT():
+    check = nh.engine_check({"NODEODM_ENABLED": "true",
+                             "NODEODM_URL": "http://nodeodm.invalid:3000"})
+    assert check.state == nh.UNREACHABLE
+    assert check.probe == "http://nodeodm.invalid:3000/info", \
+        "and it says what it asked, so the same question can be put by hand"
+
+
+@pytest.mark.parametrize("value, expected", [
+    (None, None), ("", None),
+    ("false", False), ("0", False), ("no", False), ("off", False), ("FALSE", False),
+    ("true", True), ("1", True), ("yes", True),
+])
+def test_the_flag_is_TRI_state(value, expected):
+    """«nobody said» is a different fact from «said no», which is the whole
+    reason this returns three things instead of two."""
+    assert nh._enabled(value) is expected
+
+
+def test_an_engine_off_by_choice_does_not_make_the_node_unwell():
+    """A service somebody switched off is not a reason to call the node
+    unhealthy. Painting it as one is how an operator learns to ignore the
+    verdict — the same argument the module makes for `not configured`."""
+    report = nh.node_health(version="x", s3dgraphy=None, asset_store=None,
+                            environ={"NODEODM_ENABLED": "false",
+                                     "NODEODM_URL": "http://nodeodm:3000"})
+    engine = [c for c in report["checks"] if c["name"] == "nodeodm"][0]
+    assert engine["state"] == nh.OFF
+    assert report["verdict"] == nh.OK
+
+
+def test_THE_TWO_FACES_AGREE_about_the_engine():
+    """`/v1/admin/health` and `/v1/node` must not tell two stories about one
+    service — and they did, the moment `off by choice` appeared: the map read the
+    flag and the reduction did not."""
+    env = {"NODEODM_ENABLED": "false", "NODEODM_URL": "http://nodeodm:3000"}
+    report = nh.node_health(version="x", s3dgraphy=None, asset_store=None,
+                            environ=env)
+    mapped = [c for c in report["checks"] if c["name"] == "nodeodm"][0]["state"]
+    reduced = [o for o in nh.node_services(environ=env)
+               if o["name"] == "nodeodm"][0]["state"]
+    assert mapped == reduced == nh.OFF
+

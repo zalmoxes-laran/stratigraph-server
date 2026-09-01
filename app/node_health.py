@@ -62,6 +62,22 @@ COUNT_CAP = int(os.environ.get("EM_HEALTH_COUNT_CAP", "5000"))
 
 OK, DEGRADED, UNREACHABLE, ABSENT = "ok", "degraded", "unreachable", "not configured"
 
+#: The FIFTH state, and it exists because four could not tell two very different
+#: facts apart: a service **nobody named** and a service **this deployment has
+#: deliberately switched off**.
+#:
+#: Measured on 5 September 2026: the dev stack set `NODEODM_URL` unconditionally
+#: while the engine itself is `--profile engine`, so a plain run showed
+#: `unreachable` with the neighbour's DNS error — an engine off BY CHOICE looking
+#: exactly like an engine that is broken. That is the inverse of the failure that
+#: looks like a success, and it costs the same: it sends somebody hunting a fault
+#: that is not there.
+#:
+#: The distinction comes from CONFIGURATION and never from reading the error: a
+#: connection refused says nothing about whether anybody meant the service to be
+#: running.
+OFF = "off by choice"
+
 
 @dataclass
 class Check:
@@ -416,10 +432,51 @@ def _probe_field_assistant(base: Optional[str]) -> Check:
                  facts=facts)
 
 
-def _probe_engine(base: Optional[str]) -> Check:
+def _enabled(value: Optional[str]) -> Optional[bool]:
+    """Tri-state, from a variable that may not be there at all.
+
+    `None` means nobody said — and «nobody said» is a different fact from «said
+    no», which is the whole reason this returns three things instead of two.
+    """
+    if value is None:
+        return None
+    text = value.strip().lower()
+    if not text:
+        return None
+    return text not in ("0", "false", "no", "off")
+
+
+def _probe_engine(base: Optional[str], *, enabled: Optional[bool] = None,
+                  hint: Optional[str] = None) -> Check:
     """NodeODM. `GET /info` is its own liveness answer and carries the version
     and how many tasks it is holding — which is the number an operator wants
-    when somebody says the reconstruction is slow."""
+    when somebody says the reconstruction is slow.
+
+    THREE ANSWERS BEFORE THE PROBE, and the order is the point:
+
+    * `NODEODM_ENABLED` says **no** → `off by choice`, and NOT DIALLED. Asking a
+      service you have been told is off, so as to report that it did not answer,
+      is a fault invented by the person asking;
+    * no address at all → `not configured`, as before: nobody named an engine;
+    * otherwise probe, and then `unreachable` really does mean a fault.
+
+    A row that is off by choice carries **how to switch it on**
+    (`NODEODM_START_HINT`, from the deployment that knows — a compose profile
+    here, an Ansible flag there). The node names what it knows and the deployment
+    supplies the sentence, which is the same division as everywhere else on this
+    endpoint. Visible debt is worth having for the things that are not faults too.
+    """
+    if enabled is False:
+        return Check(
+            name="nodeodm", state=OFF,
+            target=_host_of(base) if base else None,
+            browser=_console("EM_NODEODM_CONSOLE_URL"),
+            # NOT PROBED, so there is nothing to report having asked
+            probe=None,
+            detail=hint or ("this deployment has the photogrammetric engine "
+                            "switched off (NODEODM_ENABLED is false). Set it to "
+                            "true and start the service to turn it on."),
+            facts={"enabled": False})
     if not base:
         return Check(name="nodeodm", state=ABSENT,
                      detail="no photogrammetric engine on this node "
@@ -473,7 +530,7 @@ def node_health(*, version: str, s3dgraphy: Optional[str], asset_store: Any,
         _timed(lambda: _probe_catalog(env.get("EM_CATALOG_INTERNAL")), "stratigraph-catalog"),
         _timed(lambda: _probe_field_assistant(env.get("EM_CHATBOT_INTERNAL")),
                "stratigraph-chatbot"),
-        _timed(lambda: _probe_engine(env.get("NODEODM_URL")), "nodeodm"),
+        _timed(lambda: engine_check(env), "nodeodm"),
     ]
 
     # The node's verdict, and the rule is the pessimistic one: anything the node
@@ -486,6 +543,10 @@ def node_health(*, version: str, s3dgraphy: Optional[str], asset_store: Any,
             any(states.get(name) == UNREACHABLE for name in states):
         verdict = DEGRADED
     else:
+        # `OFF` lands here with `ABSENT`, and deliberately: a service somebody
+        # switched off is not a reason to call the node unwell. Painting it as one
+        # is how an operator learns to ignore the verdict — the same argument the
+        # module docstring makes for `not configured`.
         verdict = OK
 
     return {
@@ -582,11 +643,34 @@ OFFERED = (
     ("nodeodm", "Photogrammetric engine", "NODEODM_URL", ""),
 )
 
-_PROBES: Dict[str, Callable[[Optional[str]], Check]] = {
-    "stratigraph-catalog": _probe_catalog,
-    "iiif": _probe_iiif,
-    "stratigraph-chatbot": _probe_field_assistant,
-    "nodeodm": _probe_engine,
+def engine_check(env: Dict[str, str]) -> Check:
+    """The engine's state, decided ONCE and read by both faces.
+
+    `/v1/admin/health` (the operator's map) and `/v1/node` (the reduction the
+    front door composes from) must not disagree about the same service — and they
+    did the moment `off by choice` appeared: the map read the flag and the
+    reduction did not, so the same engine was «off by choice» on one face and
+    «unreachable» on the other. Two answers about one fact is the failure this
+    whole endpoint is arranged to avoid, so the decision lives here and the two
+    callers pass through it.
+    """
+    return _probe_engine(env.get("NODEODM_URL"),
+                         enabled=_enabled(env.get("NODEODM_ENABLED")),
+                         hint=(env.get("NODEODM_START_HINT") or "").strip() or None)
+
+
+#: Each probe as the REDUCTION calls it: given the environment, answer. The
+#: engine takes more than a URL (see `engine_check`), and hiding that behind a
+#: uniform shape is what keeps `node_services` from knowing which probe is
+#: special.
+_PROBES: Dict[str, Callable[[Dict[str, str]], Check]] = {
+    "stratigraph-catalog": lambda env: _probe_catalog(
+        env.get("EM_CATALOG_INTERNAL")),
+    "iiif": lambda env: _probe_iiif(env.get("EM_IIIF_INTERNAL")
+                                    or env.get("EM_IIIF_INTERNAL_BASE")),
+    "stratigraph-chatbot": lambda env: _probe_field_assistant(
+        env.get("EM_CHATBOT_INTERNAL")),
+    "nodeodm": engine_check,
 }
 
 
@@ -601,8 +685,13 @@ def node_services(*, environ: Optional[Dict[str, str]] = None
     """
     env = environ if environ is not None else os.environ
     offered: List[Dict[str, Any]] = []
-    for name, label, internal_var, public_var in OFFERED:
-        check = _timed(lambda p=_PROBES[name], v=internal_var: p(env.get(v)), name)
+    # `internal_var` is no longer read here: each probe takes the environment and
+    # looks up what it needs (`_PROBES`), which is what let the engine's extra
+    # facts in without this loop learning that one service is different. The
+    # column stays in `OFFERED` because it documents which variable configures
+    # each face, and that is worth reading next to the label.
+    for name, label, _internal_var, public_var in OFFERED:
+        check = _timed(lambda p=_PROBES[name]: p(env), name)
         offered.append({
             "name": name,
             "label": label,

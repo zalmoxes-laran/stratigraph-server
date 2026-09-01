@@ -79,13 +79,45 @@ def test_the_placeholders_survive_translation():
                 assert set(re.findall(r"\{(\w+)\}", value)) == wanted, f"{code}/{key}"
 
 
-def test_the_three_verbs_stay_three_DIFFERENT_words():
-    """They are the only thing distinguishing three cards that otherwise look
-    alike — see `stratigraph-brand/GLOSSARY.md`."""
+def test_the_verb_this_SERVER_still_shows_is_the_room_s():
+    """There used to be three, and this is the shape of the 6 September cut.
+
+    The three verbs — esplora · leggi · entra — told a monument, a study and a
+    room apart on one page that showed all three. The pages then separated by
+    verb: consultare went to the CATALOGUE (which has its own dictionary and its
+    own test) and this server kept lavorare. So one verb, and asserting three
+    here would be asserting two strings nothing renders.
+
+    The verbs are still THREE DIFFERENT WORDS in the catalogue's dictionary; what
+    moved is which file has to defend it.
+    """
     for code in COMPLETE:
-        verbs = {LOCALES[code][k] for k in
-                 ("rooms.verb", "studies.verb", "hdt.verb")}
-        assert len(verbs) == 3, f"{code}: {verbs}"
+        assert LOCALES[code].get("rooms.verb"), code
+    for gone in ("studies.verb", "hdt.verb", "studies.title", "hdt.title"):
+        assert gone not in LOCALES["en"], (
+            f"{gone} is back in this server's dictionary. If a page here shows "
+            "published studies again, that is a decision to make in the design "
+            "note first — the door doing four jobs is what the cut was for.")
+
+
+def test_HDT_is_a_TERM_and_reaches_every_locale_as_one():
+    """«Monuments» was the translation of a term, which the dictionary's own rule
+    forbids: US, DTC, HDT, ORCID do not translate. So the vestibule's door names
+    HDT, and it says HDT in all six languages.
+
+    In four of them it says so BY FALLING BACK to English, which is the honest
+    arrangement and not a gap: translating is the partners' work. What matters is
+    that no locale can quietly put a translated «monumento» in its place —
+    `test_no_domain_term_was_translated` is what stops that, and this is what
+    gives it something to bite on.
+    """
+    source = LOCALES["en"]["go.consult"]
+    assert "HDT" in source, source
+    assert "onument" not in source.lower(), (
+        "«monument» is back on the door: it was the translation of a term")
+    for code in EXPECTED:
+        shown = LOCALES[code].get("go.consult") or source     # the fallback
+        assert "HDT" in shown, f"{code}: {shown}"
 
 
 def test_no_domain_term_was_translated():

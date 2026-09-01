@@ -368,7 +368,23 @@ services:
       # three REST endpoints either way, which is why no code changes for that.
       # Unset on a node with no engine: `/v1/photogrammetry` then answers 503
       # saying so, rather than timing out against nothing.
-      NODEODM_URL: "http://nodeodm:3000"
+      # --- the photogrammetric engine: OFF unless you say otherwise -----------
+      #
+      # `NODEODM_URL` used to be set unconditionally while the engine itself is
+      # `--profile engine`, so a plain run showed the map a configured address
+      # that nobody was listening on: `unreachable`, with the neighbour's DNS
+      # error. An engine off BY CHOICE looking exactly like a broken one — which
+      # sends somebody hunting a fault that is not there.
+      #
+      # So the deployment says which it is, and the node has three answers
+      # instead of two (`app/node_health.py`: OFF · ABSENT · the probe's).
+      # `NODEODM_START_HINT` is the sentence the row carries when it is off: the
+      # node names what it knows, and the deployment — which is the only thing
+      # that knows whether this is a compose profile or an Ansible flag —
+      # supplies the words.
+      NODEODM_ENABLED: "${NODEODM_ENABLED:-false}"
+      NODEODM_URL: "${NODEODM_URL:-http://nodeodm:3000}"
+      NODEODM_START_HINT: "${NODEODM_START_HINT:-the engine is off in this stack (2.62 GB image). One command brings it up and tells the server: NODEODM_ENABLED=true docker-compose --env-file .env.dev -f docker-compose.dev.yml --profile engine up -d nodeodm stratigraph-server}"
       # The dev stack runs the LIBRARY YOU ARE EDITING: the sibling s3Dgraphy
       # checkout is mounted and put first on the path. If it is not there the
       # mount is an empty directory and the image's pinned wheel is used instead

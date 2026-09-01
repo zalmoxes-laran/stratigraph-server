@@ -1,0 +1,71 @@
+<!doctype html>
+<!--
+  ATTREZZARSI — what runs on this node, and what you install yourself.
+
+  One of the four verbs (design note `EM_design_aprire-entrare-creare.md`,
+  6 September 2026). It was the front door's «What is here» section, and it is
+  the half of the node a person needs exactly once — when they are setting
+  themselves up — which is the worst possible reason to make everybody else walk
+  past it.
+-->
+<html lang="en"><!-- replaced at boot by the active locale -->
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>This node · StratiGraph</title>
+  <link rel="icon" href="../brand/logo/favicon-deep-charcoal.svg" type="image/svg+xml">
+  <meta name="theme-color" content="#F1EBE3" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#2E2D2C" media="(prefers-color-scheme: dark)">
+  <!-- The console's stylesheet FIRST, because it is the one that imports the
+       StratiGraph theme (`../brand/…`, vendored and same-origin). One import
+       chain, so the faces of this server cannot drift apart. -->
+  <link rel="stylesheet" href="../admin/console.css">
+  <link rel="stylesheet" href="../rooms/rooms.css">
+</head>
+<body>
+  <header class="bar">
+    <img class="mark" src="../brand/logo/favicon-deep-charcoal.svg" alt=""
+         width="22" height="22">
+    <span class="wordmark">StratiGraph</span>
+    <span class="sub" id="app-sub">this node</span>
+    <span class="grow"></span>
+    <!-- The language picker, in the bar and not behind a settings screen: it is
+         one touch, and each option is written IN its own language so somebody
+         who cannot read the current one still finds theirs. -->
+    <select id="lang" class="lang"></select>
+    <span id="who" class="who"></span>
+    <button id="btn-signout" class="ghost" hidden>Sign out</button>
+  </header>
+
+  <main id="main">
+    <section class="head">
+      <p id="node-line" class="node-line">…</p>
+    </section>
+
+    <!-- NO GATE HERE, and it is not an omission: this page needs no session at
+         all. The node describes itself to anybody (`/v1/node`), and «sign in to
+         see the rooms you work in» on the page about what to install would be an
+         obstacle in front of a door that is already open. -->
+
+    <p class="note"><a class="more" href="../rooms/" id="back-door">← this node</a></p>
+
+    <!-- ── ATTREZZARSI · what this node runs, and what you run ───────────────
+         NOTHING HERE NAMES A SERVICE OR A CAPABILITY: the node declares
+         (`/v1/node`) and this page composes, so the day a fifth service or a
+         third capability appears it shows up without this file being edited.
+         A tool you install gets NO status dot — a dot means «I checked», and
+         this node cannot check whether EMStudio is on your laptop. -->
+    <section class="zone">
+      <h2 class="zone-title" id="here-title">What is here</h2>
+      <p class="note" id="here-sub">What this node runs, and what you run.</p>
+      <div id="services" class="services"></div>
+      <div id="tools-install" class="services"></div>
+    </section>
+  </main>
+
+  <!-- ONE SCRIPT for the three doors. Three copies of the session, the
+       token refresh and the language would be three places for the same
+       bug; each zone draws only where its host element exists. -->
+  <script type="module" src="../rooms/rooms.js"></script>
+</body>
+</html>

@@ -47,9 +47,16 @@ import { LOCALE, mountPicker, t } from "../admin/i18n.js";
  *      /em/rooms/  → /em/v1      behind the node's Caddy
  *      /rooms/     → /v1         bare, `uvicorn --port 8000`
  *      /em/rooms/index.html      the directory is still /em/rooms/
+ *
+ *  …AND FROM EVERY DOOR, not only from `/rooms/`. Since the pages separated by
+ *  verb (`/work/`, `/tools/`) the same script runs at three addresses, and a
+ *  regex that only knew one of them derived `/em/work/v1` — every call 404ing
+ *  behind a "Loading…", which is precisely the trap this comment already
+ *  described one spelling ago.
  */
+const DOORS = /(?:rooms|work|tools)\/$/;
 const BASE = new URL(".", window.location.href).pathname
-  .replace(/rooms\/$/, "").replace(/\/$/, "") + "/v1";
+  .replace(DOORS, "").replace(/\/$/, "") + "/v1";
 
 let token = "";
 let refreshToken = "";
@@ -60,6 +67,10 @@ let me = null;
 //: the last room listing, kept ONLY so a change of language repaints without
 //: a round trip to the node. Never a source of truth: every render replaces it.
 let LAST_ROOMS = null;
+//: whether the NODE said this caller is an operator (`/v1/admin/whoami`). The
+//: map is gated on it and so is the «amministrare» door, from the same answer —
+//: two gates asking twice is two gates that can disagree.
+let operator = false;
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, className, text) => {
@@ -163,28 +174,6 @@ function card({ title, id, tag, notes = [], verb, build }) {
   return box;
 }
 
-/**
- * A STRING out of a value that may be an entity, and never an object.
- *
- * The `[object Object]` on the monument cards was not a typo: it was `||` doing
- * exactly what it is for, with an object as the last operand. Anything this page
- * puts in a text node goes through here, so the failure mode cannot come back by
- * somebody adding one more fallback — which is how it would come back.
- *
- * `field` picks which part of an entity is wanted: its name to show, its id to
- * cite.
- */
-function entityText(value, field = "name") {
-  if (value == null) return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  if (typeof value === "object") {
-    const picked = value[field] ?? value.name ?? value.iri ?? value.id;
-    return typeof picked === "string" ? picked : "";
-  }
-  return "";
-}
-
 /** A tool NAME with up to two doors, the shape both scopes use. */
 function toolGroup(label, doors) {
   const group = el("span", "tool");
@@ -202,7 +191,13 @@ function toolGroup(label, doors) {
 
 function renderRooms(rooms) {
   LAST_ROOMS = rooms;
+  // ONE SCRIPT, THREE PAGES: each zone draws only where its host exists, and is
+  // silent where it does not. The alternative — a script per page — is three
+  // copies of the session, the token refresh and the language, i.e. three places
+  // for the same bug. The listing is still KEPT (`LAST_ROOMS`) so a language
+  // change repaints without a round trip even if this page has no list.
   const host = $("rooms");
+  if (!host) return;
   host.innerHTML = "";
   const live = (rooms || []).filter((r) => !r.archived_at);
   $("zone-rooms").hidden = false;
@@ -332,163 +327,98 @@ function showLink(box, text) {
   row.append(el("code", "", text));
 }
 
-// How many cards a zone shows before it starts saying "and N more". ONE number,
-// because two zones truncating at two different counts would be a difference
-// nobody decided.
-const SHOWN = 8;
-
-// ── zone 2 · the studies — what has been published ──────────────────────────
-
-async function loadStudies(base) {
-  let answer;
-  try {
-    answer = await call(`${base}/studies`);
-  } catch (error) {
-    // A catalogue this node NAMED and cannot reach is not the same as no
-    // catalogue: the second is silent (the zone never opens, see `catalogBase`),
-    // the first has to say so. Measured the hard way — on a node where the
-    // catalogue sits on another ORIGIN the browser refuses the request for CORS,
-    // and the zone vanished with no way to tell that from "no studies yet".
-    $("zone-studies").hidden = false;
-    $("studies").replaceChildren(el("p", "note warn",
-      t("catalog.silent", { base, error: error.message })));
-    return;
-  }
-  // A LIST THAT TRUNCATES SAYS SO, AND COUNTS. Measured on 4 September with
-  // real data: 37 studies in the catalogue, eight cards on the door, and Villa
-  // di Aiano simply not among them — with nothing on the page to suggest the
-  // door was being quiet. A visible debt is a debt somebody pays; a hidden one
-  // is a swamp, and the person who fell into this one spent a while looking for
-  // a study that was there all along.
-  const all = answer.studies || [];
-  const studies = all.slice(0, SHOWN);
-  if (!studies.length) return;
-  $("zone-studies").hidden = false;
-  const host = $("studies");
-  host.innerHTML = "";
-  for (const study of studies) host.append(studyCard(base, study));
-  if (all.length > studies.length) {
-    host.append(el("p", "note truncated",
-      t("studies.someOf", { shown: studies.length, total: all.length })));
-  }
-  const link = $("all-studies");
-  link.href = base;                 // the SERVICE, not a path we invented
-  link.hidden = false;
-}
-
-function studyCard(base, study) {
-  const authors = (study.authors || []).map((a) => a.name).filter(Boolean);
-  return card({
-    title: study.title || study.id,
-    id: study.em_id || "",
-    tag: study.visibility || "",
-    verb: t("studies.verb"),
-    notes: [authors.join(" · "),
-            study.embargo_active
-              ? t("studies.embargo", { date: study.embargo }) : "",
-            study.license_effective || ""],
-    build(actions, said, box) {
-      const open = el("button", "", t("studies.openIn"));
-      open.addEventListener("click", () => void studyDoors(base, study, box, said));
-      actions.append(open);
-    },
-  });
-}
-
-/** The doors of a study, ASKED — `<catalog>/study/{id}/open`, the twin of the
- *  rooms' one. Drawn on demand rather than up front because there are up to
- *  sixteen studies on this page and sixteen extra requests to draw a button
- *  nobody may press is a page that is slow for everybody. */
-async function studyDoors(base, study, box, said) {
-  let doors;
-  try { doors = await call(`${base}/study/${encodeURIComponent(study.id)}/open`); }
-  catch (error) { note(said, error.message, true); return; }
-  const row = box.querySelector(".room-actions");
-  for (const [tool, target] of Object.entries(doors.apps || {})) {
-    if (box.querySelector(`.tool[data-tool="${tool}"]`)) continue;
-    const openers = [];
-    if (target.scheme) {
-      // `followScheme`, the SAME mechanism a room's door uses: on a machine with
-      // no handler this said nothing whatsoever, while the room next to it said
-      // «Nothing opened». Measured on 4 September, and it is the second half of
-      // the same silence — the link itself named no catalogue, so even where a
-      // handler existed there was nothing to resolve.
-      openers.push([t("door.desktop"), t("door.desktop.title", { tool }),
-                    () => followScheme(target.scheme, box, said)]);
-    }
-    if (target.web) {
-      openers.push([t("door.browser"),
-                    t("door.browser.title", { tool, url: target.web }),
-                    () => window.open(target.web, "_blank", "noopener")]);
-    }
-    if (target.emjson) {
-      openers.push([t("door.emjson"), t("door.emjson.title"),
-                    () => window.open(target.emjson, "_blank", "noopener")]);
-    }
-    if (!openers.length) continue;      // a tool with no door draws none
-    const group = toolGroup(tool, openers);
-    group.dataset.tool = tool;
-    row.insertBefore(group, said);
-  }
-}
-
-// ── zone 3 · the monuments — the subject, which endures ─────────────────────
+// ── CONSULTARE lives in the CATALOGUE, and no longer here ────────────────────
 //
-// Same card, third source, third verb. The grouping is the CATALOGUE's
-// (`?view=hdt` → `group_by_hdt`): doing it here would be a second implementation
-// of an identity rule that already has one, and the one here would be the one
-// nobody tested.
+// The studies zone and the monuments zone were CUT on 6 September 2026, and it is
+// a cut and not a loss: `/catalog/ui/` already lists the published studies and
+// already has the by-HDT view — measured before removing anything, because
+// «somewhere else has it» is the sentence people say about the thing that then
+// turns out to exist nowhere.
+//
+// The reason is the design note's, not tidiness: the door did four jobs at once,
+// so whoever arrived for one walked through three. The pages separate by VERB —
+// consultare (the catalogue), lavorare (`/work/`), attrezzarsi (`/tools/`),
+// amministrare (`/admin/` and the map) — and the door became the vestibule that
+// says who you are, how the node is, and where to go.
+//
+// What went with them, measured after cutting rather than assumed: `loadStudies`,
+// `studyCard`, `studyDoors`, `loadMonuments`, `monumentCard` — some 150 lines
+// that had a second implementation one service away — AND TWO SYMBOLS THAT WERE
+// LEFT WITHOUT A CALLER:
+//
+//   `SHOWN`, the truncation cap. Only the two cut zones truncated; the rooms
+//     list never did (it filters the archived and draws the rest). Keeping the
+//     constant «because the rooms list truncates too» was a sentence I wrote and
+//     the grep disproved.
+//   `entityText`, the guard against `[object Object]` in a title. Its callers
+//     were the study and monument cards; a room's title is `room.title ||
+//     room.room_id`, two strings.
+//
+// DECLARED, because it is a defence this repo no longer has: the equivalent
+// guards for a published study's card — the object-in-a-title chain, the
+// truncation sentence with both numbers — do NOT exist in the catalogue's UI
+// suite (its tests cover the HDT view at the index and API level, and its page
+// for brand and locales). That is a debt in `stratigraph-catalog`, named here
+// rather than quietly inherited.
 
-async function loadMonuments(base) {
-  let answer;
-  // Silent here, and only here: `loadStudies` ran first against the same
-  // service and has already said whatever there was to say. Two identical
-  // complaints about one catalogue is noise.
-  try { answer = await call(`${base}/studies?view=hdt`); }
-  catch { return; }
-  // The group WITHOUT an HDT is dropped, and that is presentation and not
-  // visibility: `group_by_hdt` deliberately keeps studies with no digital twin
-  // under a `None` key ("which of my studies have no twin yet" is a curator's
-  // question), and that bucket is not a monument. It is answered in the
-  // catalogue, which is where a curator is.
-  const groups = (answer.groups || []).filter((g) => g.hdt || g.hc2);
-  if (!groups.length) return;
-  $("zone-hdt").hidden = false;
-  const host = $("hdt");
-  host.innerHTML = "";
-  const shown = groups.slice(0, SHOWN);
-  for (const group of shown) host.append(monumentCard(base, group));
-  if (groups.length > shown.length) {
-    host.append(el("p", "note truncated",
-      t("hdt.someOf", { shown: shown.length, total: groups.length })));
-  }
+// ── THE VESTIBULE · where to go, for whoever just arrived ────────────────────
+//
+// The property this door had conquered, and the reason the note refuses «four
+// equal pages»: you arrive and you understand where everything is. So the door
+// keeps an overview of the four verbs and owns none of them.
+//
+// IT STILL OWNS NOTHING. `consultare` is the CATALOGUE's address as the node
+// declares it (`/v1/node`, `offers`), and it is absent — not guessed — on a
+// deployment that published none. `amministrare` likewise. The two it names
+// itself, `lavorare` and `attrezzarsi`, are its own sibling pages: a page
+// knowing its own site is not the same thing as a page knowing where Keycloak
+// lives, and that is the whole distinction this file has defended.
+//
+// AND IT SENDS, rather than merely listing: signed in, the work is first;
+// not signed in, the published is — because that is what an unsigned visitor
+// can actually have, and an emphasis on a door that will refuse them is an
+// invitation to a locked room.
+
+function destinationCard({ label, sub, href, primary }) {
+  const box = el("a", primary ? "dest dest-primary" : "dest");
+  box.href = href;
+  box.append(el("span", "dest-label", label));
+  box.append(el("span", "dest-sub", sub));
+  return box;
 }
 
-function monumentCard(base, group) {
-  const studies = group.studies || [];
-  const count = studies.length;
-  return card({
-    // `label` comes from the CATALOGUE now (`app/index.py::group_label`), which
-    // is the side that has the name. This chain used to end at `group.hc2` —
-    // an ENTITY, `{id, name, iri}` — and printed `[object Object]` on the
-    // monument cards the moment real data arrived. A fallback that can be an
-    // object is not a fallback; `entityText` refuses to return one.
-    title: group.label || entityText(group.hc2) || entityText(group.hc1)
-           || t("hdt.unnamed"),
-    id: entityText(group.hc2, "id") || entityText(group.hc1, "id") || "",
-    verb: t("hdt.verb"),
-    notes: [t("hdt.studies" + (count === 1 ? ".one" : ".many"), { n: count })],
-    build(actions, said, box) {
-      const show = el("button", "", t("hdt.itsStudies"));
-      show.addEventListener("click", () => {
-        if (box.querySelector(".sub-list")) { box.querySelector(".sub-list").remove(); return; }
-        const list = el("div", "sub-list");
-        for (const study of studies) list.append(studyCard(base, study));
-        box.append(list);
-      });
-      actions.append(show);
-    },
-  });
+function renderDestinations() {
+  const host = $("destinations");
+  if (!host) return;                      // not the vestibule: nothing to draw
+  const catalog = catalogBase();
+  const signed = Boolean(token);
+
+  const doors = [
+    // LAVORARE — first when there is somebody to work as
+    { key: "work", href: "../work/", primary: signed,
+      label: t("go.work"), sub: t("go.work.sub") },
+    // CONSULTARE — first when there is not: the published is what a visitor has
+    catalog
+      ? { key: "consult", href: `${catalog}/ui/`, primary: !signed,
+          label: t("go.consult"), sub: t("go.consult.sub") }
+      // NOT A DEAD CARD. A node with no catalogue has nothing published to
+      // consult, and drawing the door anyway would send somebody to a 404 in the
+      // name of symmetry.
+      : null,
+    { key: "tools", href: "../tools/", primary: false,
+      label: t("go.tools"), sub: t("go.tools.sub") },
+    // AMMINISTRARE — only for whoever the node has told us is an operator. The
+    // map below is gated the same way and by the same answer, so the two cannot
+    // disagree about who is one.
+    operator
+      ? { key: "admin", href: "../admin/", primary: false,
+          label: t("go.admin"), sub: t("go.admin.sub") }
+      : null,
+  ].filter(Boolean);
+
+  // the emphasised one leads
+  doors.sort((a, b) => Number(b.primary) - Number(a.primary));
+  host.replaceChildren(...doors.map(destinationCard));
 }
 
 // ── zone 4 · THE NODE MAP — for whoever came to make this work ──────────────
@@ -517,11 +447,28 @@ function monumentCard(base, group) {
 // does not see an error: they do not see the zone, and the request is never made.
 
 async function loadNodeMap() {
+  if (!$("zone-map")) {
+    // NOT THE VESTIBULE. The question is still worth asking where the
+    // «amministrare» door is gated on the same answer — but only there: on a page
+    // with neither a map nor a destination to reveal, `/admin/whoami` is a
+    // request made for its side effect, and it answers 401 without a session.
+    // Measured in the browser: three red lines in a console on a page that needs
+    // no session at all, which teaches whoever opens that console to stop
+    // reading it.
+    if (!$("destinations")) return;
+    try {
+      const who = await request("GET", "/admin/whoami");
+      if (who && who.operator === true) { operator = true; renderDestinations(); }
+    } catch { /* not an operator, or no session: neither is a fault */ }
+    return;
+  }
   // `/admin/whoami` answers WITHOUT a 403 — that is why the console asks it
   // before drawing anything — so this is a question, not an attempt.
   let who = null;
   try { who = await request("GET", "/admin/whoami"); } catch { return; }
   if (!who || who.operator !== true) return;
+  operator = true;
+  renderDestinations();       // …and now the door for it exists, from this answer
 
   let report;
   try { report = await request("GET", "/admin/health"); }
@@ -548,6 +495,9 @@ async function loadNodeMap() {
       // anywhere, which is the difference from a neighbour's probe URL. The path
       // alone when it does not, which is still the useful half.
       internal: face.url || face.path,
+      // an entrance is always there to be asked — this server is answering right
+      // now, which is what serving this page means
+      curlable: Boolean(face.url),
       // …and a public entrance is reachable from wherever the operator is
       fromNode: false,
     }));
@@ -558,7 +508,16 @@ async function loadNodeMap() {
   for (const check of report.checks || []) {
     neighbours.append(mapRow({
       label: check.name, state: check.state, detail: check.detail,
-      browser: check.browser, internal: check.probe || check.target,
+      browser: check.browser,
+      // the address to SHOW: what the probe asked, or — for a service that was
+      // not asked at all — the address it WOULD use, which is what an operator
+      // wants to see next to «off by choice».
+      internal: check.probe || check.target,
+      // …but the CURL is offered only for a question that was actually put.
+      // Measured on the map: the engine row read «off by choice» and still
+      // offered `copy curl`, i.e. offered to demonstrate a failure that is not a
+      // fault — on a service we had just said nobody is running.
+      curlable: Boolean(check.probe),
       // a probe dials the node's own network — always
       fromNode: true,
       facts: check.facts,
@@ -575,7 +534,8 @@ async function loadNodeMap() {
  * the comparison: if the row and the terminal disagree, the row is lying, and
  * that is the bug worth finding.
  */
-function mapRow({ label, state, detail, browser, internal, facts, fromNode }) {
+function mapRow({ label, state, detail, browser, internal, facts,
+                  fromNode, curlable }) {
     const row = el("div", "map-row");
   const head = el("div", "map-row-head");
   head.append(el("span", "map-label", label));
@@ -600,7 +560,7 @@ function mapRow({ label, state, detail, browser, internal, facts, fromNode }) {
   }
   if (internal) {
     links.append(el("code", "map-internal", internal));
-    if (/^https?:\/\//.test(internal)) {
+    if (curlable && /^https?:\/\//.test(internal)) {
       const copy = el("button", "map-curl", t("map.curl"));
       copy.title = t("map.curlTitle");
       copy.addEventListener("click", async () => {
@@ -665,25 +625,22 @@ function paintStrings() {
   set("here-sub", t("here.sub"));
   set("rooms-title", t("rooms.title"));
   set("rooms-sub", t("rooms.sub"));
-  set("studies-title", t("studies.title"));
-  set("studies-sub", t("studies.sub"));
-  set("hdt-title", t("hdt.title"));
-  set("hdt-sub", t("hdt.sub"));
+  set("go-title", t("go.title"));
+  set("go-sub", t("go.sub"));
+  set("back-door", t("go.back"));
   set("map-title", t("map.title"));
   set("map-sub", t("map.sub"));
   set("map-entrances-head", t("map.entrances"));
   set("map-neighbours-head", t("map.neighbours"));
   set("btn-create", t("rooms.create"));
-  set("all-studies", t("studies.all"));
   const input = $("new-room-title");
   if (input) input.placeholder = t("rooms.newName");
   renderNodeLine();
   renderServices();
-  // …and the three lists, from what they are already holding: a language change
-  // must not cost a round trip to the node.
+  renderDestinations();
+  // …and the list, from what it is already holding: a language change must not
+  // cost a round trip to the node.
   if (LAST_ROOMS) renderRooms(LAST_ROOMS);
-  const catalog = catalogBase();
-  if (catalog && !$("zone-studies").hidden) { void loadStudies(catalog); void loadMonuments(catalog); }
 }
 
 // ── the head: which node is this, and what does it run ──────────────────────
@@ -740,6 +697,7 @@ function capabilityRow(capability) {
  *  your laptop. Two honest links beat a list that pretends to know. */
 function renderServices() {
   const host = $("services");
+  if (!host) return;              // «attrezzarsi» is its own page now
   host.innerHTML = "";
   for (const offer of node?.offers || []) {
     const item = el("div", `service state-${offer.state.replace(/ /g, "-")}`);
@@ -768,6 +726,7 @@ function renderServices() {
   }
 
   const tools = $("tools-install");
+  if (!tools) return;
   tools.innerHTML = "";
   for (const tool of node?.tools || []) {
     const item = el("div", "service state-install");
@@ -792,6 +751,29 @@ function renderServices() {
   }
 }
 
+
+// ── ONE SILENT ATTEMPT PER DOOR ──────────────────────────────────────────────
+//
+// The marker outlives the redirect because `sessionStorage` does, and it dies
+// with the tab, which is the right lifetime: a person who opens a new tab is a
+// person who may have signed in meanwhile.
+const SILENT_KEY = () => `sg.silenttry:${window.location.pathname}`;
+function silentTried() {
+  try { return sessionStorage.getItem(SILENT_KEY()) === "1"; } catch { return true; }
+}
+function markSilentTry() {
+  try { sessionStorage.setItem(SILENT_KEY(), "1"); } catch { /* private window */ }
+}
+/** Every door's marker, dropped — because a SUCCESS changes who this tab is, and
+ *  the markers exist to stop a loop for one identity, not to outlive it. */
+function forgetSilentTry() {
+  try {
+    for (const key of Object.keys(sessionStorage)) {
+      if (key.startsWith("sg.silenttry:")) sessionStorage.removeItem(key);
+    }
+  } catch { /* nothing to forget */ }
+}
+
 // ── boot ────────────────────────────────────────────────────────────────────
 
 async function boot() {
@@ -807,19 +789,53 @@ async function boot() {
 
   if (authConfig && oidc.returningFromIdp()) {
     const result = await oidc.completeSignIn(authConfig);
-    if (result.ok) adoptSession(result);
-    else note($("gate-note"), t("session.incomplete", { error: result.error }), true);
+    if (result.ok) {
+      adoptSession(result);
+      forgetSilentTry();        // the markers belong to the session that failed
+    } else if (result.silent) {
+      // EXPECTED, not broken: `prompt=none` with no session answers
+      // `login_required`. Shouting here would be an error message for something
+      // that went exactly as designed — the gate says its own sentence instead.
+      note($("gate-note"), "");
+    } else {
+      note($("gate-note"), t("session.incomplete", { error: result.error }), true);
+    }
+  } else if (authConfig && authConfig.enforcing && !token && !silentTried()) {
+    // ONE SILENT ATTEMPT PER DOOR PER TAB, and then never again.
+    //
+    // The split by verb cost this: the face used to be one page, so signing in
+    // was one click; with three doors and a token that lives in memory, walking
+    // between them asked again each time. Measured in Chrome — and it is the
+    // property the split exists for that it would have spent.
+    //
+    // Keyed by the door, because each door is its own `redirect_uri` and a marker
+    // shared between them would let one door's refusal silence another's chance.
+    markSilentTry();
+    await oidc.signIn(authConfig, { silent: true });
+    return;                     // navigating; the page comes back either way
   }
 
-  // The catalogue answers anonymous callers with the PUBLIC studies — not an
-  // empty list and not a 401 — so these two zones are honest before a sign-in.
-  const catalog = catalogBase();
-  if (catalog) { await loadStudies(catalog); await loadMonuments(catalog); }
+  // WHERE TO GO, before anybody knows who you are: the vestibule's whole job.
+  // The destinations do not depend on a session — an unsigned visitor is sent to
+  // the published, which is exactly what they can have.
+  renderDestinations();
 
   // A room listing needs only that you are SOMEBODY. So the question is simply
   // whether the listing answers — and if it does not, NO EMPTY LIST is shown:
   // "there is nothing here" would be a lie when the truth is "I do not know who
   // you are". That is the mute gate in a more elegant form, which makes it worse.
+  // …AND ONLY WHERE THERE IS A LIST TO DRAW. Asking `/rooms` from the tools page
+  // earned a 401 for a listing nothing would render — a request made for its side
+  // effect, and a 401 in the node's log that means nothing is a 401 somebody will
+  // one day chase.
+  if (!$("zone-rooms")) {
+    // No listing on this door — but «who you are» is this door's actual job, so
+    // it is asked here and not inherited from a request about rooms.
+    await showWhoYouAre();
+    renderDestinations();         // …and the emphasis follows the answer
+    await loadNodeMap();          // the operator's door still depends on it
+    return;
+  }
   let rooms = null;
   try {
     rooms = await request("GET", "/rooms");
@@ -835,7 +851,7 @@ async function boot() {
 
 function showGate() {
   $("gate").hidden = false;
-  $("zone-rooms").hidden = true;
+  if ($("zone-rooms")) $("zone-rooms").hidden = true;
   $("btn-signin").hidden = !(authConfig && authConfig.enforcing
                              && authConfig.authorization_endpoint);
   if (!authConfig) {
@@ -851,19 +867,66 @@ function showGate() {
   }
 }
 
+/**
+ * WHO YOU ARE — and this belongs to EVERY door, not to the one with a list.
+ *
+ * The bug it repairs, measured in Chrome with a live session: the vestibule went
+ * on saying «Sign in to see the rooms you work in», with no name and no way out,
+ * WHILE the node map and the «amministrare» door were on the same screen — both
+ * of which only appear for a signed-in operator. A page contradicting itself
+ * about whether you are signed in is worse than a page that does not know.
+ *
+ * The cause was mine: the vestibule stopped asking for the rooms listing (it has
+ * no list to draw), and `enter()` — which closed the gate, wrote the name and
+ * revealed the sign-out — hung off that listing.
+ *
+ * And the note says where it belongs: «il vestibolo non possiede niente: compone
+ * /v1/node e /v1/whoami». So the identity comes from `/v1/whoami`, which is the
+ * endpoint for exactly this question, and the listing stays on the page that
+ * shows a listing. Where the two disagreed, the note wins.
+ */
+async function showWhoYouAre() {
+  try { me = await request("GET", "/whoami"); } catch { me = null; }
+  const known = Boolean(me && (me.name || me.orcid));
+  if ($("gate")) $("gate").hidden = known;
+  if ($("who")) {
+    $("who").textContent = known
+      ? [me.name, me.orcid].filter(Boolean).join(" · ") : "";
+  }
+  if ($("btn-signout")) $("btn-signout").hidden = !(authConfig && token);
+  // …AND THE WAY IN, which is the other half of the same statement. Measured in
+  // a browser with no realm session: the vestibule said «sign in to see the
+  // rooms you work in» and offered NO button, because the reveal used to hang off
+  // `showGate()` and `showGate()` hangs off the rooms listing this door no longer
+  // asks for. A gate that names what is behind it and not how to pass is the mute
+  // gate this file already has a comment about, in a more elegant form — which
+  // makes it worse.
+  if ($("btn-signin")) {
+    $("btn-signin").hidden = known || !(authConfig && authConfig.enforcing
+                                        && authConfig.authorization_endpoint);
+  }
+  // …and a node that enforces NOTHING says so, instead of showing a button that
+  // cannot work — the same sentence `showGate` uses, from the same condition.
+  if (!known && authConfig && !authConfig.enforcing && $("gate-note")
+      && !$("gate-note").textContent) {
+    note($("gate-note"), t("gate.devMode")
+         + (authConfig.missing?.length
+            ? ". " + t("gate.devMode.missing",
+                       { what: authConfig.missing.join(" · ") })
+            : "."), true);
+  }
+  return known;
+}
+
 async function enter(rooms) {
-  $("gate").hidden = true;
-  try { me = await request("GET", "/whoami").catch(() => null); } catch { me = null; }
-  $("who").textContent = (me && (me.name || me.orcid))
-    ? [me.name, me.orcid].filter(Boolean).join(" · ") : "";
-  $("btn-signout").hidden = !(authConfig && token);
+  await showWhoYouAre();
   // The create box appears exactly when creating would be ACCEPTED, and no
   // sooner. MEASURED rather than assumed: `POST /v1/rooms` has no role gate —
   // any identity may create one and becomes its owner — so reaching this line
   // (the listing answered) is the same condition. If a gate is ever added, the
   // right shape is a field on `/v1/whoami`, not a guess here: a page that
   // decided for itself would be a page you can talk out of it.
-  $("create-row").hidden = false;
+  if ($("create-row")) $("create-row").hidden = false;
   renderRooms(rooms);
   // …and the operator's map, asked for only now: `enter` is reached when the
   // listing answered, i.e. when there IS a session to ask with.
@@ -889,7 +952,7 @@ async function createRoom() {
 
 // ── wiring ──────────────────────────────────────────────────────────────────
 
-$("btn-signin").addEventListener("click", async () => {
+$("btn-signin")?.addEventListener("click", async () => {
   if (!authConfig) { note($("gate-note"), t("gate.noOidc"), true); return; }
   await oidc.signIn(authConfig);
 });
@@ -897,14 +960,17 @@ $("btn-signin").addEventListener("click", async () => {
 // opens four tools on this origin; an exit that forgot a token here would leave
 // the device signed in on the other three, and the rule about a device that
 // changes hands would hold for one face out of four — which is not holding.
-$("btn-signout").addEventListener("click", () => {
+$("btn-signout")?.addEventListener("click", () => {
   const url = authConfig ? oidc.signOutUrl(authConfig) : "";
   token = ""; refreshToken = ""; window.clearTimeout(refreshTimer);
   if (url) window.location.href = url;
   else window.location.reload();
 });
-$("btn-create").addEventListener("click", () => void createRoom());
-$("new-room-title").addEventListener("keydown", (event) => {
+// …and the create box only exists on the work page, so the wiring asks first.
+// `?.` and not an `if`: a control that is not on this page is not an error, and
+// three scripts to avoid three question marks would be the worse trade.
+$("btn-create")?.addEventListener("click", () => void createRoom());
+$("new-room-title")?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") void createRoom();
 });
 

@@ -102,6 +102,121 @@ def test_no_text_sits_on_a_pure_accent():
                     f"{name}: text on a pure accent — {stripped}"
 
 
+# ── the other half of the colour rule: an element with NONE ──────────────────
+#
+# Forbidding an invented colour was only half a rule, and the missing half was
+# measured in Chrome on 5 September 2026: the node map's «open →» links came out
+# `rgb(0, 0, 238)` — the browser's default blue for an unstyled `<a>` — on a dark
+# ground, about 1.6:1. Unreadable.
+#
+# How it happened is the argument for this test existing. The literal colours in
+# that block were rightly refused by `test_neither_stylesheet_names_a_colour`,
+# they went, and those anchors were never given the theme's token in exchange. A
+# test that only says «not that colour» cannot notice «no colour», which is the
+# quietest way to get this wrong.
+#
+# WHY IT IS SOUND, and it turns on a detail of CSS rather than on taste: `a[href]`
+# and `button` carry a colour from the USER AGENT (`-webkit-link`, `buttontext`),
+# and a UA declaration beats inheritance. So an anchor or a button inside a
+# coloured container does NOT take the container's colour — it takes the browser's.
+# Every one of them needs a rule that reaches it, and «reaches it» is checkable
+# from the selectors.
+#
+# What it CANNOT see, said plainly: it matches on the last compound of a
+# selector, so it approximates the cascade rather than computing it. It will not
+# catch a rule that is overridden by a later, more specific one. That is a
+# narrower gap than the one it closes, and closing it properly would mean
+# shipping a CSS engine in a test.
+
+def _rules(sheet: str):
+    """(selector, declarations) for each block, comments stripped."""
+    text = re.sub(r"/\*.*?\*/", " ", sheet, flags=re.S)
+    for match in re.finditer(r"([^{}]+)\{([^{}]*)\}", text):
+        selector = " ".join(match.group(1).split())
+        if selector.startswith("@"):
+            continue
+        yield selector, match.group(2)
+
+
+def _colouring_targets(sheet: str) -> set:
+    """Tags and classes that some `color:` declaration reaches.
+
+    The LAST compound of each comma-separated selector is what the declaration
+    lands on: in `.tool button { color: … }` it is `button`, and that is what
+    colours every button inside a `.tool`.
+    """
+    targets = set()
+    for selector, body in _rules(sheet):
+        if not re.search(r"(?<!-)\bcolor\s*:", body):
+            continue
+        for part in selector.split(","):
+            last = re.split(r"[\s>+~]+", part.strip())[-1]
+            last = re.sub(r"::?[a-z-]+(\([^)]*\))?", "", last)   # pseudo off
+            tag = re.match(r"^[a-zA-Z][\w-]*", last)
+            if tag:
+                targets.add(tag.group(0).lower())
+            targets.update(re.findall(r"\.([\w-]+)", last))
+    return targets
+
+
+def _interactive_elements(page: str, scripts: list) -> list:
+    """(where, tag, classes) for every anchor and button these faces build.
+
+    Both sources, because most of this page is built at runtime: the markup for
+    what ships in the HTML, and the scripts for what the zones create — an
+    element that only exists after a fetch is exactly as visible to a reader as
+    one that was in the file.
+    """
+    found = []
+    for match in re.finditer(r"<(a|button)\b([^>]*)>", page, flags=re.I):
+        tag, attrs = match.group(1).lower(), match.group(2)
+        if tag == "a" and "href" not in attrs:
+            continue                      # an anchor with no href is not a link
+        classes = re.search(r'class="([^"]*)"', attrs)
+        found.append(("markup", tag, (classes.group(1).split() if classes else [])))
+    for name, code in scripts:
+        # the pages' own helper: `el("a", "map-open", …)` / `el("button", "x", …)`
+        for match in re.finditer(r'\bel\(\s*"(a|button)"\s*,\s*"([^"]*)"', code):
+            found.append((name, match.group(1), match.group(2).split()))
+        # …and the long form: createElement("a") then className = "…"
+        for match in re.finditer(
+                r'createElement\(\s*"(a|button)"\s*\)[\s\S]{0,400}?'
+                r'\.className\s*=\s*(?:"([^"]*)"|`([^`]*)`)', code):
+            raw = (match.group(2) or match.group(3) or "")
+            raw = re.sub(r"\$\{[^}]*\}", " ", raw)          # template holes out
+            found.append((name, match.group(1), raw.split()))
+    return found
+
+
+def test_no_interactive_element_inherits_the_user_agent_s_colour():
+    """Everything you can click takes its colour from the theme.
+
+    The bug this closes: «open →» in the node map was the browser's default blue
+    on a dark ground. Not a wrong colour — NO colour, which the other tests could
+    not see.
+    """
+    for name, (page_path, sheet_path) in FACES.items():
+        page = page_path.read_text(encoding="utf-8")
+        sheet = sheet_path.read_text(encoding="utf-8")
+        # the console sheet is imported by the room browser, so its rules reach
+        # both faces — the same relative import the test above pins
+        shared = (APP / "node_admin" / "console.css").read_text(encoding="utf-8")
+        theme = (BRAND / "stratigraph-theme.css").read_text(encoding="utf-8")
+        coloured = (_colouring_targets(sheet) | _colouring_targets(shared)
+                    | _colouring_targets(theme))
+        scripts = [(p.name, p.read_text(encoding="utf-8"))
+                   for p in sheet_path.parent.glob("*.js")]
+        for where, tag, classes in _interactive_elements(page, scripts):
+            reached = tag in coloured or any(c in coloured for c in classes)
+            assert reached, (
+                f"{name}: <{tag} class=\"{' '.join(classes)}\"> (from {where}) is "
+                f"not reached by any `color:` rule, so it takes the USER AGENT's "
+                f"— the browser's link blue or button grey, whatever the ground "
+                f"is. Give it a theme token; `--sg-info-ink` is the one for a "
+                f"link, `--sg-text` for a button."
+            )
+
+
 def test_a_filled_button_is_charcoal_because_burnt_cannot_carry_14px_text():
     """White on Burnt Orange is 3.53; Off-White on Deep Charcoal is 11.61. Burnt
     stays the guidebook's ACTION colour — as a fill at a size where 3:1 applies,
@@ -128,5 +243,13 @@ def test_the_static_mounts_revalidate_rather_than_go_stale():
     main = (APP / "main.py").read_text(encoding="utf-8")
     assert "class _FreshStatic(StaticFiles)" in main
     assert 'response.headers.setdefault("Cache-Control", "no-cache")' in main
-    assert main.count("_FreshStatic(directory=") == 3, \
-        "every static face must revalidate, not just the ones we remembered"
+    # EVERY static face, and not a count of the ones we remembered. The count was
+    # 3, then the pages separated by verb and it became 4 — so the test failed
+    # for a face that was correctly built, which is a test measuring the wrong
+    # thing. What actually matters is that no mount slips through with the plain
+    # class: a stylesheet that goes stale is invisible until somebody edits it and
+    # nothing changes on screen.
+    mounted = re.findall(r"app\.mount\(\s*[^,]+,\s*(\w+)\(directory=", main)
+    assert mounted, "no static mounts found — did `app.mount` change shape?"
+    assert set(mounted) == {"_FreshStatic"}, (
+        f"a static face is mounted without revalidation: {sorted(set(mounted))}")

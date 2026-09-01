@@ -2192,6 +2192,30 @@ async def create_room(body: RoomRefIn, request: Request) -> RoomOut:
             status_code=401,
             detail="creating a room needs an identity: its creator is its owner")
 
+    # ── UNA STANZA, UN GRAFO VIVO ─────────────────────────────────────────────
+    #
+    # The design note's rule that does not negotiate, and nothing enforced it
+    # until this was measured on 6 September 2026: a second room pointing at the
+    # first's container was accepted, opened the first's graph, took its own
+    # operations, and saved — leaving two files each declaring to hold the same
+    # graph, divergent, with nothing saying which one it is. A fork that never
+    # declared itself, and the note says a fork is legal precisely WHEN it says so.
+    #
+    # Refused, and the sentence names the room to enter instead: the point of the
+    # rule is that the live copy has one address, so being told that address is
+    # the whole remedy. (`primary_ref` is what becomes the live document; a second
+    # reference the session does not edit is not a second table.)
+    refs = [str(r) for r in (body.container_refs or [room_id]) if str(r)]
+    primary = refs[0] if refs else room_id
+    taken = rooms().room_already_on(primary, except_room=room_id)
+    if taken:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"the graph {primary!r} is already the live copy of the room "
+                    f"{taken!r} — one room, one live graph. Enter {taken!r} to "
+                    f"work on it, or create a room of your own with its own "
+                    f"container."))
+
     descriptor = rooms().create(room_id, title=body.title,
                                container_refs=body.container_refs or None,
                                created_by=orcid)
@@ -3057,6 +3081,31 @@ _ROOMS_UI = pathlib.Path(__file__).resolve().parent / "rooms_ui"
 if _ROOMS_UI.is_dir():
     app.mount("/rooms", _FreshStatic(directory=str(_ROOMS_UI), html=True),
               name="rooms-browser")
+
+# ── THE PAGES SEPARATE BY VERB (design note, 6 September 2026) ────────────────
+#
+# `/rooms/` used to do four jobs at once, so whoever arrived for one walked
+# through the other three. It is now the VESTIBULE — who you are, how the node
+# is, where to go — and two of the verbs are pages of their own:
+#
+#     /work/    lavorare      enter a room, create one, bring a file in
+#     /tools/   attrezzarsi   what runs here, and what you install
+#
+# The other two were already elsewhere: consultare is the CATALOGUE (measured:
+# `/catalog/ui/` already lists the published studies and already has the by-HDT
+# view) and amministrare is `/admin/`.
+#
+# MOUNTED AT THE TOP, not nested under `/rooms/`, and the reason is not
+# cosmetic: the pages share one script, and it derives the API's address by
+# stripping its own door from the path (`/em/work/` → `/em/v1`). Nested at
+# `/em/rooms/work/` that strip yields `/em/rooms/v1` and every call 404s behind a
+# "Loading…" — the exact trap `rooms.js` already carries a comment about, one
+# spelling later. The URL saying the verb is the smaller half of the reason.
+    for _verb in ("work", "tools"):
+        _page = _ROOMS_UI / _verb
+        if _page.is_dir():
+            app.mount(f"/{_verb}", _FreshStatic(directory=str(_page), html=True),
+                      name=f"door-{_verb}")
 
 # ── THE NODE'S OWN FACES, listed where they are MOUNTED ──────────────────────
 #

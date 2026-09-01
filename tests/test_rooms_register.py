@@ -151,7 +151,21 @@ def test_the_record_is_thin_and_keeps_no_member_list(client, enforcing):
 def test_a_room_references_one_container_or_two(client, enforcing):
     """A room is a WORKSPACE that references containers; a study is the published
     unit. So `container_refs` is a list — and a room with one behaves exactly as
-    every room did before the record existed."""
+    every room did before the record existed.
+
+    CHANGED on 6 September 2026, and the change is worth reading rather than
+    skipping: this test used to give BOTH rooms `scavo-a` as their first
+    reference. That is now refused, because the first reference is the room's LIVE
+    document and two rooms on one live graph is the thing the design note puts
+    among the rules that do not negotiate — measured until it hurt: two rooms
+    pointing at one container each took their own operations and each saved, and
+    the store ended with two files both claiming to hold the graph `scavo-a`.
+
+    The test's SUBJECT was never that: it is that a room may reference one
+    container or two, and that the live document comes from the first. So the
+    second room gets a first reference of its own, and every assertion the test
+    was making is still made.
+    """
     enforcing(ANNA)
     one = client.post("/v1/rooms", headers=AUTH,
                       json={"room_id": "uno", "container_refs": ["scavo-a"]})
@@ -160,9 +174,9 @@ def test_a_room_references_one_container_or_two(client, enforcing):
 
     two = client.post("/v1/rooms", headers=AUTH,
                       json={"room_id": "due", "title": "Due cantieri",
-                            "container_refs": ["scavo-a", "scavo-b"]})
+                            "container_refs": ["scavo-b", "scavo-a"]})
     assert two.status_code == 201
-    assert two.json()["container_refs"] == ["scavo-a", "scavo-b"]
+    assert two.json()["container_refs"] == ["scavo-b", "scavo-a"]
     assert two.json()["missing_refs"] == []
 
     # the live document comes from the PRIMARY reference — the one-container case
@@ -170,7 +184,11 @@ def test_a_room_references_one_container_or_two(client, enforcing):
     # editing in one session is declared as a follow-up, not pretended here)
     import asyncio
     room = asyncio.run(ws_module.ROOMS.get("due"))
-    assert set(room.document["graphs"]) == {"scavo-a"}
+    assert set(room.document["graphs"]) == {"scavo-b"}
+
+    # …and the SECOND reference is not a second table: `scavo-a` is `uno`'s live
+    # graph and stays so, which is why pointing at it as a non-primary is allowed
+    assert one.json()["container_refs"][0] == "scavo-a"
 
 
 def test_a_room_nobody_declared_still_works(instance):
@@ -487,3 +505,81 @@ def test_a_descriptor_is_read_back_as_it_was_written():
                                      "container_refs": "solo"}).container_refs == ["solo"]
     # …and a record with no refs falls back to the room's own name
     assert RoomDescriptor.from_dict({"room_id": "z"}).container_refs == ["z"]
+
+
+# ── UNA STANZA, UN GRAFO VIVO ────────────────────────────────────────────────
+#
+# The design note of 5 September 2026 puts it among the rules that do not
+# negotiate: «una stanza è LA copia viva… due stanze sullo stesso grafo vivo
+# sarebbero due relay che si contendono la stessa verità. Quindi: una stanza, un
+# grafo vivo; un grafo vivo, una stanza.»
+#
+# Nothing enforced it, and here is what that cost, measured on the dev stack on
+# 6 September rather than reasoned about:
+#
+#     POST /v1/rooms {room_id: "amb-a"}                          → 201
+#     POST /v1/rooms {room_id: "amb-b", container_refs:["amb-a"]} → 201
+#     amb-a: add_node solo-in-A, request_save                    → applied, saved
+#     amb-b: add_node solo-in-B, request_save                    → applied, saved
+#
+#     on disk:  amb-a.em.json → graph "amb-a", nodes [amb-n1, solo-in-A]
+#               amb-b.em.json → graph "amb-a", nodes [amb-n1, solo-in-B]
+#
+# TWO FILES DECLARING TO HOLD THE SAME GRAPH, divergent, with nothing saying
+# which one is it. Not «two tables, one file» — a FORK THAT NEVER DECLARED
+# ITSELF, which is worse, because the note allows a fork precisely when it says
+# so. And it had already happened in the wild: a scan of the node's register
+# found five containers claimed by more than one room, two of them by rooms
+# nobody would call a test.
+
+def test_a_second_room_CANNOT_be_born_on_a_live_graph(client, enforcing):
+    """The refusal, and it names the room to enter instead — the whole point of
+    the rule is that the live copy has ONE address."""
+    enforcing(ANNA)
+    first = client.post("/v1/rooms", headers=AUTH,
+                        json={"room_id": "tavolo", "title": "Il tavolo"})
+    assert first.status_code == 201
+
+    second = client.post("/v1/rooms", headers=AUTH,
+                         json={"room_id": "altro-tavolo", "title": "L'altro",
+                               "container_refs": ["tavolo"]})
+    assert second.status_code == 409, second.json()
+    detail = second.json()["detail"]
+    assert "tavolo" in detail
+    assert "one room, one live graph" in detail
+    # the remedy is an ADDRESS, not an apology
+    assert "Enter" in detail
+
+
+def test_the_rule_is_about_the_PRIMARY_reference_and_not_every_pointer():
+    """A second reference is a container the session does not edit. Forbidding
+    those would forbid the multi-container record this class exists for — and it
+    is not a second table, because the live document is the FIRST ref."""
+    from app.rooms import RoomDescriptor
+    a = RoomDescriptor(room_id="a", title="A", container_refs=["scavo-a"])
+    b = RoomDescriptor(room_id="b", title="B", container_refs=["scavo-b", "scavo-a"])
+    assert a.primary_ref == "scavo-a"
+    assert b.primary_ref == "scavo-b", "b's live graph is its own"
+
+
+def test_an_ARCHIVED_room_does_not_hold_a_graph_hostage(client, enforcing,
+                                                        instance):
+    """Archiving is «never a deletion», so its record survives — but a room
+    nobody can work in is not a table anybody is sitting at. Holding the graph
+    against a new room would make archiving a one-way door for the container
+    too, which is not what «never a deletion» was protecting."""
+    enforcing(ANNA)
+    assert client.post("/v1/rooms", headers=AUTH,
+                       json={"room_id": "vecchio"}).status_code == 201
+    client.post("/v1/rooms/vecchio/archive", headers=AUTH, json={})
+    again = client.post("/v1/rooms", headers=AUTH,
+                        json={"room_id": "nuovo", "container_refs": ["vecchio"]})
+    assert again.status_code == 201, again.json()
+
+
+def test_the_question_ignores_the_room_ASKING():
+    """Otherwise a room could not be re-declared with its own container, and
+    every idempotent write would refuse itself."""
+    from app.rooms import RoomDescriptor
+    d = RoomDescriptor(room_id="x", title="X", container_refs=["x"])
+    assert d.primary_ref == "x"

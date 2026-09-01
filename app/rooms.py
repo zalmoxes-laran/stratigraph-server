@@ -436,6 +436,45 @@ class RoomRegistry:
             room_id=room_id, title=title or room_id,
             container_refs=refs or [room_id], created_by=created_by))
 
+    def room_already_on(self, primary: str,
+                        *, except_room: str = "") -> Optional[str]:
+        """Which DECLARED room already has `primary` as its live graph, if any.
+
+        **«Una stanza, un grafo vivo; un grafo vivo, una stanza»** — the design
+        note of 5 September 2026 puts it among the rules that do not negotiate,
+        and until now nothing enforced it. Measured on the dev stack, 6 September:
+
+            POST /v1/rooms {room_id: amb-a}                        → 201
+            POST /v1/rooms {room_id: amb-b, container_refs:[amb-a]} → 201
+
+        …and the consequence, measured rather than reasoned about: room `amb-b`
+        OPENED `amb-a`'s graph, both rooms accepted their own operations, both
+        saved, and the store ended with two files — `amb-a.em.json` and
+        `amb-b.em.json` — each declaring to hold the graph **`amb-a`**, with
+        divergent contents and nothing saying which one is it. Not «two tables,
+        one file» but a FORK THAT NEVER DECLARED ITSELF, which is the worse
+        shape: a fork is legal when it says so, and the note says exactly that.
+
+        THE PRIMARY REFERENCE is what this tests, because it is what becomes the
+        room's live document (`primary_ref`). A second reference is a pointer the
+        session does not edit, and forbidding those would forbid the multi-container
+        record this class exists for.
+
+        WHAT IT DOES NOT CATCH, declared rather than papered over: a container
+        that no room DECLARED but that is openable under its own name (every
+        pre-register room is exactly that — implicit, named after itself). A new
+        room whose primary is such a container still makes a second table on it.
+        Closing that means deciding whether `POST /v1/rooms {container_refs: [X]}`
+        is ever legal for an existing X, which is the «fork» verb the note leaves
+        to its own design note — so it is named here, not guessed at.
+        """
+        for room in self.declared():
+            if room.room_id == except_room or room.archived_at:
+                continue
+            if room.primary_ref == primary:
+                return room.room_id
+        return None
+
     def declared(self) -> List[RoomDescriptor]:
         """Every DECLARED room, by id — the register, enumerated. Rooms that only
         exist as a snapshot are not in here: they were never declared, and
