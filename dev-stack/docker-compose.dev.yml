@@ -594,10 +594,22 @@ services:
       # COUCHDB_USER: "${COUCHDB_USER:-admin}"
       # COUCHDB_PASSWORD: "${COUCHDB_PASSWORD:-admin}"
       # --- what to write into an "open in" answer ----------------------------
-      # The PUBLIC form, as everywhere: a deep link is fetched by somebody
-      # else's software, so it must name a host they can reach.
-      EM_CATALOG_PUBLIC_URL: "http://localhost:${EM_CATALOG_PORT:-8010}"
-      EM_CATALOG_EMSTUDIO_URL: "${EM_CATALOG_EMSTUDIO_URL:-http://localhost:5173}"
+      #
+      # `EM_CATALOG_PUBLIC_URL` is GONE, and its absence is the fix. It said
+      # `http://localhost:8010`, which is one origin — so every study opened
+      # through https on `em.localhost` handed out a container URL the browser
+      # refused as mixed content. Measured in Chrome on 4 September: «Study
+      # unreachable — TypeError: Failed to fetch», on a study that was fine.
+      #
+      # StratiGraph Catalog derives the address FROM THE REQUEST
+      # (`app/main.py::_container_url`), which is right by definition — a caller
+      # arriving on https gets an https link, one arriving on :8010 gets that
+      # one. The two flags that make it true are in the Catalog's Dockerfile
+      # (`--proxy-headers --forwarded-allow-ips *`): without them Starlette sees
+      # the internal request and the derivation is wrong in a different way. The
+      # env var stays available as an override for a proxy that does not
+      # forward; it is not how a correct deployment gets a correct answer.
+      EM_CATALOG_EMSTUDIO_URL: "${EM_CATALOG_EMSTUDIO_URL:-/em/studio}"
       # --- the reading page: a DIRECTORY, mounted just below -----------------
       # The reader is no longer one self-contained file (that tax is what made
       # its 3D engine +800 kB of inlined base64), so em-catalog serves the whole

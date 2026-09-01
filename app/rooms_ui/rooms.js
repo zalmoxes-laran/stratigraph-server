@@ -163,6 +163,28 @@ function card({ title, id, tag, notes = [], verb, build }) {
   return box;
 }
 
+/**
+ * A STRING out of a value that may be an entity, and never an object.
+ *
+ * The `[object Object]` on the monument cards was not a typo: it was `||` doing
+ * exactly what it is for, with an object as the last operand. Anything this page
+ * puts in a text node goes through here, so the failure mode cannot come back by
+ * somebody adding one more fallback — which is how it would come back.
+ *
+ * `field` picks which part of an entity is wanted: its name to show, its id to
+ * cite.
+ */
+function entityText(value, field = "name") {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "object") {
+    const picked = value[field] ?? value.name ?? value.iri ?? value.id;
+    return typeof picked === "string" ? picked : "";
+  }
+  return "";
+}
+
 /** A tool NAME with up to two doors, the shape both scopes use. */
 function toolGroup(label, doors) {
   const group = el("span", "tool");
@@ -259,21 +281,38 @@ async function handoff(room) {
   return await request("GET", `/rooms/${encodeURIComponent(room.room_id)}/open`);
 }
 
+/**
+ * FOLLOW A CUSTOM SCHEME, and say so when nothing happens.
+ *
+ * A `stratigraph://` navigation on a machine with no handler does NOTHING — no
+ * error, no event, no page — and looks exactly like the user's fault. So: watch
+ * for the window losing focus (which is what an OS handing over to an app looks
+ * like from in here) and, if it never does, say what did not happen and show the
+ * link so it can be pasted where a handler is.
+ *
+ * ONE implementation, and that is the point of this function existing. It was
+ * inline in `openIn`, so a ROOM said «Nothing opened» after 1.8 s and a STUDY
+ * said nothing at all — two doors on the same page with two different degrees of
+ * honesty, which is worse than either.
+ */
+function followScheme(link, box, said) {
+  showLink(box, link);
+  let left = false;
+  const onBlur = () => { left = true; };
+  window.addEventListener("blur", onBlur, { once: true });
+  window.location.href = link;
+  window.setTimeout(() => {
+    window.removeEventListener("blur", onBlur);
+    if (left) return;
+    note(said, t("door.nothingOpened", { scheme: link.split(":")[0] }), true);
+  }, 1800);
+}
+
 async function openIn(room, tool, box, said) {
   let targets;
   try { targets = await handoff(room); }
   catch (error) { note(said, error.message, true); return; }
-  showLink(box, targets.scheme);
-  let left = false;
-  const onBlur = () => { left = true; };
-  window.addEventListener("blur", onBlur, { once: true });
-  window.location.href = targets.scheme;
-  window.setTimeout(() => {
-    window.removeEventListener("blur", onBlur);
-    if (left) return;
-    note(said, t("door.nothingOpened",
-                 { scheme: targets.scheme.split(":")[0] }), true);
-  }, 1800);
+  followScheme(targets.scheme, box, said);
 }
 
 async function copyLink(room, said) {
@@ -293,6 +332,11 @@ function showLink(box, text) {
   row.append(el("code", "", text));
 }
 
+// How many cards a zone shows before it starts saying "and N more". ONE number,
+// because two zones truncating at two different counts would be a difference
+// nobody decided.
+const SHOWN = 8;
+
 // ── zone 2 · the studies — what has been published ──────────────────────────
 
 async function loadStudies(base) {
@@ -310,15 +354,26 @@ async function loadStudies(base) {
       t("catalog.silent", { base, error: error.message })));
     return;
   }
-  const studies = (answer.studies || []).slice(0, 8);
+  // A LIST THAT TRUNCATES SAYS SO, AND COUNTS. Measured on 4 September with
+  // real data: 37 studies in the catalogue, eight cards on the door, and Villa
+  // di Aiano simply not among them — with nothing on the page to suggest the
+  // door was being quiet. A visible debt is a debt somebody pays; a hidden one
+  // is a swamp, and the person who fell into this one spent a while looking for
+  // a study that was there all along.
+  const all = answer.studies || [];
+  const studies = all.slice(0, SHOWN);
   if (!studies.length) return;
   $("zone-studies").hidden = false;
   const host = $("studies");
   host.innerHTML = "";
   for (const study of studies) host.append(studyCard(base, study));
-  const all = $("all-studies");
-  all.href = base;                  // the SERVICE, not a path we invented
-  all.hidden = false;
+  if (all.length > studies.length) {
+    host.append(el("p", "note truncated",
+      t("studies.someOf", { shown: studies.length, total: all.length })));
+  }
+  const link = $("all-studies");
+  link.href = base;                 // the SERVICE, not a path we invented
+  link.hidden = false;
 }
 
 function studyCard(base, study) {
@@ -353,9 +408,13 @@ async function studyDoors(base, study, box, said) {
     if (box.querySelector(`.tool[data-tool="${tool}"]`)) continue;
     const openers = [];
     if (target.scheme) {
+      // `followScheme`, the SAME mechanism a room's door uses: on a machine with
+      // no handler this said nothing whatsoever, while the room next to it said
+      // «Nothing opened». Measured on 4 September, and it is the second half of
+      // the same silence — the link itself named no catalogue, so even where a
+      // handler existed there was nothing to resolve.
       openers.push([t("door.desktop"), t("door.desktop.title", { tool }),
-                    () => { showLink(box, target.scheme);
-                            window.location.href = target.scheme; }]);
+                    () => followScheme(target.scheme, box, said)]);
     }
     if (target.web) {
       openers.push([t("door.browser"),
@@ -397,15 +456,26 @@ async function loadMonuments(base) {
   $("zone-hdt").hidden = false;
   const host = $("hdt");
   host.innerHTML = "";
-  for (const group of groups.slice(0, 8)) host.append(monumentCard(base, group));
+  const shown = groups.slice(0, SHOWN);
+  for (const group of shown) host.append(monumentCard(base, group));
+  if (groups.length > shown.length) {
+    host.append(el("p", "note truncated",
+      t("hdt.someOf", { shown: shown.length, total: groups.length })));
+  }
 }
 
 function monumentCard(base, group) {
   const studies = group.studies || [];
   const count = studies.length;
   return card({
-    title: group.label || group.name || group.hdt || group.hc2 || t("hdt.unnamed"),
-    id: group.hc2 || group.hdt || "",
+    // `label` comes from the CATALOGUE now (`app/index.py::group_label`), which
+    // is the side that has the name. This chain used to end at `group.hc2` —
+    // an ENTITY, `{id, name, iri}` — and printed `[object Object]` on the
+    // monument cards the moment real data arrived. A fallback that can be an
+    // object is not a fallback; `entityText` refuses to return one.
+    title: group.label || entityText(group.hc2) || entityText(group.hc1)
+           || t("hdt.unnamed"),
+    id: entityText(group.hc2, "id") || entityText(group.hc1, "id") || "",
     verb: t("hdt.verb"),
     notes: [t("hdt.studies" + (count === 1 ? ".one" : ".many"), { n: count })],
     build(actions, said, box) {

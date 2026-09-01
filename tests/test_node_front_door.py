@@ -181,3 +181,59 @@ def test_the_page_uses_the_THEME_for_hidden_and_keeps_no_copy():
     assert "[hidden] { display: none !important; }" in theme
     assert ".hidden {" not in STYLE
     assert "classList.add(\"hidden\")" not in CODE
+
+
+# ── what a page must never print, and what it must never hide ───────────────
+#
+# Both of these were invisible until real data arrived on 4 September 2026: four
+# case studies imported from the EM_CaseStudies archive, 37 studies in the
+# catalogue, and the door showed three monument cards titled `[object Object]`
+# over a list that was quietly eight-of-thirty-seven. Fake data hides exactly
+# this class of bug, which is why the checks belong here rather than in a
+# fixture.
+
+def test_no_title_on_this_page_can_be_an_OBJECT():
+    """`[object Object]` is `||` doing its job with an object as last operand.
+
+    The repair is on the catalogue's side (it emits `label` now — see
+    `stratigraph-catalog/app/index.py::group_label`), and the guard is here:
+    everything this page puts in a text node goes through `entityText`, which
+    cannot return an object. Without the guard the failure comes back the moment
+    somebody adds one more fallback to the chain — which is how it would.
+    """
+    assert "function entityText(" in CODE
+    # the chain that printed the object: `|| group.hc2` with nothing after it
+    assert "|| group.hc2 ||" not in CODE
+    # every entity a card shows goes through the guard
+    for reached in ("entityText(group.hc2)", "entityText(group.hc1)"):
+        assert reached in CODE, reached
+
+
+def test_a_LIST_THAT_TRUNCATES_says_so_and_counts():
+    """Villa di Aiano was in the catalogue and not on the door, and the page said
+    nothing. A visible debt is a debt somebody pays."""
+    assert "const SHOWN = 8;" in CODE, "one cap, named once"
+    # …and BOTH lists that truncate say it, with the two numbers
+    for key in ('t("studies.someOf"', 't("hdt.someOf"'):
+        assert key in CODE, key
+    assert "shown:" in CODE and "total:" in CODE, \
+        "the sentence carries both numbers, not just «and more»"
+    # the cap is not written twice
+    assert CODE.count("slice(0, 8)") == 0, \
+        "no literal 8 beside the named one: two zones truncating at two counts " \
+        "would be a difference nobody decided"
+
+
+def test_a_STUDY_S_DESKTOP_DOOR_says_when_nothing_opened():
+    """The room's door said it after 1.8 s; the study's said nothing at all.
+
+    Same page, same gesture, two degrees of honesty — which is worse than
+    either. One mechanism now, and this asserts there is only one.
+    """
+    assert "function followScheme(" in CODE
+    assert CODE.count('t("door.nothingOpened"') == 1, \
+        "ONE implementation of «nothing opened», or the next door forgets it"
+    # …and both doors go through it
+    assert "followScheme(targets.scheme" in CODE, "the room's door"
+    assert "followScheme(target.scheme" in CODE, "the study's door"
+

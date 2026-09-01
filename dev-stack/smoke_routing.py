@@ -39,6 +39,17 @@ ROUTED = [
     ("/chat/", 200, "…and its page"),
 ]
 
+#: EMSTUDIO, on the node's own origin — the whole point of which is that it is
+#: SAME-ORIGIN with the catalogue, so the editor can fetch a study container.
+#: Measured separately from `ROUTED` because in development the upstream is a dev
+#: server on somebody's laptop: absent is ORDINARY here, and the interesting
+#: property is then what the node SAYS (a 502 that reads, never a 200 with HTML —
+#: the fallback that answered 200 is what this whole file exists for).
+EMSTUDIO = [
+    ("/em/studio/", "the editor"),
+    ("/em/read/", "the dissemination reader"),
+]
+
 #: Nothing here is a route. Each one used to get 200 and a banner.
 UNROUTED = [
     "/inventato",
@@ -103,6 +114,34 @@ def main() -> int:
     tally.ok(status == 404, "GET /iiif/3/<missing>/info.json is 404")
     tally.ok(b"no such route" not in body,
              "…answered by the image server, not by the node's fallback")
+
+    print("\n4 · EMStudio, on this origin")
+    for path, what in EMSTUDIO:
+        status, headers, body = call("GET", f"{base}{path}")
+        kind = (headers.get("content-type") or "").lower()
+        if status == 200:
+            tally.ok("text/html" in kind, f"GET {path} — {what} is a page", kind)
+            # …and it must be EMStudio rather than the node's own HTML: the point
+            # of the route is that the editor is HERE, on the catalogue's origin
+            tally.ok(b"EMStudio" in body or b"emstudio" in body.lower(),
+                     f"…{path} is served by EMStudio itself", body[:60])
+        else:
+            # the dev server is down, which is a normal state — so what is
+            # measured is the HONESTY of the answer
+            tally.ok(status == 502,
+                     f"GET {path} — dev server down → 502, not 200", f"status {status}")
+            tally.ok(b"5173" in body,
+                     f"…and the 502 SAYS what to start", body[:80])
+            tally.ok(b"<html" not in body.lower(),
+                     f"…and is not a page a parser would follow")
+    # The route order that makes all of this possible: `/em/studio/*` is a longer
+    # prefix than `/em/*`, so Caddy must prefer it — and `/em/v1/...` must still
+    # reach the room server. Asserted because a reordering would break one of the
+    # two silently.
+    status, _headers, _body = call("GET", f"{base}/em/v1/health")
+    tally.ok(status == 200,
+             "…and /em/v1/health still reaches the ROOM server: the more "
+             "specific prefixes did not swallow /em/*", f"status {status}")
 
     return tally.report("routing")
 

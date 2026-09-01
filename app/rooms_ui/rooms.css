@@ -151,3 +151,12 @@
    only thing that differs — a monument is its studies over time. */
 .sub-list { margin: .6rem 0 0 1.1rem; border-left: 2px solid var(--sg-line);
             padding-left: .8rem; }
+
+/* A LIST THAT TRUNCATES SAYS SO. Quiet, but not invisible: the point is that
+   the number is readable without looking for it, so nobody spends twenty
+   minutes hunting a study the door was simply not showing. */
+.note.truncated {
+  margin-top: 6px;
+  font-style: italic;
+  opacity: 0.85;
+}

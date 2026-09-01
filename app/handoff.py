@@ -226,16 +226,28 @@ def open_targets(room: str, *, server: Optional[str] = None,
 
 
 def parse(link: str) -> Dict[str, str]:
-    """`{server, room}` out of a handoff link, or a sentence.
+    """What a handoff names — a ROOM or a STUDY — or a sentence.
 
     Accepts both forms — `stratigraph://open?…` and the `https://…/open?…` web
     variant — because a consumer should not care which one it was handed, and
     the same reader is what makes them interchangeable.
 
+    **TWO ACTIONS ON ONE NAMESPACE**, which is what the scheme was renamed for
+    (see the module docstring): `{server, room}` opens a room here, and
+    `{catalog, study}` opens a study in the Catalog. The answer carries `kind`
+    so a caller does not have to infer it from which keys came back.
+
+    Added 4 September 2026, and late: the Catalog had been emitting study links
+    for a week and every consumer refused them with «the link names no room» —
+    a button that could not work by construction. Three implementations of this
+    grammar exist (here, `EMStudio/frontend/src/handoff.ts`, and the Catalog
+    which WRITES it), so the second half of this change is
+    `tests/test_handoff.py` and `check-handoff.mjs` measuring the same strings.
+
     **Refuses a link carrying anything that looks like a credential.** Not
     because we would use it, but because accepting one teaches whoever built it
     that sending one works: the next link has a token in it and this contract's
-    only security property is gone.
+    only security property is gone. One list, both actions.
     """
     raw = str(link or "").strip()
     if not raw:
@@ -268,15 +280,44 @@ def parse(link: str) -> Dict[str, str]:
 
     server = (query.get("server") or [""])[0].strip().rstrip("/")
     room = (query.get("room") or [""])[0].strip()
+    study = (query.get("study") or [""])[0].strip()
+
+    # AMBIGUITY FIRST. Two actions on one namespace need exactly one rule for
+    # "which is this", and a link naming both is not a link with a preference —
+    # it is one somebody built wrong, and guessing would make the guess the
+    # contract. Unknown keys are still ignored, which is what keeps `focus=` and
+    # whatever comes next backward compatible; `study` is not unknown any more.
+    if room and study:
+        raise HandoffError(
+            "this link names both a room and a study; a handoff is one action. "
+            f"Send {SCHEME}://{ACTION}?server=…&room=… to open a room, or "
+            "?study=…&catalog=… to open a study.")
+
+    if study:
+        catalog = (query.get("catalog") or [""])[0].strip().rstrip("/")
+        if not catalog and parsed.scheme in ("http", "https"):
+            # the web form can leave it implicit: the page IS on the catalogue
+            catalog = f"{parsed.scheme}://{parsed.netloc}"
+        if not catalog:
+            raise HandoffError(
+                "this link names a study but no catalogue, so there is nowhere "
+                "to fetch it from. The catalogue's address is part of the link "
+                f"({SCHEME}://{ACTION}?study=…&catalog=…) and it comes from that "
+                "deployment's configuration, never from whoever built the link.")
+        return {"kind": "study", "catalog": catalog, "study": study}
+
     if not room:
-        raise HandoffError("the link names no room")
+        raise HandoffError(
+            "the link names neither a room nor a study. A handoff opens one of "
+            f"the two: {SCHEME}://{ACTION}?server=…&room=… for a room, or "
+            "?study=…&catalog=… for a study.")
     if not server:
         # the web form can leave it implicit: the page IS on the server
         if parsed.scheme in ("http", "https"):
             server = f"{parsed.scheme}://{parsed.netloc}"
         else:
             raise HandoffError("the link names no server")
-    return {"server": server, "room": room}
+    return {"kind": "room", "server": server, "room": room}
 
 
 def describe() -> Dict[str, Any]:

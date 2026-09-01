@@ -68,12 +68,12 @@ def test_both_forms_read_back_to_the_same_place():
     scheme = ho.scheme_url("https://em.example.org", "saggio b/2")
     web = ho.web_url("https://em.example.org", "saggio b/2")
     assert ho.parse(scheme) == ho.parse(web) == {
-        "server": "https://em.example.org", "room": "saggio b/2"}
+        "kind": "room", "server": "https://em.example.org", "room": "saggio b/2"}
 
 
 def test_the_web_form_may_leave_the_server_implicit_because_the_page_is_on_it():
     assert ho.parse("https://em.example.org/open?room=r") == {
-        "server": "https://em.example.org", "room": "r"}
+        "kind": "room", "server": "https://em.example.org", "room": "r"}
 
 
 @pytest.mark.parametrize("bad, fragment", [
@@ -81,7 +81,8 @@ def test_the_web_form_may_leave_the_server_implicit_because_the_page_is_on_it():
     ("stratigraph://join?room=r", "unknown action"),
     ("mailto:someone@example.org", "not a handoff link"),
     ("https://em.example.org/rooms?room=r", "not a handoff link"),
-    ("stratigraph://open?server=https%3A%2F%2Fx", "names no room"),
+    ("stratigraph://open?server=https%3A%2F%2Fx",
+     "neither a room nor a study"),
 ])
 def test_what_is_not_a_handoff_is_said(bad, fragment):
     with pytest.raises(ho.HandoffError) as exc:
@@ -160,12 +161,85 @@ def test_the_parse_endpoint_is_the_ONE_grammar_the_consumers_share():
     answer = client.post("/v1/handoff/parse", json={
         "link": "stratigraph://open?server=https%3A%2F%2Fem.example.org&room=r"})
     assert answer.status_code == 200
-    assert answer.json() == {"ok": True, "server": "https://em.example.org",
-                             "room": "r"}
+    assert answer.json() == {"ok": True, "kind": "room",
+                             "server": "https://em.example.org", "room": "r"}
     bad = client.post("/v1/handoff/parse",
                       json={"link": "stratigraph://open?room=r&token=x"})
     assert bad.status_code == 400
     assert "never a permission" in bad.json()["detail"]
+
+
+# ── the OTHER action on the same namespace: a STUDY ──────────────────────────
+#
+# `stratigraph://` is the ECOSYSTEM's scheme, and it has had two entry points in
+# the design since the day it stopped being `emstudio://`: the room browser opens
+# a ROOM, the Catalog opens a STUDY. Only the first half was implemented, in all
+# three places, and the consequence was measured on 4 September 2026: the
+# Catalog's study button emitted `stratigraph://open?study=<id>` and every
+# consumer refused it — «the link names no room» — in a log nobody was reading.
+#
+# So these tests are not about a feature. They are about the property that makes
+# a contract with three implementations survive: the same strings, measured on
+# every side. `EMStudio/frontend/scripts/check-handoff.mjs` holds the same ones.
+
+def test_a_study_link_is_the_second_action_not_a_broken_room():
+    got = ho.parse("stratigraph://open?study=study%3Aabc"
+                   "&catalog=https%3A%2F%2Fem.example.org")
+    assert got == {"kind": "study", "catalog": "https://em.example.org",
+                   "study": "study:abc"}
+
+
+def test_the_web_form_of_a_study_may_leave_the_catalogue_implicit():
+    """Same rule as a room's server: the page IS on the catalogue."""
+    assert ho.parse("https://em.example.org/open?study=study%3Aabc") == {
+        "kind": "study", "catalog": "https://em.example.org",
+        "study": "study:abc"}
+
+
+def test_a_study_with_nowhere_to_fetch_it_from_says_WHICH_half_is_missing():
+    """The bug, in one assertion.
+
+    A study id alone is what the Catalog used to emit, and the old parser's
+    complaint named the WRONG half — «no room» — which sent whoever read it
+    looking for a room in a link about a study.
+    """
+    with pytest.raises(ho.HandoffError) as exc:
+        ho.parse("stratigraph://open?study=study%3Aabc")
+    said = str(exc.value)
+    assert "no catalogue" in said
+    assert "room" not in said
+
+
+def test_a_link_naming_BOTH_is_refused_rather_than_guessed():
+    """One namespace, two actions, and exactly one rule for which is which.
+
+    Preferring one would make the preference the contract, and the next reader
+    would prefer the other.
+    """
+    with pytest.raises(ho.HandoffError) as exc:
+        ho.parse("stratigraph://open?room=r&server=https%3A%2F%2Fx&study=s")
+    assert "one action" in str(exc.value)
+
+
+@pytest.mark.parametrize("key", ["token", "access_token", "secret", "bearer"])
+def test_a_STUDY_link_carrying_a_credential_is_refused_too(key):
+    """ONE forbidden list, both actions. A second entry point on a scheme is
+    exactly where a security property gets forgotten."""
+    with pytest.raises(ho.HandoffError) as exc:
+        ho.parse(f"stratigraph://open?study=s&catalog=https%3A%2F%2Fx&{key}=v")
+    assert key in str(exc.value)
+
+
+def test_the_parse_endpoint_answers_for_a_study_too():
+    """The endpoint is the one grammar the consumers share — for both actions,
+    or the sharing stops at the half that was implemented first."""
+    answer = client.post("/v1/handoff/parse", json={
+        "link": "stratigraph://open?study=study%3Aabc"
+                "&catalog=https%3A%2F%2Fem.example.org"})
+    assert answer.status_code == 200
+    assert answer.json() == {"ok": True, "kind": "study",
+                             "catalog": "https://em.example.org",
+                             "study": "study:abc"}
 
 
 def test_the_open_page_needs_no_token_and_explains_itself():
@@ -306,7 +380,8 @@ def test_the_browser_link_reads_back_through_the_SAME_grammar(monkeypatch):
     query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))
     # the same pair the scheme carries, which is what makes the two doors one
     # handoff rather than two features
-    assert ho.parse(ho.open_targets("saggio-b")["scheme"]) == query
+    parsed = ho.parse(ho.open_targets("saggio-b")["scheme"])
+    assert {k: v for k, v in parsed.items() if k != "kind"} == query
 
 
 def test_a_web_url_with_a_path_keeps_it(monkeypatch):

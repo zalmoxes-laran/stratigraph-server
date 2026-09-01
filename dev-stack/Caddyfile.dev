@@ -21,6 +21,61 @@
 {$EM_SITE:https://em.localhost} {
 	tls internal
 
+	# StratiGraph · EMSTUDIO, on the NODE'S OWN ORIGIN — the editor at
+	# `/em/studio/`, the dissemination reader at `/em/read/`.
+	#
+	# Why it is here at all is the same argument the field assistant made for the
+	# camera, one month earlier: a page served on a port of its own cannot do the
+	# thing it exists for. Measured in Chrome on 4 September — the Catalog's
+	# «open in browser» opened `localhost:5173` and the editor answered «Study
+	# unreachable — TypeError: Failed to fetch», from BOTH spellings of the
+	# catalogue's address, because the Catalog sends no CORS headers and a
+	# different port is a different origin. Same origin, and there is no question
+	# to answer.
+	#
+	# NOT `Access-Control-Allow-Origin: *` on the Catalog. A permission given to
+	# everybody is not the repair of a permission that is missing. If a
+	# deployment one day wants EMStudio elsewhere, that origin is NAMED in the
+	# configuration.
+	#
+	# THESE TWO BLOCKS MUST COME BEFORE `/em/*`. Caddy orders `handle` matchers by
+	# specificity, so a longer prefix wins — but writing them in the order they
+	# are evaluated is what makes the file readable, and the routing table in the
+	# end-of measures it rather than trusting it.
+	#
+	# `handle` and NOT `handle_path`: in development the source is the Vite dev
+	# server on the HOST, and its `base` is `/em/studio/` (`frontend/vite.config.ts`).
+	# The paths line up exactly, so there is nothing to strip and no rewriting to
+	# get wrong — `/em/studio/src/main.ts` is what the browser asks for and what
+	# Vite serves.
+	handle /em/studio/* {
+		# When the dev server is DOWN the answer is a 502 that READS, and it is
+		# written once for both routes in `handle_errors` at the bottom of this
+		# site — `handle_errors` is not an ordered handler and cannot live inside
+		# a `handle` (Caddy says so, and validating is how I found out).
+		#
+		# What must NOT happen is a fallback answering 200 with some HTML: the
+		# one that did cost three days, because a client doing `res.json()`
+		# reported «node unreachable» while the node was up. So: no fallback.
+		reverse_proxy host.docker.internal:5173
+	}
+
+	# The READER, at its own address and with its own verb: `/em/read/` is where
+	# somebody who was handed a link READS a study, and `/em/studio/` is where
+	# somebody WORKS on one. Two doors, two verbs — the rule the front door's
+	# three cards already follow.
+	#
+	# In development both pages come out of ONE dev server, which can only have
+	# one base, so this rewrites onto the reader's page under that base. In
+	# production they are two files under one root and the block below is
+	# simpler — see `heriverse-ansible/role/templates/Caddyfile.j2`.
+	handle /em/read/* {
+		# the PATH only: `rewrite` leaves the query string alone, which is the
+		# whole point here — `?study=` and `?emjson=` have to survive
+		rewrite * /em/studio/reader.html
+		reverse_proxy host.docker.internal:5173
+	}
+
 	# StratiGraph · the room (graph + assets + the WebSocket the editors join).
 	# `handle_path` strips `/em`, because StratiGraph Server serves `/v1/...` at its
 	# root. The `/em` PATH stays: it is a public address, not the repo's name.
@@ -139,6 +194,33 @@
 		# content-length. Inside `handle /` the path is already decided, so the
 		# matcher is `*`.
 		redir * /em/rooms/ 302
+	}
+
+	# WHAT AN UPSTREAM THAT IS NOT THERE SAYS. One block, because `handle_errors`
+	# is a site-level directive: Caddy refuses it inside a `handle` («not an
+	# ordered HTTP handler»), which is a good refusal — an error page is a
+	# property of the site, not of one route.
+	#
+	# The EMStudio routes get their own sentence because their upstream is a dev
+	# server on somebody's laptop, i.e. the one upstream here whose absence is
+	# ORDINARY. Everything else keeps the status and says the path, which is what
+	# a program needs and what a person can paste into a bug report.
+	handle_errors {
+		@emstudio path /em/studio/* /em/read/*
+		handle @emstudio {
+			respond "{err.status_code} — EMStudio's dev server is not answering on the host (:5173).
+
+Start it:   cd EMStudio/frontend && npm run dev
+It serves /em/studio/ (the editor) and /em/studio/reader.html (the reader),
+and this origin proxies straight through to it.
+
+In production these two routes are served from the built files instead
+(heriverse-ansible role/templates/Caddyfile.j2), so this message belongs to
+development only." {err.status_code}
+		}
+		handle {
+			respond "{err.status_code} on {uri} — this node's proxy could not reach the service behind that route." {err.status_code}
+		}
 	}
 
 	handle {
