@@ -116,11 +116,26 @@ def browser_url(tool: str, server: str, room: str) -> str:
         return ""
     query = urllib.parse.urlencode({"server": str(server).rstrip("/"),
                                     "room": str(room)})
-    # a `/` before the query when the base has no path: `host:5177?x=1` is legal
-    # and every browser rewrites it, so the link somebody COPIES should already
-    # be the form they will see back
-    path = urllib.parse.urlsplit(base).path
-    return f"{base}{'' if path else '/'}?{query}"
+    # EXACTLY ONE `/` BEFORE THE `?`, whatever the configuration said — and this
+    # is a bug fix, measured in Chrome on 5 September 2026.
+    #
+    # `EM_EMSTUDIO_WEB_URL` was set to `/em/studio/`, the container really read
+    # `/em/studio/`, and the button still produced `/em/studio?server=…`: the
+    # slash was taken off by `web_app`'s `rstrip("/")` an instant after being
+    # read, and the old rule here only put one back when the base had NO path —
+    # which a path always has. So no value of the environment variable could
+    # repair it, and Caddy's `handle /em/studio/*` does not match `/em/studio`:
+    # the click landed on `{"detail":"Not Found"}`.
+    #
+    # The four forms this now normalises, all to one trailing slash:
+    #   `/em/studio`  ·  `/em/studio/`  ·  `https://h`  ·  `https://h/app/`
+    #
+    # Why a trailing slash at all, rather than leaving it to the host: a page
+    # served under a prefix resolves its own relative assets against the URL
+    # DIRECTORY, and `/em/studio?x=1` makes that directory `/em/`. It is also the
+    # form a browser rewrites the address bar to, so the link somebody COPIES is
+    # already the one they will see back.
+    return f"{base.rstrip('/')}/?{query}"
 
 
 class HandoffError(ValueError):

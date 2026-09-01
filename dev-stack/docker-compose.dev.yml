@@ -334,11 +334,21 @@ services:
       # itself in. Unset and that tool has only the desktop scheme — no button,
       # rather than a button that 404s.
       #
-      # Empty by default even here: `npm run dev` in EMStudio is not always
-      # running, and offering a door to a port nobody is listening on is the
-      # failure this is meant to prevent. Fill them in `.env.dev` when the web
-      # builds are up (5177 / 8020 are the usual dev ports).
-      EM_EMSTUDIO_WEB_URL: "${EM_EMSTUDIO_WEB_URL:-}"
+      # EMStudio's default is now THIS ORIGIN's own route — `/em/studio`, served
+      # by Caddy above — and that is a correction rather than a convenience. It
+      # was left empty (and then set to `http://localhost:5173` in somebody's
+      # `.env.dev`), so a room's «open in browser» sent EMStudio to a DIFFERENT
+      # ORIGIN: a page that then cannot fetch a study container from the
+      # catalogue, which is the whole reason `/em/studio/` exists. The Catalog was
+      # already pointed at `/em/studio` and the room server was not — one
+      # deployment, two answers.
+      #
+      # Root-relative on purpose: the room browser opens it with `window.open`,
+      # which resolves it against the page's own origin, so the same value is
+      # right whether this stack is reached on `em.localhost:8443` or on a
+      # colleague's hostname. `.env.dev` still overrides it — and E.D.'s copy is
+      # his to change.
+      EM_EMSTUDIO_WEB_URL: "${EM_EMSTUDIO_WEB_URL:-/em/studio}"
       # …but the field assistant is NOT one of those: it is a container in this
       # stack, up whenever the stack is, served by Caddy at /chat/. The reason
       # for the empty default above does not apply to it, and leaving it empty

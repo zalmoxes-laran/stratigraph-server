@@ -384,10 +384,26 @@ def test_the_browser_link_reads_back_through_the_SAME_grammar(monkeypatch):
     assert {k: v for k, v in parsed.items() if k != "kind"} == query
 
 
-def test_a_web_url_with_a_path_keeps_it(monkeypatch):
-    monkeypatch.setenv("EM_EMSTUDIO_WEB_URL", "https://apps.example.org/emstudio/")
+@pytest.mark.parametrize("configured, expected", [
+    # the four forms a deployment can write, all normalised to ONE slash before
+    # the query. The second is the one that was measured broken: E.D. had set
+    # `/em/studio/`, the container read `/em/studio/`, and the button still
+    # produced `/em/studio?server=…` — because `web_app` strips the slash and the
+    # old rule only added one back when the base had no path. Caddy's
+    # `handle /em/studio/*` does not match that, so the click was a 404.
+    ("/em/studio", "/em/studio/?"),
+    ("/em/studio/", "/em/studio/?"),
+    ("https://apps.example.org", "https://apps.example.org/?"),
+    ("https://apps.example.org/emstudio/", "https://apps.example.org/emstudio/?"),
+])
+def test_the_browser_door_always_has_ONE_slash_before_the_query(
+        monkeypatch, configured, expected):
+    monkeypatch.setenv("EM_EMSTUDIO_WEB_URL", configured)
     url = ho.open_targets("r")["tools"]["emstudio"]["browser"]
-    assert url.startswith("https://apps.example.org/emstudio?")
+    assert url.startswith(expected), url
+    # …and never two, which is the other way to get this wrong
+    assert "//?" not in url
+    assert "?server=" in url and "&room=r" in url
 
 
 def test_the_answer_names_the_address_and_not_the_setting(monkeypatch):
