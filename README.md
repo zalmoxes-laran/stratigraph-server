@@ -81,6 +81,11 @@ down in `app/rooms.py` and deliberately not implemented.
 | `GET/POST /v1/resolve-authority` | ranked offline authority candidates; both verbs, like the bridge | authority snapshots |
 | `GET /health` | **unversioned probe alias** — same payload as `/v1/health` | — |
 
+**This table is the P0 read subset, not the surface.** The build now serves 49
+operations across rooms, access, assets, node administration, corpus, IIIF and
+photogrammetry — `GET /docs` is the live list, and it is the one that cannot go
+stale.
+
 ### Versioning
 
 **`/v1` is the stable contract.** Route names and payloads under it do not move:
@@ -159,6 +164,22 @@ StratiGraph Server** in that realm, and — the one that bites — an **audience
 because Keycloak does not put a client's own id in `aud` by default. Without the
 mapper a genuine token arrives with `aud: account` and is correctly refused with a
 403. See the mail-spec to Romano (realm + bucket + routing).
+
+**And a second client, which is a different thing.** The one above is the
+RESOURCE server — the audience a token is validated *for*. A person signing in
+from a browser needs a **public client** (PKCE, no secret), `em-console`, with a
+valid redirect URI for every page this node serves:
+
+```
+/em/rooms/*   /em/work/*   /em/tools/*   /em/admin/*   /em/studio/*   /em/read/*
+```
+
+Measured on 7 September 2026, the realm in `docker-heriverse` carries one client,
+`heriverse`, and no `em-console` — so today no StratiGraph page can sign anybody
+in on that node, and it is not a matter of the two pages added on 6 September.
+The deploy-time preflight in `heriverse-ansible` refuses the run and prints the
+URIs ready to paste; it does not write them, because an identity provider must
+not be writable by the thing it authenticates.
 
 ## Run it
 
@@ -274,24 +295,39 @@ the zone's central meridian (15°E) by definition, not by table lookup — so `l
 
 ## Roadmap
 
-| phase | what | with |
+**Where this is: P0–P4.5 are in and measured.** The phases are kept by number
+because the rest of this repo, and the reports under `.claude/wip/reports/`,
+refer to them that way.
+
+| phase | what | state |
 |---|---|---|
-| **P0** | this scaffold: read-only, local, no auth | — |
-| **P1** | **Keycloak** bearer-token auth on the shared realm — done, verified against a locally signed realm; the run against the real one needs 3DR's config (see *Auth* above). **ORCID** as user identity is a realm-side concern, so it lands with that config rather than here | 3DR, shared infra |
-| P2 | **MinIO assets** — the same stable-ID resolver s3Dgraphy already has (R0–R2) | 3DR |
-| P3 | **op-log WebSocket** — ADR-002: one host per session now, CRDT later | — |
-| P4 | **deployment** (WP6) on Heriverse-Docker | 3DR |
+| **P0** | the read API over s3Dgraphy — validate, export-ttl, reproject, resolve-authority | **done** |
+| **P1** | **Keycloak** bearer auth on the shared realm; **ORCID** as the identity a room grants a role to | **done**, running against a real realm on the dev stack |
+| **P2** | **MinIO assets**, content-addressed by sha256, with the IIIF image layer reading the same bucket | **done** |
+| **P3** | **the room relay** — the WIRE 2 envelope, five idempotent ops, snapshots, presence | **done**. The conflict policy landed as convergence by merge, not the one-host-per-session ADR-002 allowed for |
+| **P4** | **deployment** (WP6) — the dev stack is arranged like production; the Ansible role lives in `heriverse-ansible` | **done on the dev stack**; an institutional host is the open half |
+| **P4.2 · P4.5** | one room, one live graph; the register, ACLs, roles, groups and invites; the front door split by verb; the node map | **done** |
 
-None of them is stubbed here. A placeholder endpoint gets called, and each phase
-carries a real decision — which identity provider, which bucket layout, which
-conflict policy — that is not ours alone to make.
+**What is actually open.** Each of these has a design note behind it rather than
+a ticket, because each carries a decision that is not ours alone to make:
 
-The mini-plan (`Regia_EM/StratiGraph Server-mini-plan.md`) describes the **full** surface this
-service will eventually expose: GraphML ↔ em.json, the resource ops (list / resolve /
-ingest-minio / presign), DTC detach/inject/bake, `georeference_scene`, and the
-narrative generation seam. P0 carries the read-only subset on purpose — everything
-else either writes, or needs the asset store, or needs auth, and each of those is a
-phase with a decision attached. The list is the roadmap's, not a gap in P0.
+* **an institutional host** — ops, and a realm this project does not own. The
+  deploy-time preflight in `heriverse-ansible` refuses rather than writing it,
+  on purpose: an identity provider must not be writable by the thing it
+  authenticates.
+* **versioning of the published** — a study is a series, and a version is a
+  number *and* a checksum.
+* **who signs a published version** — presence, property and authorship are
+  three different questions, and only the first two live on this node.
+* **two verbs that do not exist yet**, both named inside a refusal rather than
+  invented on the spot: re-pointing a declared room at another container, and
+  forking a published study.
+
+The mini-plan (`Regia_EM/StratiGraph Server-mini-plan.md`) describes the **full**
+surface this service will eventually expose. Most of it is now here — the
+resource ops, the asset store, the room relay, `georeference_scene`. What is not
+(the DTC bake/detach path, the narrative generation seam) is listed there rather
+than stubbed here, because a placeholder endpoint gets called.
 
 ## License
 
