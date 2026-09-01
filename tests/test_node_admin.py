@@ -445,3 +445,92 @@ def test_the_pkce_verifier_never_outlives_its_exchange(client):
     assert "localStorage" not in source, "a verifier in localStorage outlives the tab"
     # …and the token itself is never stored, in either file
     assert "localStorage" not in client.get("/admin/console.js").text
+
+
+# ── THE KNOT THE OPERATOR SHOULD SEE BEFORE IT BITES ─────────────────────────
+#
+# An archived room still naming a graph that a LIVE room has taken cannot come
+# back — `RoomRegistry.archive` refuses it with a 409, correctly, and at the worst
+# possible moment: when somebody is trying to start a season again. So the report
+# says it first.
+#
+# SEEDED ON PURPOSE, and that is not laziness about the fixture: on E.D.'s node
+# this state does not exist (11 live rooms, 112 archived, zero shared primaries
+# among the live, zero live rooms sitting on an archived room's graph). A test
+# that hoped the store would offer the state would be a test that passes because
+# it measured nothing.
+
+def test_the_storage_report_NAMES_a_room_that_cannot_come_back(
+        client, enforcing, operator):
+    """The state, seeded: a room archived, its graph taken by a live one."""
+    enforcing(ANNA)
+    assert client.post("/v1/rooms", headers=AUTH,
+                       json={"room_id": "dorme"}).status_code == 201
+    assert client.post("/v1/rooms/dorme/archive", headers=AUTH,
+                       json={"archived": True}).status_code == 200
+    assert client.post("/v1/rooms", headers=AUTH,
+                       json={"room_id": "sveglia",
+                             "container_refs": ["dorme"]}).status_code == 201
+
+    enforcing(BRUNO)
+    operator(BRUNO)
+    body = client.get("/v1/admin/storage", headers=AUTH).json()
+    blocked = {b["room_id"]: b for b in body["blocked_returns"]}
+    assert "dorme" in blocked, body["blocked_returns"]
+    assert blocked["dorme"]["graph"] == "dorme"
+    assert blocked["dorme"]["taken_by"] == "sveglia"
+    # …and everything needed to act is in the row: which room is asleep, which
+    # graph it still claims, who is on it now. A report that said «a conflict
+    # exists» would send somebody looking for it.
+    assert set(blocked["dorme"]) == {"room_id", "graph", "taken_by"}
+
+    # …and the refusal it predicts really arrives
+    enforcing(ANNA)
+    back = client.post("/v1/rooms/dorme/archive", headers=AUTH,
+                       json={"archived": False})
+    assert back.status_code == 409
+    assert back.json()["taken_by"] == "sveglia"
+
+
+def test_a_HEALTHY_store_does_not_get_a_knot_invented_for_it(
+        client, enforcing, operator):
+    """The other half, and the prompt asked for it by name: the report must not
+    invent the state on a store that does not have it.
+
+    Three shapes that are NOT collisions and must stay silent: an archived room
+    whose graph nobody took, a live room on its own graph, and a room that points
+    at a container the store never had."""
+    enforcing(ANNA)
+    client.post("/v1/rooms", headers=AUTH, json={"room_id": "sola"})
+    client.post("/v1/rooms/sola/archive", headers=AUTH, json={"archived": True})
+    client.post("/v1/rooms", headers=AUTH, json={"room_id": "viva"})
+    client.post("/v1/rooms", headers=AUTH,
+                json={"room_id": "orfana", "container_refs": ["mai-esistito"]})
+
+    enforcing(BRUNO)
+    operator(BRUNO)
+    body = client.get("/v1/admin/storage", headers=AUTH).json()
+    assert body["blocked_returns"] == [], body["blocked_returns"]
+    # …and the rest of the report still works, so the new field did not arrive
+    # by breaking the three questions that were already answered
+    rooms = {r["room_id"]: r for r in body["rooms"]}
+    assert rooms["orfana"]["missing_refs"] == ["mai-esistito"]
+    assert rooms["sola"]["archived_at"]
+
+
+def test_the_report_and_the_REFUSAL_ask_the_same_question():
+    """One derivation. A report with its own idea of what a collision is would be
+    right until one of the two was edited — and then it would be a console
+    telling an operator that everything is fine."""
+    import pathlib
+    import re
+    main_py = (pathlib.Path(__file__).resolve().parent.parent
+               / "app" / "main.py").read_text(encoding="utf-8")
+    assert main_py.count("room_already_on(") == 2, (
+        "the creation's 409 and the storage report must both ask "
+        "`room_already_on`, and nothing else may re-derive it")
+    rooms_py = (pathlib.Path(__file__).resolve().parent.parent
+                / "app" / "rooms.py").read_text(encoding="utf-8")
+    # …and the return check asks it too, from inside the registry
+    assert "self.room_already_on(descriptor.primary_ref" in rooms_py
+    assert len(re.findall(r"def room_already_on", rooms_py)) == 1

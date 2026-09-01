@@ -41,7 +41,7 @@ import pathlib
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, FastAPI, HTTPException, Query, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from html import escape as html_escape
 from fastapi.middleware.cors import CORSMiddleware
@@ -66,7 +66,7 @@ from .blend_backups import (BLEND_MEDIA_TYPE, BlendBackups,
                             describe as backup_describe,
                             register_from_env as backup_register_from_env)
 from .node_health import node_health, node_services
-from .rooms import RoomDescriptor
+from .rooms import RoomDescriptor, RoomGraphTaken
 from .store import describe as snapshot_describe
 from .store import describe_rooms as room_describe
 from . import ws as _ws
@@ -122,6 +122,50 @@ app = FastAPI(
     summary="The s3Dgraphy access API over HTTP — read-only (P0), under /v1.",
     description=__doc__,
 )
+
+# ── ONE translation of «that graph has another home now» ─────────────────────
+#
+# `RoomRegistry.archive` refuses to bring a room back onto a graph a live room
+# has taken, and it does so with a DOMAIN exception: `app/rooms.py` does not know
+# FastAPI and is not about to learn. So the HTTP status and the wording live
+# here, once — and every caller of `archive`, including one written next month,
+# gets both without doing anything.
+#
+# THE SENTENCE IS NOT THE CREATION'S. There, «enter that room instead» is the
+# whole remedy: you wanted to work on that graph and it has an address. Here the
+# person is trying to get THEIR OWN room back, and sending them into somebody
+# else's house does not help them. So it names who took the graph and says what
+# can be done, because a refusal that only refuses leaves somebody with nothing
+# to do.
+#
+# AND IT ONLY OFFERS WHAT EXISTS. The first version of this sentence said «point
+# this room at a container of its own (POST /v1/rooms with its own
+# container_refs)» — and then the live measurement refused that call with a 409,
+# because `POST /v1/rooms` rightly rejects a room that is already declared. There
+# is no verb, today, that changes a declared room's `container_refs`: the two
+# things a person can actually do are ask the room that took the graph to step
+# off it, or start a new room and carry the work there. A remedy nobody can
+# perform is worse than no remedy, because it sends somebody looking for a door.
+#
+# (The missing verb is named in the end-of rather than invented here: who may
+# re-point a room, and what happens if it is live while being re-pointed, is a
+# design question and not an afternoon inside a refusal handler.)
+@app.exception_handler(RoomGraphTaken)
+async def _room_graph_taken(request: Request, exc: RoomGraphTaken):
+    return JSONResponse(
+        status_code=409,
+        content={"detail": (
+            f"{exc.room_id!r} cannot come back yet: the graph {exc.graph!r} is "
+            f"now the live copy of the room {exc.taken_by!r} — one room, one live "
+            f"graph. What you can do: ask the owner of {exc.taken_by!r} to archive "
+            f"it, which frees the graph; or create a new room on a container of "
+            f"your own and carry the work there. {exc.room_id!r} stays archived "
+            f"and keeps its title, its creator and its references — nothing has "
+            f"been lost. (Re-pointing a declared room at another container has no "
+            f"verb yet.)"),
+            "room_id": exc.room_id, "graph": exc.graph,
+            "taken_by": exc.taken_by})
+
 
 # ── who may call this from a browser ─────────────────────────────────────────
 #
@@ -2478,6 +2522,19 @@ class StorageRoom(BaseModel):
     missing_refs: List[str] = Field(default_factory=list)
 
 
+class BlockedReturn(BaseModel):
+    """An archived room whose graph a live room has taken meanwhile.
+
+    The state that WILL produce a 409 the next time somebody tries to bring the
+    archived room back — and an operator should learn it from the report, not from
+    somebody else's refusal. Everything needed to act is here: which room is
+    asleep, which graph it still claims as its own, and who is on it now.
+    """
+    room_id: str
+    graph: str
+    taken_by: str
+
+
 class StorageOut(BaseModel):
     asset_store: str
     snapshot_store: str
@@ -2485,6 +2542,10 @@ class StorageOut(BaseModel):
     #: every digest the store holds that no room's document mentions. An orphan
     #: is not deleted here: it is NAMED, and what to do about it is a decision.
     orphan_assets: List[str] = Field(default_factory=list)
+    #: …and the same discipline for a lifecycle knot: NAMED, never untied here.
+    #: Untying it means either moving somebody's room to another container or
+    #: taking a graph off a live room, and neither is a report's business.
+    blocked_returns: List[BlockedReturn] = Field(default_factory=list)
     rooms: List[StorageRoom] = Field(default_factory=list)
 
 
@@ -2533,11 +2594,14 @@ async def node_rooms(request: Request) -> List[RoomOut]:
 async def node_storage(request: Request) -> StorageOut:
     """What the node is holding, and what does not line up.
 
-    Three questions an operator actually has, and none of them is answerable from
+    Four questions an operator actually has, and none of them is answerable from
     inside one room:
     * which rooms exist and which of their containers are missing;
     * how many assets each room points at, and how many of those the store has;
-    * which stored digests **no** room mentions — the orphans.
+    * which stored digests **no** room mentions — the orphans;
+    * which archived room **cannot come back**, because a live room took its graph
+      while it slept. That one is a refusal waiting to happen, and an operator
+      should meet it here rather than in somebody else's 409.
 
     MinIO is behind StratiGraph Server here as everywhere else: this reads the store
     through the same interface the asset route uses, and hands back numbers. No
@@ -2570,11 +2634,35 @@ async def node_storage(request: Request) -> StorageOut:
             archived_at=descriptor.archived_at,
             missing_refs=registry.missing_refs(descriptor)))
 
+    # ── THE KNOT AN OPERATOR SHOULD SEE BEFORE IT BITES ──────────────────────
+    #
+    # An archived room still naming a graph that a LIVE room has taken cannot come
+    # back: `RoomRegistry.archive` refuses it with a 409. That refusal is correct
+    # and it arrives at the worst possible moment — when somebody is trying to
+    # start a season again. So the report says it first.
+    #
+    # ASKED THROUGH `room_already_on`, the same derivation that does the refusing,
+    # so the report and the rule cannot disagree about what a collision is. A
+    # second implementation here would be a report that is right until one of the
+    # two is edited.
+    blocked = []
+    for room_id in sorted(ids):
+        descriptor = registry.descriptor(room_id)
+        if not descriptor.archived_at:
+            continue
+        taken = registry.room_already_on(descriptor.primary_ref,
+                                         except_room=room_id)
+        if taken:
+            blocked.append(BlockedReturn(room_id=room_id,
+                                         graph=descriptor.primary_ref,
+                                         taken_by=taken))
+
     return StorageOut(
         asset_store=asset_describe(ASSET_STORE),
         snapshot_store=snapshot_describe(snapshot_store()),
         room_store=room_describe(registry.rooms_store),
         orphan_assets=sorted(_stored_digests() - seen),
+        blocked_returns=blocked,
         rooms=out_rooms)
 
 

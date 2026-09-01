@@ -64,17 +64,43 @@ def main() -> int:
 
     # ── 2 · one container, and two ──────────────────────────────────────────
     print("\n2 · a room references 1..N containers")
+    # THE PRIMARY IS THE ROOM'S OWN, and that is the shape the «one room, one live
+    # graph» rule makes natural: a room's FIRST reference is its live document, so
+    # it is its own; a SECOND reference is a container it reads and does not edit.
+    #
+    # CHANGED on 7 September 2026, and it was this smoke that found the need: it
+    # used to declare `["mostra", "scavo"]`, i.e. take a live room's graph as its
+    # own primary — which is now refused with a 409, correctly. Its SUBJECT was
+    # never that: it is that a room references 1..N containers and keeps them in
+    # order. So the order is still measured, on a shape a real room would have.
+    #
+    # And this smoke is why three rows appear in `/v1/admin/storage`'s
+    # `blocked_returns` on the dev node: every past run left an archived
+    # `smoke-two-…` still naming `mostra` as its primary, and `mostra` is live.
+    # They are the report's first real customers.
     status, _, raw = call("POST", f"{base}/rooms", token=owner, json_body={
         "room_id": two, "title": "Smoke · due container",
-        "container_refs": ["mostra", "scavo"]})
+        "container_refs": [two, "mostra"]})
     tally.ok(status == 201, f"declared {two} over two containers", detail_of(raw))
     record = body_of(raw)
-    tally.ok(record.get("container_refs") == ["mostra", "scavo"],
+    tally.ok(record.get("container_refs") == [two, "mostra"],
              "both references are kept, in order",
              str(record.get("container_refs")))
-    tally.ok(record.get("missing_refs") == [],
-             "both exist in the snapshot store, so nothing is missing",
+    tally.ok(record.get("missing_refs") == [two],
+             "…and the node names the one that does not exist yet — its own — "
+             "while the SECOND, a real container, is not reported missing",
              str(record.get("missing_refs")))
+    # …and the rule that made this shape necessary, measured from the live node:
+    # a room may NOT be born on a graph a live room already holds.
+    status, _, raw = call("POST", f"{base}/rooms", token=owner, json_body={
+        "room_id": unique("smoke-clash"), "title": "Smoke · sullo stesso grafo",
+        "container_refs": ["mostra"]})
+    tally.ok(status == 409,
+             "a second room on a live graph is refused — one room, one live graph",
+             f"{status}: {detail_of(raw)}")
+    tally.ok("one room, one live graph" in (detail_of(raw) or ""),
+             "…and the refusal says the rule, and names the room to enter",
+             detail_of(raw))
 
     # ── 3 · the record is THIN ──────────────────────────────────────────────
     print("\n3 · thin: the record holds no member list")

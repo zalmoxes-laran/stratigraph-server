@@ -387,6 +387,28 @@ class RoomDescriptor:
 # file; the relay writes through an interface), and a test says so out loud.
 
 
+class RoomGraphTaken(Exception):
+    """A room cannot come back onto a graph that found another home meanwhile.
+
+    Raised by `RoomRegistry.archive(..., archived=False)`. It is a DOMAIN error
+    and not an HTTP one on purpose — this module does not know FastAPI, and the
+    one place that translates it into a 409 lives in `main.py`.
+
+    WHY IT LIVES IN `archive` AND NOT IN THE ENDPOINTS: two doors call archive
+    today (a room's own owner, and an operator on the node console) and a third
+    is a plausible afternoon's work. A check written in both is a check the third
+    one will not have; a check written HERE is one the third one inherits without
+    knowing it exists.
+    """
+
+    def __init__(self, room_id: str, graph: str, taken_by: str) -> None:
+        self.room_id = room_id
+        self.graph = graph
+        self.taken_by = taken_by
+        super().__init__(f"{room_id!r} cannot return to {graph!r}: "
+                         f"{taken_by!r} is live on it")
+
+
 class RoomRegistry:
     """The rooms this instance owns.
 
@@ -497,6 +519,35 @@ class RoomRegistry:
         a confirmation, not the tail end of a garbage collector.
         """
         descriptor = self.descriptor(room_id)
+        # ── AND THE QUESTION BELONGS TO THE RETURN, NOT ONLY TO THE DEPARTURE ──
+        #
+        # `room_already_on` is asked when a room is BORN and never when a room
+        # COMES BACK — and coming back is the entire reason archiving is a mark
+        # and not a deletion. Measured on the dev stack, five legal calls, no
+        # forcing:
+        #
+        #     POST /v1/rooms {probe-c1}                        → 201
+        #     POST /v1/rooms {probe-c3, refs:[probe-c1]}        → 409  ✓
+        #     POST /v1/rooms/probe-c1/archive {archived:true}   → 200
+        #     POST /v1/rooms {probe-c3, refs:[probe-c1]}        → 201  ← through
+        #     POST /v1/rooms/probe-c1/archive {archived:false}  → 200
+        #
+        # …and two live rooms on one live graph, which is exactly the shape the
+        # 409 exists to refuse. Reproduced again from the other end: an ARCHIVED
+        # room pointed at a live room's graph came back with a 200, and the store
+        # then had `['probe-c3', 'probe-c1']` both live on `probe-c1`.
+        #
+        # THE SKIP ON `archived_at` STAYS. Removing it would make the archive a
+        # permanent lock on a graph, and the archive exists to let a season end —
+        # «a workspace goes quiet for a season (a dig is seasonal)», says the
+        # docstring above, which is the same sentence that explains why a
+        # sleeping room's graph must not be reassigned under it. The exception and
+        # its refutation were already in this class.
+        if not archived and descriptor.archived_at:
+            taken = self.room_already_on(descriptor.primary_ref,
+                                         except_room=room_id)
+            if taken:
+                raise RoomGraphTaken(room_id, descriptor.primary_ref, taken)
         descriptor.archived_at = (at or now_iso()) if archived else None
         return self.declare(descriptor)
 

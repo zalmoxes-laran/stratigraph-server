@@ -99,6 +99,16 @@ def enforcing(monkeypatch):
 
 
 @pytest.fixture
+def operator(monkeypatch):
+    """Name an operator the way a deployment does: from outside every room. Same
+    shape as `test_node_admin.py`'s — the operator's archive door is one of the
+    two that must inherit the return check."""
+    def be(orcid):
+        monkeypatch.setenv("EM_OPERATORS", orcid)
+    return be
+
+
+@pytest.fixture
 def client():
     return TestClient(app)
 
@@ -583,3 +593,186 @@ def test_the_question_ignores_the_room_ASKING():
     from app.rooms import RoomDescriptor
     d = RoomDescriptor(room_id="x", title="X", container_refs=["x"])
     assert d.primary_ref == "x"
+
+
+# ── IL RITORNO · «una stanza, un grafo vivo» vale anche quando una stanza torna ─
+#
+# The 409 at creation works. But the question was asked when a room is BORN and
+# never when a room COMES BACK — and coming back is the entire reason archiving is
+# a mark and not a deletion. Five legal calls on the dev stack, no forcing:
+#
+#     POST /v1/rooms {probe-c1}                        → 201
+#     POST /v1/rooms {probe-c3, refs:[probe-c1]}       → 409  ✓ the rule bites
+#     POST /v1/rooms/probe-c1/archive {archived:true}  → 200
+#     POST /v1/rooms {probe-c3, refs:[probe-c1]}       → 201  ← straight through
+#     POST /v1/rooms/probe-c1/archive {archived:false} → 200
+#
+# …and two live rooms on one live graph. Measured again from the other end: an
+# ARCHIVED room still naming a live room's graph came back with a 200, and the
+# store then listed `['probe-c3', 'probe-c1']` both live on `probe-c1`.
+#
+# The skip on `archived_at` in `room_already_on` STAYS: removing it would make the
+# archive a permanent lock on a graph, and the archive exists to let a season end.
+# The question belongs to the return.
+
+def test_a_room_cannot_COME_BACK_onto_a_graph_that_found_another_home(
+        client, enforcing):
+    """The five calls, and the fifth is now refused."""
+    enforcing(ANNA)
+    assert client.post("/v1/rooms", headers=AUTH,
+                       json={"room_id": "c1"}).status_code == 201
+    # while c1 is live, nobody else may be born on its graph
+    assert client.post("/v1/rooms", headers=AUTH,
+                       json={"room_id": "c3", "container_refs": ["c1"]}
+                       ).status_code == 409
+    # c1 goes quiet for the season…
+    assert client.post("/v1/rooms/c1/archive", headers=AUTH,
+                       json={"archived": True}).status_code == 200
+    # …and now c3 may take the graph, which is the archive doing its job
+    assert client.post("/v1/rooms", headers=AUTH,
+                       json={"room_id": "c3", "container_refs": ["c1"]}
+                       ).status_code == 201
+
+    # …but c1 cannot simply walk back in
+    back = client.post("/v1/rooms/c1/archive", headers=AUTH,
+                       json={"archived": False})
+    assert back.status_code == 409, back.json()
+    body = back.json()
+    assert body["taken_by"] == "c3"
+    assert body["graph"] == "c1"
+
+    detail = body["detail"]
+    # THE SENTENCE SAYS WHAT IS POSSIBLE, and that is the difference from the
+    # creation's 409: there, «enter that room» IS the remedy. Here the person
+    # wants their OWN room back, and being sent into somebody else's house helps
+    # nobody — so it names who took the graph and what can be done about it.
+    assert "c3" in detail, "it names who took the graph"
+    assert "ask the owner" in detail, "…the way out that is a conversation"
+    assert "create a new room" in detail, "…and the way out that is theirs alone"
+    assert "nothing has been lost" in detail, \
+        "an archived room is a mark, and the refusal must not read like damage"
+
+    # …and it really is still archived: a refusal that half-applied would be worse
+    assert client.get("/v1/rooms/c1", headers=AUTH).json()["archived_at"]
+
+
+def test_the_SAME_refusal_comes_from_the_operator_s_door(client, enforcing,
+                                                         operator):
+    """Two doors call `RoomRegistry.archive` and the check lives INSIDE it, so
+    the operator's console inherits the refusal rather than re-implementing it."""
+    enforcing(ANNA)
+    operator(ANNA)
+    client.post("/v1/rooms", headers=AUTH, json={"room_id": "d1"})
+    client.post("/v1/rooms/d1/archive", headers=AUTH, json={"archived": True})
+    client.post("/v1/rooms", headers=AUTH,
+                json={"room_id": "d3", "container_refs": ["d1"]})
+
+    back = client.post("/v1/admin/rooms/d1/archive", headers=AUTH,
+                       json={"archived": False, "confirm_room_id": "d1"})
+    assert back.status_code == 409, back.json()
+    assert back.json()["taken_by"] == "d3"
+
+
+def test_the_ORDINARY_return_stays_ordinary(client, enforcing):
+    """A room whose graph nobody took comes back with a 200 and no ceremony. A
+    check that made the common case harder would have cost more than it saved."""
+    enforcing(ANNA)
+    client.post("/v1/rooms", headers=AUTH, json={"room_id": "stagione"})
+    client.post("/v1/rooms/stagione/archive", headers=AUTH, json={"archived": True})
+    back = client.post("/v1/rooms/stagione/archive", headers=AUTH,
+                       json={"archived": False})
+    assert back.status_code == 200, back.json()
+    assert back.json()["archived_at"] is None
+
+
+def test_THE_REMEDY_THE_SENTENCE_OFFERS_IS_ONE_THAT_EXISTS(client, enforcing):
+    """A refusal must not send somebody looking for a door that is not there.
+
+    MEASURED, and it corrected the sentence: the first version offered «point this
+    room at a container of its own (POST /v1/rooms with its own container_refs)»,
+    and that call answers 409 — `POST /v1/rooms` rightly refuses a room that is
+    already declared. There is no verb today that changes a declared room's
+    `container_refs`.
+
+    My own first test for it passed while the API refused, because it called
+    `registry.declare()` directly: a test that is true about the domain and false
+    about the path anybody would take. So this one goes through the door.
+    """
+    enforcing(ANNA)
+    client.post("/v1/rooms", headers=AUTH, json={"room_id": "e1"})
+    client.post("/v1/rooms/e1/archive", headers=AUTH, json={"archived": True})
+    client.post("/v1/rooms", headers=AUTH,
+                json={"room_id": "e3", "container_refs": ["e1"]})
+    blocked = client.post("/v1/rooms/e1/archive", headers=AUTH,
+                          json={"archived": False})
+    assert blocked.status_code == 409
+
+    # the remedy that does NOT exist is not offered…
+    detail = blocked.json()["detail"]
+    assert "container_refs" not in detail, (
+        "the sentence offers re-pointing, and re-pointing has no verb: "
+        + detail)
+    assert "no verb yet" in detail, "…and the absence is said out loud"
+
+    # …and re-declaring really is refused, which is why
+    again = client.post("/v1/rooms", headers=AUTH,
+                        json={"room_id": "e1", "container_refs": ["e1-suo"]})
+    assert again.status_code == 409
+    assert "already declared" in again.json()["detail"]
+
+    # THE TWO REMEDIES THAT DO EXIST, both walked through the door:
+    # 1 · the room that took the graph steps off it
+    assert client.post("/v1/rooms/e3/archive", headers=AUTH,
+                       json={"archived": True}).status_code == 200
+    assert client.post("/v1/rooms/e1/archive", headers=AUTH,
+                       json={"archived": False}).status_code == 200
+    # 2 · …or a new room on a container of your own
+    fresh = client.post("/v1/rooms", headers=AUTH,
+                        json={"room_id": "e-nuova",
+                              "container_refs": ["e-nuova-suo"]})
+    assert fresh.status_code == 201
+
+
+def test_NOTHING_OUTSIDE_THE_REGISTRY_UN_ARCHIVES_BY_HAND():
+    """The check that survives a third door.
+
+    Two doors call `archive` today and a third is a plausible afternoon's work.
+    The check is INSIDE `RoomRegistry.archive`, so a third caller inherits it
+    without knowing it exists — but only as long as nobody reaches past the
+    registry and clears the flag themselves.
+
+    So: outside `app/rooms.py`, no module may assign `archived_at`. That is the
+    shape a bypass takes, and it is the shape this test refuses.
+    """
+    import pathlib
+    import re
+    app_dir = pathlib.Path(__file__).resolve().parent.parent / "app"
+    offenders = []
+    for path in app_dir.rglob("*.py"):
+        if path.name == "rooms.py":
+            continue                      # the registry is where the flag lives
+        source = re.sub(r"#[^\n]*", "", path.read_text(encoding="utf-8"))
+        for match in re.finditer(r"\.archived_at\s*=", source):
+            offenders.append(f"{path.name}: {source[max(0, match.start()-60):match.end()]}")
+    assert not offenders, (
+        "something outside the registry sets `archived_at` directly, which walks "
+        "past the check that keeps a room from returning onto a graph another "
+        "room has taken. Call `RoomRegistry.archive(..., archived=False)` instead "
+        "— it raises `RoomGraphTaken`, and `main.py` turns that into the 409 with "
+        "the sentence: " + " · ".join(offenders))
+
+
+def test_every_archive_endpoint_goes_THROUGH_the_registry():
+    """…and the other half: a door that marks a room without the registry would
+    be a door with its own idea of what archiving means."""
+    import pathlib
+    import re
+    main_py = (pathlib.Path(__file__).resolve().parent.parent
+               / "app" / "main.py").read_text(encoding="utf-8")
+    doors = re.findall(r'@v1\.post\("(/[^"]*archive[^"]*)"', main_py)
+    assert len(doors) >= 2, doors
+    calls = len(re.findall(r"\.archive\(room_id, archived=body\.archived\)", main_py))
+    assert calls == len(doors), (
+        f"{len(doors)} archive doors and {calls} calls through the registry — "
+        "every door must pass through `RoomRegistry.archive`, which is the one "
+        "place that asks whether the graph found another home")
