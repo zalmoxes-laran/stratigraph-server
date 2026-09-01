@@ -2594,6 +2594,17 @@ def _stored_digests() -> set:
     return set()
 
 
+class NodeEntrance(BaseModel):
+    """One face of THIS server — a path this app really mounts."""
+
+    path: str
+    label: str
+    what: str
+    #: the full public address, or "" when this node has no public name. Never a
+    #: guess: see `entrances`.
+    url: str = ""
+
+
 class NodeCheck(BaseModel):
     name: str
     #: ok · degraded · unreachable · not configured — four states, because a
@@ -2604,6 +2615,14 @@ class NodeCheck(BaseModel):
     latency_ms: Optional[int] = None
     detail: str = ""
     facts: Dict[str, Any] = Field(default_factory=dict)
+    #: where a BROWSER goes for this face, from configuration only — empty when
+    #: nobody said, because a console URL nobody configured is a button that
+    #: works on one laptop
+    browser: Optional[str] = None
+    #: the URL the probe actually asked, so an operator can put the same question
+    #: to a terminal and compare. If the two answers differ, the page is lying
+    #: and that is the bug worth finding
+    probe: Optional[str] = None
 
 
 class NodeHealthOut(BaseModel):
@@ -2613,6 +2632,10 @@ class NodeHealthOut(BaseModel):
     deadline_s: float
     checks: List[NodeCheck] = Field(default_factory=list)
     versions: Dict[str, Any] = Field(default_factory=dict)
+    #: THIS server's own faces — the doors somebody restarts from. Listed beside
+    #: the `mount` calls that create them (`ENTRANCES`), and held to the app's
+    #: real route table by `tests/test_node_map.py`.
+    entrances: List[NodeEntrance] = Field(default_factory=list)
 
 
 @v1.get("/admin/health", response_model=NodeHealthOut, tags=["node"])
@@ -2630,10 +2653,13 @@ async def node_health_report(request: Request) -> NodeHealthOut:
     that can hang is worse than none, because it looks like it is about to answer.
     See `app/node_health.py` for why a socket timeout alone is not a bound.
     """
+    from . import handoff as ho
+
     _require_operator(request)
     return NodeHealthOut(**node_health(
         version=__version__, s3dgraphy=_s3dgraphy_version(),
-        asset_store=ASSET_STORE))
+        asset_store=ASSET_STORE),
+        entrances=[NodeEntrance(**face) for face in entrances(ho.public_base())])
 
 
 def _s3dgraphy_version() -> Optional[str]:
@@ -3031,6 +3057,58 @@ _ROOMS_UI = pathlib.Path(__file__).resolve().parent / "rooms_ui"
 if _ROOMS_UI.is_dir():
     app.mount("/rooms", _FreshStatic(directory=str(_ROOMS_UI), html=True),
               name="rooms-browser")
+
+# ── THE NODE'S OWN FACES, listed where they are MOUNTED ──────────────────────
+#
+# The entrance page has to be able to say «here is where you start again» without
+# owning a list of addresses — the same rule as `/v1/auth-config` and `/v1/node`:
+# the node declares, the page composes. So the faces are enumerated HERE, three
+# lines under the `mount` calls and the routes they name, because a list that
+# lives beside what it describes is the one that gets updated when that thing
+# moves.
+#
+# It is still a list, so it can still drift. Which is why
+# `tests/test_node_map.py` resolves every `path` in here against the app's real
+# route table and fails the suite when one of them does not exist. Without that
+# test this would be the fifth copy to keep aligned — exactly the mistake this
+# whole arc has been undoing.
+#
+# NOT a new endpoint: this rides on `/v1/admin/health`, which is already the
+# operator's infrastructure map.
+ENTRANCES: List[Dict[str, str]] = [
+    {"path": "/rooms/", "label": "The front door",
+     "what": "rooms, studies and monuments — where somebody who came to work "
+             "starts, and where somebody who came to look around starts too"},
+    {"path": "/admin/", "label": "Node console",
+     "what": "every room on this node, the storage behind them, the lifecycle "
+             "of the ones nobody claims. Operator capability required"},
+    {"path": "/docs", "label": "OpenAPI",
+     "what": "every route this build serves, with its shapes — the answer to "
+             "«what can I call» that does not need a person"},
+    {"path": "/health", "label": "Public probe",
+     "what": "is the process up and what can this build do. Unauthenticated, "
+             "for an orchestrator"},
+    {"path": "/v1/node", "label": "What this node offers",
+     "what": "the neighbours and their states, reduced — no internal hostname, "
+             "no latency. What the front door composes itself from"},
+    {"path": "/v1/auth-config", "label": "How to sign in",
+     "what": "the realm, the client and the endpoints a browser needs for "
+             "OIDC + PKCE. Empty of secrets by construction"},
+]
+
+
+def entrances(public_base: str) -> List[Dict[str, str]]:
+    """The faces above, each with the address another machine can reach.
+
+    `url` is empty when this node has no public name — `handoff.public_base()`
+    returns "" rather than guessing, and a page that printed `http://localhost:8000`
+    would be handing an operator a link that works only where it was written.
+    The path is always there, which is what makes the row useful anyway.
+    """
+    base = (public_base or "").rstrip("/")
+    return [{**face, "url": f"{base}{face['path']}" if base else ""}
+            for face in ENTRANCES]
+
 
 app.include_router(v1_public)
 app.include_router(v1)

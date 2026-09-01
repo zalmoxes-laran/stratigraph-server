@@ -77,11 +77,64 @@ class Check:
     #: anything the probe learned that is worth showing (a bucket's size, a
     #: realm's key count). Never a secret.
     facts: Dict[str, Any] = field(default_factory=dict)
+    #: WHERE A BROWSER GOES for this face — and empty when nobody said.
+    #:
+    #: Only ever from configuration this node already reads, or from a variable
+    #: added for the purpose (`EM_KEYCLOAK_CONSOLE_URL`, `EM_MINIO_CONSOLE_URL`).
+    #: NEVER derived from the internal endpoint, and never `http://localhost:9001`
+    #: for convenience: a console URL nobody configured is a button that works on
+    #: the laptop of whoever wrote it, which is a default that is an assertion.
+    #: An operator seeing a row with no link and an internal address knows
+    #: exactly what to do; one seeing a dead link does not.
+    browser: Optional[str] = None
+    #: …and the URL this probe ACTUALLY asked, so the same question can be put
+    #: again by hand and the two answers compared. That comparison is the point:
+    #: if the page and the terminal disagree, the page is lying and that is the
+    #: bug. Kept whole (path included) unlike `target`, which is host-only —
+    #: these are internal service URLs on a container network, and none of the
+    #: ones a probe builds carries userinfo.
+    probe: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Any]:
         return {"name": self.name, "state": self.state, "target": self.target,
                 "latency_ms": self.latency_ms, "detail": self.detail,
-                "facts": self.facts}
+                "facts": self.facts, "browser": self.browser,
+                "probe": self.probe}
+
+
+def _public_door() -> Optional[str]:
+    """This node's own front door, when it knows its public name.
+
+    `handoff.public_base()` is the one place that answers "what address can
+    another machine reach me at", and it deliberately returns "" rather than
+    guessing — so this returns None on a node nobody has named, and the page
+    draws the row with no link. Imported inside the function because
+    `app.handoff` imports nothing from here and the reverse should stay true at
+    module level.
+    """
+    try:
+        from .handoff import public_base
+    except Exception:                              # noqa: BLE001
+        return None
+    base = (public_base() or "").rstrip("/")
+    return f"{base}/rooms/" if base else None
+
+
+def _console(*names: str, environ: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """A face's BROWSER address, from configuration, or None.
+
+    The one reader, so «no URL is guessed» is a property of a single function
+    rather than a habit repeated in seven probes. `None` when nobody said, and
+    that is the whole discipline: the page then draws the row with its state and
+    its internal address and no link, which is honest, instead of a link to
+    somewhere that exists only on one laptop.
+    """
+    env = environ if environ is not None else os.environ
+    for name in names:
+        value = (env.get(name) or "").strip().rstrip("/")
+        if value:
+            return value
+    return None
 
 
 def _host_of(url: str) -> str:
@@ -172,6 +225,10 @@ def _probe_self(version: str, s3dgraphy: Optional[str],
     return Check(name="stratigraph-server", state=OK, target="self", latency_ms=0,
                  detail=f"this process answered (up "
                         f"{int(time.time() - started_at)}s)",
+                 # the door, when this node knows its own public name. Not
+                 # guessed: `public_base` returns "" rather than inventing one.
+                 browser=_public_door(),
+                 probe="(this process — the request that reached this line)",
                  facts={"version": version, "s3dgraphy": s3dgraphy,
                         "uptime_s": int(time.time() - started_at),
                         "host": socket.gethostname()})
@@ -191,11 +248,14 @@ def _probe_minio(store: Any) -> Check:
                      detail="this node stores assets locally (no MinIO "
                             "configured) — see /health for which store is in use")
     target = _host_of(endpoint)
-    status, _, error = _fetch(endpoint.rstrip("/") + "/minio/health/live")
+    asked = endpoint.rstrip("/") + "/minio/health/live"
+    console = _console("EM_MINIO_CONSOLE_URL")
+    status, _, error = _fetch(asked)
     if error:
         return Check(name="minio", state=UNREACHABLE, target=target,
+                     browser=console, probe=asked,
                      detail=f"the object store did not answer — {error}")
-    check = Check(name="minio", target=target,
+    check = Check(name="minio", target=target, browser=console, probe=asked,
                   state=OK if status in (200, 204) else DEGRADED,
                   detail=f"health/live answered {status}",
                   facts={"bucket": bucket})
@@ -232,16 +292,20 @@ def _probe_keycloak(jwks_uri: Optional[str], issuer: Optional[str]) -> Check:
                             "is open (see /health: auth)")
     status, payload, error = _fetch(jwks_uri, expect_json=True)
     target = _host_of(jwks_uri)
+    console = _console("EM_KEYCLOAK_CONSOLE_URL")
     if error:
         return Check(name="keycloak", state=UNREACHABLE, target=target,
+                     browser=console, probe=jwks_uri,
                      detail=f"the realm's keys are unreachable — {error}. Tokens "
                             f"cannot be verified while this is true")
     keys = len((payload or {}).get("keys") or []) if isinstance(payload, dict) else 0
     if status == 200 and keys:
         return Check(name="keycloak", state=OK, target=target,
+                     browser=console, probe=jwks_uri,
                      detail=f"the realm published {keys} signing key(s)",
                      facts={"keys": keys, "issuer": issuer})
     return Check(name="keycloak", state=DEGRADED, target=target,
+                 browser=console, probe=jwks_uri,
                  detail=f"the keys endpoint answered {status} with {keys} key(s) "
                         f"— token verification will fail",
                  facts={"keys": keys, "issuer": issuer})
@@ -254,15 +318,24 @@ def _probe_iiif(base: Optional[str]) -> Check:
     if not base:
         return Check(name="iiif", state=ABSENT,
                      detail="no IIIF image service configured (EM_IIIF_INTERNAL)")
-    status, _, error = _fetch(base.rstrip("/") + "/")
+    asked = base.rstrip("/") + "/"
+    status, _, error = _fetch(asked)
     target = _host_of(base)
+    # the PUBLIC image base, when a deployment names one — that is where a
+    # browser fetches a pixel from, and it is already configuration this node
+    # reads (`docs/URL-TOPOLOGY.md`: internal is what we dial, public is what we
+    # write into a document).
+    console = _console("EM_IIIF_PUBLIC", "EM_IIIF_PUBLIC_BASE")
     if error:
         return Check(name="iiif", state=UNREACHABLE, target=target,
+                     browser=console, probe=asked,
                      detail=f"the image server did not answer — {error}")
     if status >= 500:
         return Check(name="iiif", state=DEGRADED, target=target,
+                     browser=console, probe=asked,
                      detail=f"the image server answered {status}")
     return Check(name="iiif", state=OK, target=target,
+                 browser=console, probe=asked,
                  detail=f"the image server answered {status} "
                         f"(any status means it is there)")
 
@@ -275,10 +348,13 @@ def _probe_catalog(base: Optional[str]) -> Check:
         return Check(name="stratigraph-catalog", state=ABSENT,
                      detail="no Catalog named on this node "
                             "(set EM_CATALOG_INTERNAL to watch one)")
-    status, payload, error = _fetch(base.rstrip("/") + "/health", expect_json=True)
+    asked = base.rstrip("/") + "/health"
+    status, payload, error = _fetch(asked, expect_json=True)
     target = _host_of(base)
+    console = _console("EM_CATALOG_PUBLIC", "EM_CATALOG_PUBLIC_URL")
     if error:
         return Check(name="stratigraph-catalog", state=UNREACHABLE, target=target,
+                     browser=console, probe=asked,
                      detail=f"the Catalog did not answer — {error}")
     if status == 200:
         facts = {}
@@ -287,8 +363,10 @@ def _probe_catalog(base: Optional[str]) -> Check:
                 if key in payload:
                     facts[key] = payload[key]
         return Check(name="stratigraph-catalog", state=OK, target=target,
+                     browser=console, probe=asked,
                      detail="the Catalog answered its health probe", facts=facts)
     return Check(name="stratigraph-catalog", state=DEGRADED, target=target,
+                 browser=console, probe=asked,
                  detail=f"the Catalog answered {status}")
 
 
@@ -300,13 +378,17 @@ def _probe_field_assistant(base: Optional[str]) -> Check:
         return Check(name="stratigraph-chatbot", state=ABSENT,
                      detail="no field assistant named on this node "
                             "(set EM_CHATBOT_INTERNAL to watch one)")
-    status, payload, error = _fetch(base.rstrip("/") + "/health", expect_json=True)
+    asked = base.rstrip("/") + "/health"
+    status, payload, error = _fetch(asked, expect_json=True)
     target = _host_of(base)
+    console = _console("EM_FIELD_ASSISTANT_URL")
     if error:
         return Check(name="stratigraph-chatbot", state=UNREACHABLE, target=target,
+                     browser=console, probe=asked,
                      detail=f"the field assistant did not answer — {error}")
     if status != 200:
         return Check(name="stratigraph-chatbot", state=DEGRADED, target=target,
+                     browser=console, probe=asked,
                      detail=f"the field assistant answered {status}")
     facts: Dict[str, Any] = {}
     if isinstance(payload, dict):
@@ -324,10 +406,12 @@ def _probe_field_assistant(base: Optional[str]) -> Check:
     # health page telling the comfortable half of the truth.
     if facts.get("accepts_dictation") is False:
         return Check(name="stratigraph-chatbot", state=DEGRADED, target=target,
+                     browser=console, probe=asked,
                      detail="the field assistant is up but has no identity "
                             "provider, so it can accept no dictation",
                      facts=facts)
     return Check(name="stratigraph-chatbot", state=OK, target=target,
+                 browser=console, probe=asked,
                  detail="the field assistant answered its health probe",
                  facts=facts)
 
@@ -340,13 +424,17 @@ def _probe_engine(base: Optional[str]) -> Check:
         return Check(name="nodeodm", state=ABSENT,
                      detail="no photogrammetric engine on this node "
                             "(set NODEODM_URL to watch one)")
-    status, payload, error = _fetch(base.rstrip("/") + "/info", expect_json=True)
+    asked = base.rstrip("/") + "/info"
+    status, payload, error = _fetch(asked, expect_json=True)
     target = _host_of(base)
+    console = _console("EM_NODEODM_CONSOLE_URL")
     if error:
         return Check(name="nodeodm", state=UNREACHABLE, target=target,
+                     browser=console, probe=asked,
                      detail=f"the engine did not answer — {error}")
     if status != 200:
         return Check(name="nodeodm", state=DEGRADED, target=target,
+                     browser=console, probe=asked,
                      detail=f"the engine answered {status}")
     facts = {}
     if isinstance(payload, dict):
@@ -354,6 +442,7 @@ def _probe_engine(base: Optional[str]) -> Check:
             if key in payload:
                 facts[key] = payload[key]
     return Check(name="nodeodm", state=OK, target=target,
+                 browser=console, probe=asked,
                  detail="the engine answered /info", facts=facts)
 
 
