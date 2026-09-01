@@ -230,6 +230,12 @@ development only." {err.status_code}
 		# The list is HERE rather than behind "see /", because / is now a door and
 		# not an index — and a 404 that sends a program to a redirect has told it
 		# nothing.
-		respond "no such route on this node — try /em/rooms/ (the front door), /em/v1/health, /catalog/health, /chat/, /iiif/3/<sha256>/info.json" 404
+		respond "no such route on this node.
+
+WHERE YOU START AGAIN:  /em/rooms/   — the front door (sign in and it also draws
+                                       the node map: every face, its state, and
+                                       the curl to ask it the same question)
+
+others: /em/v1/health · /em/studio/ · /catalog/health · /chat/ · /iiif/3/<sha256>/info.json" 404
 	}
 }

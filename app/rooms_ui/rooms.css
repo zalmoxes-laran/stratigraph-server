@@ -160,3 +160,60 @@
   font-style: italic;
   opacity: 0.85;
 }
+
+/* ── the NODE MAP · the operator's zone ──────────────────────────────────────
+   Deliberately plainer than the three card zones above it: those are a place
+   you browse, this is a place you read while something is broken. Rows, not
+   cards — the eye goes down a column of states looking for the one that is not
+   `ok`. */
+.map-head {
+  /* the brand's tokens and NOTHING else: `tests/test_brand_ui.py` forbids a
+     literal colour in either stylesheet, and it caught nine of mine on the
+     first run. A hex here is a colour that stops following the brand the day
+     the brand changes. */
+  margin: 14px 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--sg-muted);
+}
+.map-rows { display: flex; flex-direction: column; gap: 6px; }
+.map-row {
+  border: 1px solid var(--sg-line);
+  border-radius: 6px;
+  padding: 7px 10px;
+}
+.map-row-head { display: flex; align-items: baseline; gap: 8px; }
+.map-label { font-weight: 600; }
+/* THE NODE'S OWN WORDS, and four of them — a service nobody asked for is not a
+   failure, and painting it red teaches an operator to ignore red. */
+.map-state {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--sg-line);
+}
+/* the BORDER carries the colour, the TEXT stays readable — `--sg-ok` is a pure
+   accent and `tests/test_brand_ui.py` forbids text on one (it caught this too).
+   `--sg-ok-ink` is the brand's answer for exactly this pairing; `warn` has no
+   ink of its own, and the page already uses it as a text colour above (`.warn`),
+   so that one is fine as it stands. */
+.st-ok { border-color: var(--sg-ok); color: var(--sg-ok-ink); }
+.st-degraded { border-color: var(--sg-warn); color: var(--sg-warn); }
+.st-unreachable { border-color: var(--sg-warn); color: var(--sg-warn); }
+.st-not-configured { opacity: .6; }
+.map-links {
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap; margin-top: 5px;
+}
+.map-internal {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  opacity: .85;
+  word-break: break-all;
+}
+/* a face with no configured address says so, quietly. It is rule 2 made
+   visible: better an honest gap than a link that works on one laptop. */
+.map-nolink { font-style: italic; }
+.map-curl, .map-open { font-size: 11px; }
+.map-facts { margin-top: 4px; font-size: 11px; opacity: .8; }

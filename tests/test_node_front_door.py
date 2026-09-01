@@ -111,11 +111,56 @@ def test_where_the_tools_come_from_is_overridable(client, monkeypatch):
 def test_the_page_writes_down_NO_neighbour_address():
     """Where the catalogue lives is a fact about the deployment. A page carrying
     `/catalog` would be right here and wrong the day somebody moves it — and
-    nobody would see it move."""
-    for stranger in ("/catalog", "/chat", "/iiif", "/admin/health", "localhost"):
+    nobody would see it move.
+
+    `/admin/health` USED TO BE on this list and has come off it, deliberately.
+    The rule this test defends is «no NEIGHBOUR's address», and this server's own
+    API paths were never neighbours: the page has always called `/rooms`,
+    `/node`, `/whoami` on itself. The node map (`loadNodeMap`) asks
+    `/v1/admin/health` for the same reason — it is THIS node describing itself,
+    which is the opposite of writing a neighbour's address down. The distinction
+    is kept by the assertions below: every neighbour still has to arrive as data.
+    """
+    for stranger in ("/catalog", "/chat", "/iiif", "localhost"):
         assert stranger not in CODE, f"{stranger!r} is written into the page"
     assert 'o.name === "stratigraph-catalog"' in CODE, \
         "the catalogue's address must come from /v1/node"
+
+
+def test_the_node_map_owns_no_address_either():
+    """The operator's zone composes; it does not know.
+
+    Every row of it comes from `/v1/admin/health` — the node describing itself —
+    so a deployment that moves Keycloak moves the map with it and this file is
+    not touched. That is the measure the design note calls «the one that counts».
+    """
+    at = CODE.index("async function loadNodeMap")
+    body = CODE[at:CODE.index("function mapRow")]
+    # it reads the report, and every field it draws comes out of it
+    assert '"/admin/health"' in body, "the map asks the node for the map"
+    assert "report.entrances" in body and "report.checks" in body
+    for field in ("check.browser", "check.probe", "check.state", "check.detail"):
+        assert field in body, f"{field} comes from the node, not from here"
+    # …and it never invents one
+    assert "http://" not in body and "https://" not in body, \
+        "the node map must not contain a literal address"
+    # the operator gate is ASKED, and it is the endpoint that answers without 403
+    assert '"/admin/whoami"' in body
+    assert "who.operator !== true" in body, \
+        "a non-operator sees no zone — not an error, and not an empty one"
+
+
+def test_the_node_map_writes_nothing():
+    """Read-only, so the zone can go to the institutional node as it is.
+
+    No re-run, no seed, no reset. The only button is «copy curl», which formats
+    a URL the node already gave us — formatting, not a verb.
+    """
+    at = CODE.index("async function loadNodeMap")
+    body = CODE[at:CODE.index("function paintStrings")]
+    for verb in ('request("POST"', 'request("PUT"', 'request("DELETE"',
+                 'request("PATCH"'):
+        assert verb not in body, f"the node map performs {verb} — it must not"
 
 
 def test_the_page_holds_no_visibility_rule():

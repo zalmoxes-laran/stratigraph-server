@@ -349,6 +349,14 @@ services:
       # colleague's hostname. `.env.dev` still overrides it — and E.D.'s copy is
       # his to change.
       EM_EMSTUDIO_WEB_URL: "${EM_EMSTUDIO_WEB_URL:-/em/studio}"
+      # --- the NODE MAP's browser addresses ------------------------------------
+      # HERE they are real and known, which is exactly why they are set here and
+      # empty in the production template: on this stack Keycloak's console and
+      # MinIO's console are published on the same origin as everything else, and
+      # an operator opening the map wants to click through to them. On somebody
+      # else's host neither is a given — see `heriverse-ansible`.
+      EM_KEYCLOAK_CONSOLE_URL: "https://em.localhost:${HTTPS_PORT:-8443}/auth/admin/"
+      EM_MINIO_CONSOLE_URL: "http://localhost:${MINIO_CONSOLE_PORT:-9001}"
       # …but the field assistant is NOT one of those: it is a container in this
       # stack, up whenever the stack is, served by Caddy at /chat/. The reason
       # for the empty default above does not apply to it, and leaving it empty

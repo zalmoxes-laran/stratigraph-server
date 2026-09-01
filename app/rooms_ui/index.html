@@ -100,6 +100,27 @@
       <h2 class="zone-title"><span id="hdt-title">Monuments</span> <span class="zone-sub" id="hdt-sub">the subject, which endures</span></h2>
       <div id="hdt"></div>
     </section>
+
+    <!-- ── the NODE MAP · for whoever came to make this work, not to use it ──
+         Hidden by default and revealed only when `/v1/admin/whoami` answers
+         `operator: true`. A visitor never sees it; the person who brought the
+         stack up sees it the moment they sign in.
+
+         SOLE READ. No verb here writes anything — no "re-run the probes", no
+         "seed the demo", no "reset". This zone has to be able to exist on the
+         institutional node without anybody wondering what they may press.
+
+         And it owns NO ADDRESS: every row comes from `/v1/admin/health`, which
+         is the node describing itself. Move Keycloak tomorrow and the map
+         follows without this file being touched. -->
+    <section id="zone-map" class="zone" hidden>
+      <h2 class="zone-title"><span id="map-title">Node map</span> <span class="zone-sub" id="map-sub">where every face is, and how to ask it the same question from a terminal</span></h2>
+      <p class="note" id="map-note"></p>
+      <h3 class="map-head" id="map-entrances-head">This server</h3>
+      <div id="map-entrances" class="map-rows"></div>
+      <h3 class="map-head" id="map-neighbours-head">Around it</h3>
+      <div id="map-neighbours" class="map-rows"></div>
+    </section>
   </main>
 
   <script type="module" src="./rooms.js"></script>

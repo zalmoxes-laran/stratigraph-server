@@ -491,6 +491,161 @@ function monumentCard(base, group) {
   });
 }
 
+// ── zone 4 · THE NODE MAP — for whoever came to make this work ──────────────
+//
+// The three zones above are for somebody who came to WORK. This one is for
+// somebody who came to make the node work, and it exists because that person's
+// twenty questions a day — is Keycloak up, is the realm the right one, does MinIO
+// have the bucket, where is the OpenAPI, is the catalogue answering or is Caddy
+// answering for it — live in three places that are not this page: a cheatsheet,
+// `docker ps`, and the memory of whoever brought the stack up.
+//
+// THREE RULES, and they are the whole design:
+//
+//  1. **the node declares, the page composes.** Not one address is written here.
+//     Every row comes from `/v1/admin/health`, which is the node describing
+//     itself, so a deployment that moves Keycloak moves this map with it and
+//     nobody edits this file.
+//  2. **no URL is guessed.** A face whose browser address nobody configured is
+//     drawn WITHOUT a link, with its state and its internal address. An
+//     `http://localhost:9001` written for convenience is a button that works on
+//     one laptop — a default that is an assertion.
+//  3. **read only.** No verb here writes. This zone goes to the institutional
+//     node as it is.
+//
+// It is asked for ONLY when the node has said `operator: true`. A non-operator
+// does not see an error: they do not see the zone, and the request is never made.
+
+async function loadNodeMap() {
+  // `/admin/whoami` answers WITHOUT a 403 — that is why the console asks it
+  // before drawing anything — so this is a question, not an attempt.
+  let who = null;
+  try { who = await request("GET", "/admin/whoami"); } catch { return; }
+  if (!who || who.operator !== true) return;
+
+  let report;
+  try { report = await request("GET", "/admin/health"); }
+  catch (error) {
+    // an operator whose own map will not load has to be told, because they are
+    // the one person who cannot tell a broken page from a broken node
+    $("zone-map").hidden = false;
+    note($("map-note"), t("map.unreachable", { error: error.message }), true);
+    return;
+  }
+
+  $("zone-map").hidden = false;
+  note($("map-note"), t("map.verdict", {
+    verdict: report.verdict, deadline: report.deadline_s,
+  }), report.verdict !== "ok");
+
+  const entrances = $("map-entrances");
+  entrances.innerHTML = "";
+  for (const face of report.entrances || []) {
+    entrances.append(mapRow({
+      label: face.label, detail: face.what,
+      browser: face.url,
+      // the PUBLIC address when the node has one — a curl on that works from
+      // anywhere, which is the difference from a neighbour's probe URL. The path
+      // alone when it does not, which is still the useful half.
+      internal: face.url || face.path,
+      // …and a public entrance is reachable from wherever the operator is
+      fromNode: false,
+    }));
+  }
+
+  const neighbours = $("map-neighbours");
+  neighbours.innerHTML = "";
+  for (const check of report.checks || []) {
+    neighbours.append(mapRow({
+      label: check.name, state: check.state, detail: check.detail,
+      browser: check.browser, internal: check.probe || check.target,
+      // a probe dials the node's own network — always
+      fromNode: true,
+      facts: check.facts,
+    }));
+  }
+}
+
+/**
+ * One row of the map: what it is, how it is, where a browser goes, and the exact
+ * question a terminal can put.
+ *
+ * The `curl` is FORMATTED here from the URL the node already gave us — that is
+ * formatting, not knowledge, and it adds nothing to keep aligned. Its value is
+ * the comparison: if the row and the terminal disagree, the row is lying, and
+ * that is the bug worth finding.
+ */
+function mapRow({ label, state, detail, browser, internal, facts, fromNode }) {
+    const row = el("div", "map-row");
+  const head = el("div", "map-row-head");
+  head.append(el("span", "map-label", label));
+  // THE NODE'S OWN WORDS, untranslated. A state this page rephrased would be a
+  // second vocabulary for one fact, and the operator comparing the page with
+  // `docker ps` needs the same word in both.
+  if (state) head.append(el("span", `map-state st-${state.replace(/\s+/g, "-")}`, state));
+  row.append(head);
+  if (detail) row.append(el("p", "note", detail));
+
+  const links = el("div", "map-links");
+  if (browser) {
+    const a = el("a", "map-open", t("map.open"));
+    a.href = browser;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.title = browser;
+    links.append(a);
+  } else {
+    // NO LINK, and said: this is rule 2 made visible rather than silent.
+    links.append(el("span", "note map-nolink", t("map.noBrowser")));
+  }
+  if (internal) {
+    links.append(el("code", "map-internal", internal));
+    if (/^https?:\/\//.test(internal)) {
+      const copy = el("button", "map-curl", t("map.curl"));
+      copy.title = t("map.curlTitle");
+      copy.addEventListener("click", async () => {
+        // WHERE it has to be run is part of the answer. A probe's URL is on the
+        // node's OWN network — measured: `curl http://minio:9000/...` from the
+        // operator's laptop gets nothing, and the same line run where the node
+        // runs gets the 200 this row is reporting. A button that copied the line
+        // without saying so would send somebody off to debug DNS.
+        //
+        // Said as a shell COMMENT, so the two lines paste as one thing — and
+        // without naming docker: how the node is run is not this page's business.
+        //
+        // And `fromNode` comes from the CALLER, not from sniffing the hostname.
+        // The first version matched `localhost|127.0.0.1|…` here and
+        // `tests/test_node_front_door.py` refused it — rightly: a page that
+        // guesses which addresses are routable is a page with an opinion about
+        // the deployment. The data already knows: a PROBE url is on the node's
+        // network by definition, and an ENTRANCE url is public by definition.
+        const line = (fromNode ? `# ${t("map.curlWhere")}\n` : "")
+          + `curl -s -o /dev/null -w '%{http_code} %{content_type}\\n' ${internal}`;
+        try {
+          await navigator.clipboard.writeText(line);
+          copy.textContent = t("map.copied");
+          window.setTimeout(() => { copy.textContent = t("map.curl"); }, 1600);
+        } catch {
+          // no clipboard permission: show it, so it can be selected by hand
+          links.append(el("code", "map-internal", line));
+        }
+      });
+      links.append(copy);
+    }
+  }
+  row.append(links);
+
+  // the facts a probe learned, when it learned any — a bucket's size, a realm's
+  // key count. Never a secret: the probes do not collect one.
+  const interesting = Object.entries(facts || {})
+    .filter(([, v]) => v !== null && v !== undefined && typeof v !== "object");
+  if (interesting.length) {
+    row.append(el("p", "note map-facts",
+      interesting.map(([k, v]) => `${k}: ${v}`).join(" · ")));
+  }
+  return row;
+}
+
 // ── the screen, repainted in the active language ────────────────────────────
 //
 // One function, called at boot and on every change of language. It repaints the
@@ -514,6 +669,10 @@ function paintStrings() {
   set("studies-sub", t("studies.sub"));
   set("hdt-title", t("hdt.title"));
   set("hdt-sub", t("hdt.sub"));
+  set("map-title", t("map.title"));
+  set("map-sub", t("map.sub"));
+  set("map-entrances-head", t("map.entrances"));
+  set("map-neighbours-head", t("map.neighbours"));
   set("btn-create", t("rooms.create"));
   set("all-studies", t("studies.all"));
   const input = $("new-room-title");
@@ -706,6 +865,9 @@ async function enter(rooms) {
   // decided for itself would be a page you can talk out of it.
   $("create-row").hidden = false;
   renderRooms(rooms);
+  // …and the operator's map, asked for only now: `enter` is reached when the
+  // listing answered, i.e. when there IS a session to ask with.
+  await loadNodeMap();
 }
 
 // ── create ──────────────────────────────────────────────────────────────────
