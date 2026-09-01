@@ -282,3 +282,24 @@
               color: var(--sg-text); }
 .dest-sub { display: block; margin-top: .2rem; font-size: .84em;
             color: var(--sg-muted); }
+
+/* ── CONDIVIDI ────────────────────────────────────────────────────────────────
+   Every clickable thing here takes its colour from the THEME, and it is not a
+   preference: `a[href]` and `button` carry a colour from the USER AGENT, a UA
+   declaration beats inheritance, and `.share-open` was caught by
+   `test_no_interactive_element_inherits_the_user_agent_s_colour` before it ever
+   reached a screen — which is what that test was built for on 5 September. */
+.share-rows { display: flex; flex-direction: column; gap: .3rem;
+              margin: .3rem 0 .6rem; }
+.share-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: .5rem;
+             padding: .35rem .5rem; background: var(--sg-surface);
+             border: 1px solid var(--sg-line); border-radius: var(--sg-radius-sm); }
+.share-label { font-family: var(--sg-font-mono); font-size: .86em;
+               color: var(--sg-text); }
+.share-note { font-size: .8em; color: var(--sg-muted); }
+.share-verb { margin-left: auto; color: var(--sg-text); background: transparent;
+              border: 1px solid var(--sg-line); border-radius: var(--sg-radius-sm);
+              padding: 1px 7px; font-size: 11px; cursor: pointer; }
+.share-verb:hover { border-color: var(--sg-muted); }
+.share-open { color: var(--sg-info-ink); text-decoration: none; font-size: .86em; }
+.share-open:hover { text-decoration: underline; }

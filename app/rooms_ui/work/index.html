@@ -53,6 +53,60 @@
 
     <p class="note"><a class="more" href="../rooms/" id="back-door">← this node</a></p>
 
+    <!-- ── CONDIVIDI · one place, and a link from every app ──────────────────
+         Design note `EM_design_condividi-e-firma.md`, Regola IV: the panel lives
+         on the node that hosts the room — that is where the ACL and the owner
+         are, and there is no second copy to keep in step. EMStudio, the chatbot
+         and the catalogue bring a LINK here, never a copy of the panel.
+
+         WHY IT IS `/em/work/?room=…` AND NOT A PAGE OF ITS OWN: sharing is not a
+         fifth verb. Regola III puts «Condividi» inside the room's operational
+         management — which is *lavorare* — and a page of its own would be a fifth
+         door needing a fifth redirect URI in a realm this project does not own
+         (measured on 7 September: the production realm has no `em-console` at
+         all). Reusing a registered door costs nothing and the sign-in return
+         already works there.
+
+         AND WHAT IT DOES NOT SHOW: authors, the order of names, scientific
+         direction. Those live on the PUBLISHED VERSION and are agreed when
+         publishing — a panel that asked «who signs?» would be asking somebody
+         who is only adding a colleague to the table. `test_share_panel.py` is
+         what keeps that true, and it carries the reason. -->
+    <section id="zone-share" class="zone" hidden>
+      <h2 class="zone-title"><span id="share-title">Share</span> <span class="zone-sub" id="share-sub">who is at this table, and whose the live copy is</span></h2>
+      <p class="note" id="share-room"></p>
+      <p class="note" id="share-note"></p>
+
+      <h3 class="map-head" id="share-who-head">Who is here</h3>
+      <div id="share-who" class="share-rows"></div>
+      <div class="toolbar" id="share-add" hidden>
+        <input id="share-orcid" type="text" placeholder="ORCID iD" autocomplete="off" maxlength="40">
+        <select id="share-role"></select>
+        <button id="btn-share-add" class="primary">Add</button>
+        <span id="share-add-note" class="note"></span>
+      </div>
+      <div class="toolbar" id="share-add-group" hidden>
+        <select id="share-group"></select>
+        <select id="share-group-role"></select>
+        <button id="btn-share-group" class="primary">Add team</button>
+        <span id="share-group-note" class="note"></span>
+      </div>
+
+      <h3 class="map-head" id="share-invite-head">Invite by link</h3>
+      <div id="share-invites" class="share-rows"></div>
+      <div class="toolbar" id="share-invite-row" hidden>
+        <select id="share-invite-role"></select>
+        <button id="btn-share-invite">Make a link</button>
+        <span id="share-invite-note" class="note"></span>
+      </div>
+
+      <h3 class="map-head" id="share-live-head">The live copy</h3>
+      <div id="share-live" class="share-rows"></div>
+
+      <h3 class="map-head" id="share-archive-head">Archive</h3>
+      <div id="share-archive" class="share-rows"></div>
+    </section>
+
     <!-- ── LAVORARE · enter a room, create one, bring a file in ──────────────
          The listing arrives ALREADY ACL-filtered from `/v1/rooms`: the gate
          filters, never this page. And no empty list is ever shown for a refusal

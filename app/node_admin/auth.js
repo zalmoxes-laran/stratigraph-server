@@ -109,7 +109,21 @@ export async function signIn(config, { silent = false } = {}) {
   sessionStorage.setItem(VERIFIER_KEY,
                          JSON.stringify({ verifier, state, silent }));
   // …and where we were, so a person who signed in from a panel comes back to it
-  sessionStorage.setItem(RETURN_KEY, window.location.hash || "");
+  // …AND WHERE WE WERE, WHICH IS THE QUERY STRING TOO.
+  //
+  // Measured on 8 September 2026 and it is the same bug in a second place: a
+  // link to `/em/work/?room=prova-squadra` signed in silently, came back, and
+  // landed on `/em/work/` with NO query — so somebody who followed a link to one
+  // room arrived at the list of all of them. `cleanUrl` rightly strips the
+  // realm's `code`/`state` off the address (an authorization code in a bar is a
+  // code in the browser history), and it was stripping the page's own parameters
+  // with them, because only the HASH was remembered.
+  //
+  // EMStudio hit exactly this on 5 September with `?study=` and fixed it there;
+  // this is the node's own faces getting the same repair. The parameters that
+  // travel are the PAGE's — the realm's own are added on the way out and
+  // removed on the way back, which is what `cleanUrl` is for.
+  sessionStorage.setItem(RETURN_KEY, window.location.search + window.location.hash);
   const url = new URL(config.authorization_endpoint);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", config.client_id);
@@ -213,9 +227,15 @@ function readSaved() {
 
 /** Take `?code=…&state=…` off the address bar without reloading. */
 function cleanUrl() {
-  const hash = sessionStorage.getItem(RETURN_KEY) || "";
+  // The address the page was asked at, restored WHOLE — search and hash — with
+  // the realm's own parameters gone. Written by `signIn`, read once here.
+  //
+  // A ROUND TRIP THAT DID NOT START HERE leaves nothing to restore, and then the
+  // honest answer is the bare path: it is what the address was before, and
+  // inventing a query string would be worse than dropping one.
+  const back = sessionStorage.getItem(RETURN_KEY) || "";
   sessionStorage.removeItem(RETURN_KEY);
-  window.history.replaceState({}, "", window.location.pathname + hash);
+  window.history.replaceState({}, "", window.location.pathname + back);
 }
 
 /** Sign OUT of the realm as well as of this tab. Without the second half, the

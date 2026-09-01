@@ -260,6 +260,16 @@ def test_the_openapi_schema_is_served():
                       ("DELETE", "/v1/groups/{group_id}"),
                       ("PUT", "/v1/groups/{group_id}/members/{orcid}"),
                       ("DELETE", "/v1/groups/{group_id}/members/{orcid}"),
+                      # …and giving a group A ROLE IN A ROOM, which is the piece
+                      # that was missing rather than a new kind of write: `Acl`
+                      # already held `groups: {name → role}` and `role_for`
+                      # already read them, and nothing wrote one — so a team
+                      # could be named and could not be given a role. Same shape
+                      # as the per-person grant, same policy function
+                      # (`may_assign`), same path discipline: it names a TEAM and
+                      # never a study.
+                      ("PUT", "/v1/rooms/{room_id}/groups/{group_id}"),
+                      ("DELETE", "/v1/rooms/{room_id}/groups/{group_id}"),
                       # …and revoking an INVITATION, which is the same kind of
                       # thing once more: a link that offers a role is operational
                       # (StratiGraph Server), not scientific (the em.json), and an

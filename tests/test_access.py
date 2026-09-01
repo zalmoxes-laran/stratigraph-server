@@ -90,6 +90,11 @@ def client():
     return TestClient(app)
 
 
+#: the same header every REST call in this file sends. Named once, because it was
+#: written out inline four times before the group grants arrived.
+AUTH = {"Authorization": "Bearer t"}
+
+
 def _join(socket):
     host = socket.receive_json()
     assert host["type"] == "host_info"
@@ -484,3 +489,199 @@ def test_the_rest_manages_groups_and_only_the_owner_may(client, enforcing,
     gone = client.delete("/v1/groups/scavo-2026", headers=head)
     assert gone.status_code == 200 and gone.json()["ok"] is True
     assert client.get("/v1/groups", headers=head).json() == []
+
+
+# ── GIVING A ROLE TO A TEAM ───────────────────────────────────────────────────
+#
+# The half-built collective, and the tests above are what proves it was half:
+# every one of them writes `groups={...}` INTO THE ACL BY HAND, because no
+# endpoint existed. `Acl` held the grants, `role_for` read them, the registry
+# named the teams — and nothing could give a team a role. You could name a
+# squad; you could not put it at the table.
+#
+# From here the grant goes through the door, which is the only way a person
+# could ever make one.
+
+@pytest.fixture
+def team(monkeypatch):
+    """A registry with one team in it, patched where BOTH doors read it.
+
+    `main.py` imports `groups` FROM `ws`, and `groups()` reads the module global
+    at call time — so one patch covers the REST routes and the WebSocket.
+    """
+    from app import ws as ws_mod
+    from app.access import Group, Groups, InMemoryGroupStore
+
+    store = InMemoryGroupStore()
+    monkeypatch.setattr(ws_mod, "GROUP_STORE", store)
+    registry = Groups(store)
+
+    def make(group_id, members, name=None):
+        registry.put(Group(group_id, name or group_id, list(members)))
+        return registry
+    return make
+
+
+def test_a_TEAM_gets_a_role_and_its_members_walk_in(client, enforcing, relay,
+                                                    team):
+    """The measure, end to end: a person who is NOWHERE in the ACL enters as an
+    editor because their team was given the role — and stops entering when the
+    grant is taken away."""
+    team("scavo-2026", [BRUNO, CARLA])
+    relay.put("scavo", Acl(owner=ANNA).as_dict())        # nobody but the owner
+
+    enforcing(ANNA)
+    granted = client.put("/v1/rooms/scavo/groups/scavo-2026",
+                         headers=AUTH, json={"role": "editor"})
+    assert granted.status_code == 200, granted.json()
+
+    # CARLA is not in the ACL at all — she is in the team
+    body = granted.json()
+    assert [m["orcid"] for m in body["members"]] == []
+    assert body["groups"] == [{"group_id": "scavo-2026", "role": "editor",
+                               "name": "scavo-2026", "members": 2}]
+
+    enforcing(CARLA)
+    with client.websocket_connect("/v1/rooms/scavo/ws?token=t") as c:
+        host = _join(c)
+        assert host["role"] == "editor", "the team's grant carried her in"
+        assert host["can_write"] is True
+
+    # …and taking the grant away shuts the door again
+    enforcing(ANNA)
+    revoked = client.delete("/v1/rooms/scavo/groups/scavo-2026", headers=AUTH)
+    assert revoked.status_code == 200
+    assert revoked.json()["groups"] == []
+
+    enforcing(CARLA)
+    with pytest.raises(Exception) as refused:
+        with client.websocket_connect("/v1/rooms/scavo/ws?token=t") as c:
+            c.receive_json()
+    assert refused.value.code == 4403
+
+
+def test_a_GROUP_CANNOT_BE_THE_OWNER_and_the_refusal_says_why(client, enforcing,
+                                                              relay, team):
+    """Not a preference, and the sentence has to carry the reason.
+
+    `role_for` returns the STRONGEST grant, so a group holding `owner` would make
+    every member an owner — while `acl.owner` (and `header.owner`, which follows
+    it) went on naming one person. The room would have an owner field that lies,
+    and the transfer would not know whom to take the room from.
+    """
+    team("direzione", [BRUNO])
+    relay.put("scavo", Acl(owner=ANNA).as_dict())
+    enforcing(ANNA)
+
+    refused = client.put("/v1/rooms/scavo/groups/direzione",
+                         headers=AUTH, json={"role": "owner"})
+    assert refused.status_code == 409, refused.json()
+    detail = refused.json()["detail"]
+    assert "a room has exactly one" in detail, "it says WHY, not just no"
+    assert "owner field" in detail and "lies" in detail
+    assert "admin" in detail, "…and it offers what to do instead"
+
+    # nothing was written on the way to the refusal
+    assert client.get("/v1/rooms/scavo/members",
+                      headers=AUTH).json()["groups"] == []
+
+
+def test_an_ADMIN_cannot_promote_a_TEAM_to_admin(client, enforcing, relay, team):
+    """It is `may_assign`, not a new rule — the same function that stops an admin
+    promoting a PERSON. The point of reusing it is that this test passes without
+    anybody having written a second policy."""
+    team("scavo-2026", [CARLA])
+    relay.put("scavo", Acl(owner=ANNA, members={BRUNO: "admin"}).as_dict())
+
+    enforcing(BRUNO)                                     # an admin
+    assert client.put("/v1/rooms/scavo/groups/scavo-2026", headers=AUTH,
+                      json={"role": "editor"}).status_code == 200, \
+        "an admin manages editors, teams included"
+
+    promoted = client.put("/v1/rooms/scavo/groups/scavo-2026", headers=AUTH,
+                          json={"role": "admin"})
+    assert promoted.status_code == 403
+    assert promoted.json()["detail"] == "only the owner assigns owner or admin"
+
+    # …and an admin cannot take away a grant the OWNER made to a team at admin
+    relay.put("scavo", Acl(owner=ANNA, members={BRUNO: "admin"},
+                           groups={"altra-squadra": "admin"}).as_dict())
+    team("altra-squadra", [CARLA])
+    dropped = client.delete("/v1/rooms/scavo/groups/altra-squadra", headers=AUTH)
+    assert dropped.status_code == 403
+    assert dropped.json()["detail"] == \
+        "an admin cannot change an owner or another admin"
+
+
+def test_a_grant_to_a_team_THAT_DOES_NOT_EXIST_is_refused_at_the_door(
+        client, enforcing, relay, team):
+    """A grant to a group nobody can enumerate grants nothing to anybody, and
+    saying so while somebody is typing beats a panel that shows a team with no
+    members and a room where nobody arrived."""
+    team("scavo-2026", [CARLA])          # a registry that exists, without them
+    relay.put("scavo", Acl(owner=ANNA).as_dict())
+    enforcing(ANNA)
+
+    missing = client.put("/v1/rooms/scavo/groups/squadra-inventata",
+                         headers=AUTH, json={"role": "editor"})
+    assert missing.status_code == 404
+    detail = missing.json()["detail"]
+    assert "squadra-inventata" in detail
+    assert "resolve to nobody" in detail
+    assert "GET /v1/groups" in detail, "…and where to check the spelling"
+
+
+def test_a_grant_SURVIVES_the_team_being_deleted_and_can_still_be_revoked(
+        client, enforcing, relay, team):
+    """The ACL is not the registry. A team removed from the registry leaves its
+    grant behind — refusing to clean that up because the registry moved on would
+    leave a room with a grant nobody can remove."""
+    registry = team("temporanea", [CARLA])
+    relay.put("scavo", Acl(owner=ANNA).as_dict())
+    enforcing(ANNA)
+    assert client.put("/v1/rooms/scavo/groups/temporanea", headers=AUTH,
+                      json={"role": "editor"}).status_code == 200
+
+    registry.drop("temporanea")
+    shown = client.get("/v1/rooms/scavo/members", headers=AUTH).json()
+    # …and the panel says the grant is there AND that the team is unknown, which
+    # is a fact worth showing rather than hiding
+    assert shown["groups"] == [{"group_id": "temporanea", "role": "editor",
+                                "name": None, "members": None}]
+    assert client.delete("/v1/rooms/scavo/groups/temporanea",
+                         headers=AUTH).status_code == 200
+
+
+def test_GET_members_shows_people_AND_teams(client, enforcing, relay, team):
+    """Half an ACL shown as the whole one is the failure that looks like a
+    success: somebody sees no team and adds six people who already had the role.
+    """
+    team("scavo-2026", [CARLA], name="Scavo 2026")
+    relay.put("scavo", Acl(owner=ANNA, members={BRUNO: "viewer"}).as_dict())
+    enforcing(ANNA)
+    client.put("/v1/rooms/scavo/groups/scavo-2026", headers=AUTH,
+               json={"role": "editor"})
+
+    body = client.get("/v1/rooms/scavo/members", headers=AUTH).json()
+    assert body["owner"] == ANNA
+    assert body["members"] == [{"orcid": BRUNO, "role": "viewer"}]
+    assert body["groups"] == [{"group_id": "scavo-2026", "role": "editor",
+                                "name": "Scavo 2026", "members": 1}]
+    assert body["your_role"] == "owner"
+
+
+def test_EVERY_answer_about_the_access_list_comes_from_ONE_derivation():
+    """Four call sites built this shape inline — the GET, the two member writes,
+    and now the group writes. Adding groups to four places is how one of them
+    keeps answering with half the ACL, and a panel reading THAT site would show a
+    room with no team in it while the team is working in it."""
+    import pathlib
+    import re
+    main_py = (pathlib.Path(__file__).resolve().parent.parent
+               / "app" / "main.py").read_text(encoding="utf-8")
+    inline = re.findall(r"Members\(room=room_id", main_py)
+    assert len(inline) == 1, (
+        f"{len(inline)} places build the members answer by hand; there must be "
+        "one (`_members_view`), or a route will forget the groups")
+    assert main_py.count("_members_view(room_id, acl, role)") >= 4, \
+        "every route that answers with the access list goes through it"

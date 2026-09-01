@@ -236,6 +236,11 @@ function roomCard(room) {
       const copy = el("button", "ghost", t("door.copy"));
       copy.addEventListener("click", () => void copyLink(room, said));
       actions.append(copy);
+      // …AND «CONDIVIDI», which is a LINK and not a second panel: the same
+      // address any other app would use, so this page has no privileged way in.
+      const share = el("a", "share-open", t("share.title"));
+      share.href = shareUrl(room.room_id);
+      actions.append(share);
       // Asked once, up front, so the browser doors are there before anybody
       // presses anything. A failure is silent HERE on purpose: it costs only the
       // extra door, and a red line on every card because one node has no
@@ -419,6 +424,358 @@ function renderDestinations() {
   // the emphasised one leads
   doors.sort((a, b) => Number(b.primary) - Number(a.primary));
   host.replaceChildren(...doors.map(destinationCard));
+}
+
+// ── CONDIVIDI · un luogo solo, e un link da ogni app ─────────────────────────
+//
+// Design note `EM_design_condividi-e-firma.md`. The panel covers LAYERS 1 AND 2
+// — presence (who may be at the table, with what power) and property (whose the
+// live copy is) — and nothing else.
+//
+// LAYER 3, contribution, is not a datum of the system: counting nodes would
+// reward whoever imports a GraphML of two hundred elements in one gesture and
+// erase whoever spends a week correcting forty. LAYER 4, authorship, is agreed
+// when publishing, on the version, in the catalogue. So this surface never names
+// an author — and `test_share_panel.py` fails if it starts to.
+//
+// IT OWNS NOTHING, like every zone here: `/v1/rooms/{id}/members`,
+// `…/invites`, `…/groups/{gid}`, `…/archive` and `/v1/groups` already answer.
+
+const ROLES = ["viewer", "editor", "admin"];
+const OFFERABLE = ["viewer", "editor"];
+
+/** The room this page was asked about, or "" for the listing. */
+function askedRoom() {
+  return new URLSearchParams(window.location.search).get("room") || "";
+}
+
+/** A stable per-room address, so another app can write it into a menu.
+ *  Same page as the listing on purpose: sharing is not a fifth verb. */
+function shareUrl(roomId) {
+  const here = new URL(window.location.href);
+  here.search = `?room=${encodeURIComponent(roomId)}`;
+  here.hash = "";
+  return here.toString();
+}
+
+function fill(select, values, current) {
+  select.replaceChildren(...values.map((v) => {
+    const option = el("option", "", t(`role.${v}`) || v);
+    option.value = v;
+    if (v === current) option.selected = true;
+    return option;
+  }));
+}
+
+function shareRow(label, notes, verbs) {
+  const box = el("div", "share-row");
+  box.append(el("span", "share-label", label));
+  for (const note_ of notes.filter(Boolean)) {
+    box.append(el("span", "share-note", note_));
+  }
+  for (const [name, title, go] of verbs || []) {
+    const button = el("button", "share-verb", name);
+    button.title = title || "";
+    button.addEventListener("click", go);
+    box.append(button);
+  }
+  return box;
+}
+
+let SHARE_ROOM = null;      // the room being shared, as the node describes it
+
+async function loadShare(roomId) {
+  const host = $("zone-share");
+  if (!host) return;
+  host.hidden = false;
+  note($("share-note"), "");
+
+  let room = null;
+  try { room = await request("GET", `/rooms/${encodeURIComponent(roomId)}`); }
+  catch (error) {
+    note($("share-room"), t("share.unreachable",
+                            { room: roomId, error: error.message }), true);
+    return;
+  }
+  SHARE_ROOM = room;
+  note($("share-room"), t("share.room", { room: roomId,
+                                          title: room.title || roomId }));
+
+  // READING THE MEMBER LIST NEEDS admin or owner, and the node says so rather
+  // than this page guessing from `your_role`: the answer is authoritative and a
+  // guess here would be a second access rule.
+  let roster = null;
+  try { roster = await request("GET", `/rooms/${encodeURIComponent(roomId)}/members`); }
+  catch (error) {
+    if (error.status === 403) {
+      note($("share-note"), t("share.notAllowed"), true);
+      for (const id of ("share-who share-invites share-live share-archive "
+                        + "share-add share-add-group share-invite-row").split(" ")) {
+        const box = $(id);
+        if (box) { box.replaceChildren(); box.hidden = true; }
+      }
+      return;
+    }
+    note($("share-note"), t("share.unreachable",
+                            { room: roomId, error: error.message }), true);
+    return;
+  }
+  renderWho(roomId, roster);
+  await renderTeams(roomId, roster);
+  renderLive(roomId, roster, room);
+  renderArchive(roomId, room);
+  await renderInvites(roomId);
+}
+
+function renderWho(roomId, roster) {
+  const host = $("share-who");
+  if (!host) return;
+  const rows = [];
+  const mine = (me && me.orcid) || "";
+  for (const member of roster.members || []) {
+    const isMe = member.orcid === mine;
+    rows.push(shareRow(
+      member.orcid + (isMe ? ` (${t("share.you")})` : ""),
+      [t(`role.${member.role}`) || member.role],
+      [[t("share.remove"), "", () => void revoke(roomId, member.orcid)]]));
+  }
+  for (const grant of roster.groups || []) {
+    // A TEAM WHOSE REGISTRY ENTRY IS GONE is shown, with what it means: the
+    // grant is real and grants nobody. Hiding it would leave a room with a
+    // grant nobody can see to remove.
+    const notes = [t("share.team"), t(`role.${grant.role}`) || grant.role];
+    notes.push(grant.members === null || grant.members === undefined
+               ? t("share.teamUnknown")
+               : t("share.teamOf", { n: grant.members }));
+    rows.push(shareRow(grant.name || grant.group_id, notes,
+                       [[t("share.remove"), "",
+                         () => void revokeGroup(roomId, grant.group_id)]]));
+  }
+  if (!rows.length) rows.push(el("p", "note", t("share.nobody")));
+  host.replaceChildren(...rows);
+
+  const box = $("share-add");
+  if (box) {
+    box.hidden = false;
+    fill($("share-role"), ROLES, "editor");
+    $("share-orcid").placeholder = "ORCID iD";
+  }
+}
+
+async function renderTeams(roomId, roster) {
+  const box = $("share-add-group");
+  if (!box) return;
+  let known = [];
+  try { known = await request("GET", "/groups"); } catch { known = []; }
+  const held = new Set((roster.groups || []).map((g) => g.group_id));
+  const free = known.filter((g) => !held.has(g.id));
+  box.hidden = false;
+  if (!free.length) {
+    // TWO STATES, TWO SENTENCES, and the first version had one: «no teams on
+    // this node yet» while a team was sitting in the list above, already
+    // granted. Measured on screen — a true panel saying a false thing about
+    // itself, which is the kind of small lie that makes people distrust the
+    // whole surface.
+    note($("share-group-note"),
+         known.length ? t("share.allTeamsHere") : t("share.noTeams"));
+    // …AND THE CONTROLS GO, rather than staying empty. Measured on screen: two
+    // selects with no options render as two carets on a tiny box, which reads as
+    // a broken form beside a sentence explaining that nothing is broken.
+    $("share-group").replaceChildren();
+    $("share-group").hidden = true;
+    $("share-group-role").hidden = true;
+    $("btn-share-group").hidden = true;
+    return;
+  }
+  $("share-group").hidden = false;
+  $("share-group-role").hidden = false;
+  $("btn-share-group").hidden = false;
+  note($("share-group-note"), "");
+  $("share-group").replaceChildren(...free.map((g) => {
+    const option = el("option", "", `${g.name || g.id} · ${(g.members || []).length}`);
+    option.value = g.id;
+    return option;
+  }));
+  // NEVER `owner` IN THIS LIST: the node refuses it (409, with the reason), and
+  // offering a choice the node will refuse is a form that lies about what it can
+  // do. The refusal stays there as the authority — this is only the menu.
+  fill($("share-group-role"), ROLES, "editor");
+}
+
+function renderLive(roomId, roster, room) {
+  const host = $("share-live");
+  if (!host) return;
+  // THE TRANSFER IS OFFERED TO EVERYBODY WHO CAN SEE THIS PANEL, and the NODE
+  // refuses an admin — «only the owner assigns owner or admin», in `may_assign`.
+  //
+  // The first version of this line read `roster.your_role === "owner"`, and
+  // `test_the_page_holds_no_visibility_rule` refused it, correctly: a second
+  // implementation of a rule, in a place that is not the one that decides, is a
+  // rule with two answers and the second is the one nobody tested. Reaching this
+  // panel at all already needs admin or owner (the node 403s the member list
+  // otherwise), so what is left is owner-vs-admin — and the refusal names the
+  // rule, which is more than a hidden button would have said.
+  const rows = [
+    el("p", "note", t("share.transferOne")),
+    shareRow(roster.owner ? t("share.owner", { who: roster.owner })
+                          : t("share.ownerNobody"),
+             [], [[t("share.transfer"), "", () => void transfer(roomId)]]),
+  ];
+  host.replaceChildren(...rows);
+  void room;
+}
+
+function renderArchive(roomId, room) {
+  const host = $("share-archive");
+  if (!host) return;
+  const archived = Boolean(room.archived_at);
+  // THE ROW SAYS WHICH STATE THE ROOM IS IN, both ways. The first version left
+  // the label empty when the room was live, which drew an empty box with a
+  // button in it — a control with nothing to say about what it would change.
+  host.replaceChildren(
+    el("p", "note", t("share.archiveWhy")),
+    shareRow(archived ? t("share.archived", { when: room.archived_at })
+                      : t("share.notArchived"),
+             [], [[archived ? t("share.restoreDo") : t("share.archiveDo"), "",
+                   () => void setArchived(roomId, !archived)]]));
+}
+
+async function renderInvites(roomId) {
+  const host = $("share-invites");
+  if (!host) return;
+  let links = [];
+  try { links = await request("GET", `/rooms/${encodeURIComponent(roomId)}/invites`); }
+  catch { links = []; }
+  const rows = links.map((link) => {
+    const notes = [];
+    notes.push(link.expires_at
+               ? t("share.inviteExpires",
+                   { when: new Date(link.expires_at * 1000).toISOString().slice(0, 16) })
+               : t("share.inviteNever"));
+    if (link.max_uses) {
+      notes.push(t("share.inviteUses", { uses: link.uses, max: link.max_uses }));
+    }
+    const verbs = link.state === "live"
+      ? [[t("share.revoke"), "", () => void revokeInvite(roomId, link.token_id)]]
+      : [];
+    return shareRow(t("share.inviteState", { role: t(`role.${link.role}`) || link.role,
+                                             state: link.state }), notes, verbs);
+  });
+  if (!rows.length) rows.push(el("p", "note", t("share.noInvites")));
+  host.replaceChildren(...rows);
+  const box = $("share-invite-row");
+  if (box) { box.hidden = false; fill($("share-invite-role"), OFFERABLE, "editor"); }
+}
+
+// ── the verbs, each one the node's own ───────────────────────────────────────
+
+async function grant(roomId) {
+  const orcid = ($("share-orcid").value || "").trim();
+  if (!orcid) return;
+  const role = $("share-role").value;
+  try {
+    await request("PUT", `/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(orcid)}`,
+                  { role });
+  } catch (error) { note($("share-add-note"), error.message, true); return; }
+  $("share-orcid").value = "";
+  note($("share-add-note"), t("share.granted", { who: orcid, role }));
+  await loadShare(roomId);
+}
+
+async function grantGroup(roomId) {
+  const gid = $("share-group").value;
+  if (!gid) return;
+  const role = $("share-group-role").value;
+  try {
+    await request("PUT", `/rooms/${encodeURIComponent(roomId)}/groups/${encodeURIComponent(gid)}`,
+                  { role });
+  } catch (error) {
+    // THE NODE'S OWN SENTENCE, carried through — the refusal for `owner` explains
+    // why a room has one, and rewriting it here would be a second explanation
+    note($("share-group-note"), error.message, true);
+    return;
+  }
+  note($("share-group-note"), t("share.granted", { who: gid, role }));
+  await loadShare(roomId);
+}
+
+async function revoke(roomId, orcid) {
+  try {
+    await request("DELETE", `/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(orcid)}`);
+  } catch (error) { note($("share-note"), error.message, true); return; }
+  note($("share-note"), t("share.removed", { who: orcid }));
+  await loadShare(roomId);
+}
+
+async function revokeGroup(roomId, gid) {
+  try {
+    await request("DELETE", `/rooms/${encodeURIComponent(roomId)}/groups/${encodeURIComponent(gid)}`);
+  } catch (error) { note($("share-note"), error.message, true); return; }
+  note($("share-note"), t("share.removed", { who: gid }));
+  await loadShare(roomId);
+}
+
+async function makeInvite(roomId) {
+  let made;
+  try {
+    made = await request("POST", `/rooms/${encodeURIComponent(roomId)}/invites`,
+                         { role: $("share-invite-role").value });
+  } catch (error) { note($("share-invite-note"), error.message, true); return; }
+  // THE DOOR IS THE NODE'S, not this page's. `/v1/rooms/{id}/open` already
+  // answers with the canonical handoff URL (`web`), and its own note says «ask
+  // for an invite link instead — that one carries a role». So the invitation is
+  // that door plus the token, composed from the answer rather than spelled here:
+  // a URL written into this file is a URL that goes wrong on the first node whose
+  // EMStudio lives somewhere else.
+  let door = "";
+  try {
+    const doors = await request("GET", `/rooms/${encodeURIComponent(roomId)}/open`);
+    door = doors.web || doors.scheme || "";
+  } catch { door = ""; }
+  // THE TOKEN EXISTS ONCE. The node keeps a sha256, so this is the only moment
+  // the link can be copied — and the sentence says so, instead of letting
+  // somebody close the panel and come back for it.
+  await renderInvites(roomId);
+  if (door && made.token) {
+    const link = new URL(door);
+    link.searchParams.set("join", made.token);
+    showLink($("share-invites"), link.toString());
+  } else if (made.token) {
+    // no door declared: the token is still the thing that matters, and hiding it
+    // because a URL could not be built would lose the only copy there is
+    showLink($("share-invites"), made.token);
+  }
+  note($("share-invite-note"), t("share.linkOnce"));
+}
+
+async function revokeInvite(roomId, tokenId) {
+  try {
+    await request("DELETE", `/rooms/${encodeURIComponent(roomId)}/invites/${encodeURIComponent(tokenId)}`);
+  } catch (error) { note($("share-note"), error.message, true); return; }
+  await renderInvites(roomId);
+}
+
+async function transfer(roomId) {
+  const to = window.prompt(t("share.transferAsk", { room: roomId }));
+  if (!to) return;
+  try {
+    await request("PUT", `/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(to.trim())}`,
+                  { role: "owner" });
+  } catch (error) { note($("share-note"), error.message, true); return; }
+  await loadShare(roomId);
+}
+
+async function setArchived(roomId, archived) {
+  try {
+    await request("POST", `/rooms/${encodeURIComponent(roomId)}/archive`, { archived });
+  } catch (error) {
+    // …and this is where the 7 September sentence arrives: a room cannot come
+    // back onto a graph a live room has taken, and the refusal says what can be
+    // done about it. Carried through, not re-written.
+    note($("share-note"), error.message, true);
+    return;
+  }
+  await loadShare(roomId);
 }
 
 // ── zone 4 · THE NODE MAP — for whoever came to make this work ──────────────
@@ -625,6 +982,15 @@ function paintStrings() {
   set("here-sub", t("here.sub"));
   set("rooms-title", t("rooms.title"));
   set("rooms-sub", t("rooms.sub"));
+  set("share-title", t("share.title"));
+  set("share-sub", t("share.sub"));
+  set("share-who-head", t("share.who"));
+  set("share-invite-head", t("share.invite"));
+  set("share-live-head", t("share.live"));
+  set("share-archive-head", t("share.archive"));
+  set("btn-share-add", t("share.add"));
+  set("btn-share-group", t("share.addTeam"));
+  set("btn-share-invite", t("share.makeLink"));
   set("go-title", t("go.title"));
   set("go-sub", t("go.sub"));
   set("back-door", t("go.back"));
@@ -641,6 +1007,10 @@ function paintStrings() {
   // …and the list, from what it is already holding: a language change must not
   // cost a round trip to the node.
   if (LAST_ROOMS) renderRooms(LAST_ROOMS);
+  // …and the panel, if this page is showing one: its rows are built from the
+  // dictionary too, and a language change that repainted half a screen would be
+  // worse than one that repainted none.
+  if (SHARE_ROOM && askedRoom()) void loadShare(askedRoom());
 }
 
 // ── the head: which node is this, and what does it run ──────────────────────
@@ -927,7 +1297,21 @@ async function enter(rooms) {
   // right shape is a field on `/v1/whoami`, not a guess here: a page that
   // decided for itself would be a page you can talk out of it.
   if ($("create-row")) $("create-row").hidden = false;
+  // A STANZA NELL'INDIRIZZO → il pannello di QUELLA stanza.
+  //
+  // `/em/work/?room=<id>` is the stable per-room address the design note's
+  // Regola IV asks for: one place, and a link from every app. It is this page
+  // and not one of its own because sharing is not a fifth verb — Regola III puts
+  // «Condividi» inside the room's operational management, which is *lavorare* —
+  // and a fifth door would need a fifth redirect URI in a realm this project
+  // does not own.
+  //
+  // AND THE LISTING STAYS DRAWN underneath: somebody who followed a link to one
+  // room still has to be able to walk to another one, and a panel that replaced
+  // the page would be a dead end with a back button.
   renderRooms(rooms);
+  const asked = askedRoom();
+  if (asked) await loadShare(asked);
   // …and the operator's map, asked for only now: `enter` is reached when the
   // listing answered, i.e. when there IS a session to ask with.
   await loadNodeMap();
@@ -969,6 +1353,14 @@ $("btn-signout")?.addEventListener("click", () => {
 // …and the create box only exists on the work page, so the wiring asks first.
 // `?.` and not an `if`: a control that is not on this page is not an error, and
 // three scripts to avoid three question marks would be the worse trade.
+// ── CONDIVIDI · i verbi, ognuno del nodo ─────────────────────────────────────
+$("btn-share-add")?.addEventListener("click", () => void grant(askedRoom()));
+$("share-orcid")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") void grant(askedRoom());
+});
+$("btn-share-group")?.addEventListener("click", () => void grantGroup(askedRoom()));
+$("btn-share-invite")?.addEventListener("click", () => void makeInvite(askedRoom()));
+
 $("btn-create")?.addEventListener("click", () => void createRoom());
 $("new-room-title")?.addEventListener("keydown", (event) => {
   if (event.key === "Enter") void createRoom();

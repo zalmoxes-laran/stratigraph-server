@@ -1988,13 +1988,57 @@ class MemberOut(BaseModel):
     role: str
 
 
+class GroupGrantOut(BaseModel):
+    """A GROUP's grant in this room's ACL — the other half of the access list.
+
+    Half an ACL shown as if it were the whole one is the failure that looks like
+    a success: somebody looks at the panel, does not see the team, and adds six
+    people by hand who already had the role.
+    """
+    group_id: str
+    role: str
+    #: the group's human name, from the registry — absent when the registry has
+    #: no such group any more, which is a fact worth showing rather than hiding:
+    #: a grant to a group nobody can enumerate grants nothing to anybody.
+    name: Optional[str] = None
+    #: how many ORCIDs the registry has in it. `None` when the group is unknown.
+    members: Optional[int] = None
+
+
 class Members(BaseModel):
     room: str
     owner: Optional[str] = None
     members: List[MemberOut] = Field(default_factory=list)
+    #: …AND THE GROUPS, because `role_for` reads both and a panel that showed
+    #: only one would be describing an access list that does not exist.
+    groups: List[GroupGrantOut] = Field(default_factory=list)
     #: what the CALLER may do here — so a UI can draw the right buttons without
     #: a second request, and without guessing from the absence of an error
     your_role: Optional[str] = None
+
+
+def _members_view(room_id: str, acl: Acl, role: Optional[Role]) -> Members:
+    """The access list as one answer — people AND groups.
+
+    ONE derivation, and it is the point of the helper rather than tidiness: this
+    shape was built inline in four places (the GET, the two member writes, and
+    now the group writes). Adding groups to four sites is how one of them keeps
+    answering with half the ACL — and a panel reading that site would show a room
+    with no team in it while the team is working in it.
+    """
+    known = groups().all()
+    grants = []
+    for gid, granted in sorted(acl.groups.items()):
+        group = known.get(gid)
+        grants.append(GroupGrantOut(
+            group_id=gid, role=granted.value,
+            name=group.name if group else None,
+            members=len(group.members) if group else None))
+    return Members(room=room_id, owner=acl.owner,
+                   members=[MemberOut(orcid=k, role=v.value)
+                            for k, v in sorted(acl.members.items())],
+                   groups=grants,
+                   your_role=role.value if role else None)
 
 
 async def _acting_role(room_id: str, request: Request) -> tuple:
@@ -2026,10 +2070,7 @@ async def list_members(room_id: str, request: Request) -> Members:
     if role is None or not role.can_manage:
         raise HTTPException(status_code=403,
                             detail="reading the member list needs admin or owner")
-    return Members(room=room_id, owner=acl.owner,
-                   members=[MemberOut(orcid=k, role=v.value)
-                            for k, v in sorted(acl.members.items())],
-                   your_role=role.value)
+    return _members_view(room_id, acl, role)
 
 
 @v1.put("/rooms/{room_id}/members/{orcid}", response_model=Members, tags=["access"])
@@ -2071,10 +2112,108 @@ async def set_member(room_id: str, orcid: str, body: MemberIn,
                 detail="the owner cannot be demoted; transfer the room first")
         acl.members[target] = wanted
     save_acl(room_id, acl)
-    return Members(room=room_id, owner=acl.owner,
-                   members=[MemberOut(orcid=k, role=v.value)
-                            for k, v in sorted(acl.members.items())],
-                   your_role=role.value)
+    return _members_view(room_id, acl, role)
+
+
+# ── GIVING A ROLE TO A TEAM ───────────────────────────────────────────────────
+#
+# The half-built collective, measured: `Acl` holds `groups: {name → role}`,
+# `role_for` reads them through the `groups_of` seam, the registry `/v1/groups`
+# names teams and their members — and NOTHING wrote a group into a room's ACL.
+# The comment above the registry says «the grant stays in each room's ACL» and
+# nothing put it there. You could name a team; you could not give it a role.
+#
+# Not blocking — six people are added by hand — but it is why twelve does not
+# scale, and the ACL was already waiting for it.
+class GroupGrantIn(BaseModel):
+    role: str = Field(description="viewer, editor or admin — never owner")
+
+
+def _group_grant_refusal(wanted: Optional[Role]) -> Optional[str]:
+    """Why a group may not hold this role, or None.
+
+    A GROUP CANNOT BE OWNER, and it is not a preference. `role_for` returns the
+    STRONGEST grant, so a group holding `owner` would make every one of its
+    members an owner — while `acl.owner` (and `header.owner`, which follows it)
+    goes on naming one person or nobody. The room would have an «owner» field
+    that lies, and the transfer (`PUT …/members/{orcid}` with `owner`, which is a
+    transfer because «a room has one») would not know whom to take it from.
+    """
+    if wanted is Role.OWNER:
+        return ("a group cannot be the owner: a room has exactly one, and the "
+                "transfer takes it from that person and gives it to another. A "
+                "group holding `owner` would make every member an owner while "
+                "`acl.owner` still named one person — a room whose owner field "
+                "lies. Give the group `admin` if the team should manage the "
+                "room, and transfer the room to a PERSON.")
+    return None
+
+
+@v1.put("/rooms/{room_id}/groups/{group_id}", response_model=Members,
+        tags=["access"])
+async def set_room_group(room_id: str, group_id: str, body: GroupGrantIn,
+                         request: Request) -> Members:
+    """Give a team a role in this room.
+
+    THE SAME POLICY AS A PERSON, through the same function. `may_assign` takes
+    (actor, the target's current role, the new role) and its rules apply here
+    unchanged — the «current role» is what the group holds in this ACL today. A
+    second rule written by hand would be a second access policy, which is the one
+    that diverges on a Tuesday.
+    """
+    acl, _room, role, _who = await _acting_role(room_id, request)
+    wanted = parse_role(body.role)
+    if wanted is None:
+        raise HTTPException(status_code=400,
+                            detail=f"unknown role {body.role!r}: "
+                                   f"expected viewer, editor or admin")
+    refusal = _group_grant_refusal(wanted)
+    if refusal:
+        raise HTTPException(status_code=409, detail=refusal)
+
+    target = group_id.strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="a group id is not empty")
+    # A GRANT TO A GROUP NOBODY CAN ENUMERATE GRANTS NOTHING, and saying so at
+    # the moment of writing beats a panel that shows a team with no members and
+    # a room where nobody arrived. The registry is readable by any authenticated
+    # caller (a team's name is not a secret), so this is not a permission leak.
+    if groups().get(target) is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(f"there is no group {target!r} on this node, so the grant "
+                    f"would resolve to nobody. Create it first (PUT /v1/groups/"
+                    f"{target}) — or check the spelling against GET /v1/groups."))
+
+    current = acl.groups.get(target)
+    refusal = may_assign(role, current, wanted)
+    if refusal:
+        raise HTTPException(status_code=403, detail=refusal)
+    acl.groups[target] = wanted
+    save_acl(room_id, acl)
+    return _members_view(room_id, acl, role)
+
+
+@v1.delete("/rooms/{room_id}/groups/{group_id}", response_model=Members,
+           tags=["access"])
+async def remove_room_group(room_id: str, group_id: str,
+                            request: Request) -> Members:
+    """Take a team's role away. Removing a grant that is not there is not an
+    error — the requested state (this team has no role here) is what results,
+    which is the same reasoning `remove_member` already follows.
+
+    A group whose registry entry is GONE can still be revoked: the grant is in
+    the ACL, and refusing to clean up an ACL because the registry moved on would
+    leave a room with a grant nobody can remove.
+    """
+    acl, _room, role, _who = await _acting_role(room_id, request)
+    target = group_id.strip()
+    refusal = may_assign(role, acl.groups.get(target), None)
+    if refusal:
+        raise HTTPException(status_code=403, detail=refusal)
+    acl.groups.pop(target, None)
+    save_acl(room_id, acl)
+    return _members_view(room_id, acl, role)
 
 
 @v1.delete("/rooms/{room_id}/members/{orcid}", response_model=Members,
@@ -2093,10 +2232,7 @@ async def remove_member(room_id: str, orcid: str, request: Request) -> Members:
         raise HTTPException(status_code=403, detail=refusal)
     acl.members.pop(target, None)
     save_acl(room_id, acl)
-    return Members(room=room_id, owner=acl.owner,
-                   members=[MemberOut(orcid=k, role=v.value)
-                            for k, v in sorted(acl.members.items())],
-                   your_role=role.value)
+    return _members_view(room_id, acl, role)
 
 
 # ── the room register: a room is a PLACE, and a place can be listed ──────────
