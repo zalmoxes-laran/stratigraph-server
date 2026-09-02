@@ -380,6 +380,80 @@ async def _handle(room, member, websocket: WebSocket, message: Dict[str, Any],
         return
 
 
+# ── THE OTHER TRANSPORT · apply, KEEP, and ANNOUNCE, in one place ────────────
+#
+# `room.apply` had two callers and only one of them carried the rest of the
+# contract. The socket, above, applies under `room.lock`, records the operation
+# and fans it out — and persistence is the client's to ask for (`request_save`),
+# which is right for a socket: a relay that wrote the room on every keystroke
+# would rewrite a study while somebody is typing in it.
+#
+# `POST /v1/photogrammetry` was the second caller, from a `threading.Thread`, and
+# it had NONE of the rest. Measured on 9 September 2026 with a store behind the
+# room: a job reporting `done` with `ops_applied: N`, a snapshot store holding
+# NOTHING for that room, and zero operations announced. The model, its genesis
+# event and its placement lived in a dictionary that dies with the process, and
+# anybody in EMStudio had to reopen the room — with no way to know they should.
+#
+# WHY THE FIX CANNOT BE A `snapshot()` CALL IN THE THREAD: `room.lock` is an
+# `asyncio.Lock`, and an async lock does not exclude a thread. Saving from there
+# would buy persistence at the price of making the race likelier AND more
+# destructive — `em.compact` walks the same nested structures `em.apply_op` is
+# mutating. So the thread produces a DELTA and this coroutine does the rest, on
+# the event loop, where it already happens for the socket.
+#
+# AND IT IS ONE FUNCTION rather than a recipe repeated at the second door,
+# because that is the property that survives a third: a connector written next
+# month gets the lock, the save and the announcement by calling this, and
+# `test_write_paths.py` refuses a caller of `room.apply` from anywhere else.
+async def apply_from_connector(room, ops: List[Dict[str, Any]], *,
+                               source: str,
+                               graph_id: Optional[str] = None,
+                               author: Optional[str] = None) -> Dict[str, Any]:
+    """Apply a batch that came from something which is not a socket.
+
+    Returns what landed, so the caller can put it on a job record. RAISES if the
+    save fails — the caller is expected to report which half landed rather than a
+    clean failure, and `photogrammetry.py` already does exactly that.
+
+    THE ORDER IS THE CONTRACT: apply and keep under one lock (a snapshot taken
+    between two operations of one delta would be a graph nobody wrote), announce
+    afterwards, outside it — the same order the socket uses, for the same reason.
+    """
+    applied: List[Dict[str, Any]] = []
+    refused: List[Dict[str, Any]] = []
+    async with room.lock:
+        for op in ops:
+            entry = dict(op)
+            # THE AUTHOR IS THE CALLER'S, never the payload's — the same rule the
+            # socket enforces by popping it: an author nobody verified is not an
+            # author, and a connector's op is attributed to whoever asked for the
+            # run.
+            entry.pop("author", None)
+            if author:
+                entry["author"] = author
+            entry.setdefault("ts", now_iso())
+            outcome = room.apply(entry, graph_id)
+            if outcome.get("applied"):
+                room.record(entry)
+                applied.append(entry)
+            else:
+                refused.append({"op": entry.get("op"), "id": entry.get("id"),
+                                "reason": outcome.get("reason", "")})
+        # KEPT, and inside the lock: this is the one place in the process that
+        # writes a room, and it stays the one place.
+        info = room.snapshot(SNAPSHOT_STORE) if applied else None
+
+    # ANNOUNCED, outside the lock and to everybody: there is no origin to skip —
+    # a job is not a member of the room (the roster is for people), so nobody in
+    # it has already seen these.
+    for op in applied:
+        await _fanout(room, envelope("op", op, source=source, graph_id=graph_id))
+    if info is not None:
+        await _fanout(room, envelope("snapshot_written", info, source=source))
+    return {"applied": len(applied), "refused": refused, "kept": info}
+
+
 async def _send(websocket: WebSocket, payload: Dict[str, Any]) -> None:
     try:
         await websocket.send_text(json.dumps(payload, ensure_ascii=False))

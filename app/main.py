@@ -36,6 +36,7 @@ orchestrator's, and they return the same thing.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import pathlib
 from typing import Any, Dict, List, Optional
@@ -1708,6 +1709,17 @@ class PhotogrammetryIn(BaseModel):
     options: Dict[str, Any] = Field(default_factory=dict)
 
 
+#: What this connector calls itself ON THE WIRE. A client filters by `source`,
+#: so «where did this operation come from» must be a word and not a guess — and
+#: one word, named here, rather than a literal at the call site.
+CONNECTOR_SOURCE = "photogrammetry"
+#: How long the thread waits for the event loop to apply, keep and announce. A
+#: delta is a few dozen operations plus one snapshot write, so a minute is
+#: generous — and BOUNDED, which is the point: a thread blocked forever on a loop
+#: that died is a job that never reports either way.
+APPLY_DEADLINE = 60.0
+
+
 class PhotogrammetryJob(BaseModel):
     job_id: str
     room_id: str
@@ -1770,15 +1782,43 @@ async def start_photogrammetry(request: Request,
 
     job = pg.JOBS.new(ask.room_id, author=who, mode=ask.mode)
 
+    # THE LOOP, TAKEN HERE, while we are still on it. The applier below runs on a
+    # daemon thread, and a thread cannot find the running loop by asking (there
+    # is none on that thread) — so it is captured at the moment the job starts,
+    # which is the moment this endpoint is on the loop.
+    loop = asyncio.get_running_loop()
+
     def _apply(the_job: "pg.Job", run: Dict[str, Any]) -> None:
+        """The thread's half: turn the delta into operations and HAND THEM OVER.
+        
+        It does NOT touch the room. `room.lock` is an `asyncio.Lock` and this is a
+        thread, so a lock taken here excludes nobody — and `em.apply_op` and
+        `em.compact` walk the same nested structures the event loop is mutating
+        for whoever is editing. Measured consequence, before this: the ops landed
+        in memory, the store held nothing, nobody in the room was told, and the
+        job said `done` with a count that confirmed it.
+        """
         ops = pg.delta_to_ops(run.get("delta") or {})
-        applied = 0
-        for op in ops:
-            outcome = room.apply(op)
-            if outcome.get("applied"):
-                applied += 1
-        the_job.result["ops_applied"] = applied
         the_job.result["ops"] = len(ops)
+        if not ops:
+            the_job.result["ops_applied"] = 0
+            return
+        # …and WAITS for the loop, because the job's status has to mean something:
+        # `done` after a save that never happened is the failure this repair is
+        # about. A timeout or an exception propagates to `photogrammetry.py`,
+        # which already reports which half landed.
+        future = asyncio.run_coroutine_threadsafe(
+            _ws.apply_from_connector(room, ops, source=CONNECTOR_SOURCE,
+                                     author=the_job.author),
+            loop)
+        outcome = future.result(timeout=APPLY_DEADLINE)
+        the_job.result["ops_applied"] = outcome["applied"]
+        if outcome.get("refused"):
+            # NAMED, not swallowed: an idempotent re-run is not a fault, and a
+            # refusal that is one has to be readable on the job.
+            the_job.result["refused"] = outcome["refused"]
+        if outcome.get("kept"):
+            the_job.result["kept_at"] = (outcome["kept"] or {}).get("at")
 
     try:
         pg.start(job, document=room.document, cluster_ref=ask.cluster,

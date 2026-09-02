@@ -35,6 +35,28 @@ from app.main import app  # noqa: E402
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def live_loop():
+    """One event loop for the whole test, the way a server has one per process.
+
+    MEASURED, and it is a fact about the harness rather than about the code: a
+    bare `TestClient` runs EACH request on its own loop and closes it afterwards
+    (two calls, two loop ids); entered as a context manager it keeps one for the
+    block. Since 9 September the photogrammetry thread hands its delta back to
+    the loop that started the job — which is right for uvicorn, where there is
+    one loop for the process, and impossible against a loop that was closed when
+    the POST returned.
+
+    Without this fixture the job failed with the sentence it is supposed to give
+    when the graph really cannot be written («the model was produced and stored
+    but the graph was not written: RuntimeError: Event loop is closed») — an
+    honest report of a harness artefact, which is the worst kind of red: correct
+    code, correct message, wrong conclusion.
+    """
+    with client:
+        yield
+
+
 # ── a room with a photo cluster in it ────────────────────────────────────────
 
 def _photo(name: str, blob: bytes) -> dict:
@@ -338,3 +360,95 @@ def test_the_filenames_are_the_resources_names_because_the_control_file_uses_the
     images, _ids, _acq = pg.stage_cluster(_document(2), "acq.march",
                                           fetch=ASSET_STORE.get)
     assert [name for name, _b in images] == ["IMG_0000.JPG", "IMG_0001.JPG"]
+
+
+# ── 6 · THE SECOND DOOR WRITES INTO THE GRAPH AND MUST KEEP IT ───────────────
+#
+# The fixtures above give the room «without touching a snapshot store», which is
+# exactly why nothing here ever measured the half that was missing: the ops land
+# in `room.document` (memory) and the test looks there.
+#
+# These two hold the other half. Written BEFORE the repair, so the red is ours.
+
+@pytest.fixture
+def stored_room(monkeypatch):
+    """The same live room, but with a REAL snapshot store behind it — which is
+    what a deployed node has, and what the fixture above deliberately omits."""
+    from app import main as m
+    from app import ws as ws_mod
+    from app.rooms import Room
+    from app.store import InMemorySnapshotStore
+
+    store = InMemorySnapshotStore()
+    the_room = Room("kept-room", _document())
+
+    class Registry:
+        async def get(self, room_id):
+            return the_room
+
+        def rooms(self):
+            return {the_room.room_id: the_room}
+
+    monkeypatch.setattr(m, "rooms", lambda: Registry())
+    monkeypatch.setattr(m, "load_acl",
+                        lambda room_id: __import__("app.access",
+                                                   fromlist=["Acl"]).Acl())
+    monkeypatch.setattr(ws_mod, "SNAPSHOT_STORE", store)
+    monkeypatch.setattr(m, "snapshot_store", lambda: store)
+    yield the_room, store
+
+
+def test_a_finished_run_is_ON_DISK_and_not_only_in_memory(engine, stored_room):
+    """«`applied: true` does not mean KEPT» — found on 6 September from the other
+    door, and true here too until it was repaired. A job that says `done` with
+    `ops_applied: N` while the store holds nothing is the failure that looks like
+    a success, with a number confirming it."""
+    the_room, store = stored_room
+    answer = client.post("/v1/photogrammetry",
+                         json={"room_id": the_room.room_id,
+                               "cluster": "acq.march", "mode": "local"})
+    assert answer.status_code == 202, answer.text
+    done = _await(answer.json()["job_id"])
+    assert done["status"] == "done", done
+    model_id = done["result"]["model_id"]
+
+    kept = store.get(the_room.room_id)
+    assert kept is not None, (
+        "the run finished and the snapshot store holds NOTHING for this room: "
+        "the model, its genesis event and its placement live in a dictionary "
+        "that dies with the process")
+    ids = {n["id"] for section in (kept.get("graphs") or {}).values()
+           for n in section.get("nodes", [])}
+    assert model_id in ids, (
+        f"the store has a document for this room but not the model {model_id!r} "
+        "the job says it applied")
+
+
+def test_a_finished_run_was_ANNOUNCED_to_the_room(engine, stored_room):
+    """Whoever is in EMStudio in that room must see the model appear, without
+    reopening — and without a way to know they should. So the operations go out
+    on the wire like every other operation, from the place that already does it
+    for the socket."""
+    the_room, _store = stored_room
+    seen = []
+
+    async def spy(room, message, skip=None):
+        seen.append(message)
+
+    from app import ws as ws_mod
+    original = ws_mod._fanout
+    ws_mod._fanout = spy
+    try:
+        answer = client.post("/v1/photogrammetry",
+                             json={"room_id": the_room.room_id,
+                                   "cluster": "acq.march", "mode": "local"})
+        done = _await(answer.json()["job_id"])
+    finally:
+        ws_mod._fanout = original
+    assert done["status"] == "done", done
+
+    ops = [m for m in seen if m.get("type") == "op"]
+    assert ops, ("the run applied operations and announced none: anybody in the "
+                 "room has to reopen it, and has no way to know they should")
+    announced = {(m.get("payload") or {}).get("id") for m in ops}
+    assert done["result"]["model_id"] in announced
