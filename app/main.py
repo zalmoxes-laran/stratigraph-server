@@ -2462,6 +2462,146 @@ async def get_room(room_id: str, request: Request) -> RoomOut:
                           with_members=bool(role.can_manage))
 
 
+# ── THE REST DOOR FOR OPERATIONS ─────────────────────────────────────────────
+#
+# Not a new capability: `ws.apply_from_connector` has done the work since 9
+# September, and the comment above it says why it exists — «a connector written
+# next month gets the lock, the save and the announcement by calling this». This
+# is that connector's door, and the second caller of that function.
+#
+# WHY A DOOR AT ALL, when there is a socket. A socket is a POSTURE: you take a
+# seat, you are in the roster, your selection is other people's business, and
+# you are expected to still be there in a minute. pyarchinit-mini is not that —
+# it is a CORRESPONDENT. It has a site's stratigraphy on disk and wants to hand
+# it over, once, and hear what landed. Holding a WebSocket open to deliver
+# twelve units would be building a posture the caller does not have, and every
+# such client would have to implement the handshake, the presence and the
+# reconnect to say one sentence.
+
+#: What this door calls itself ON THE WIRE. `source` names the PRODUCER of a
+#: message — `em-server` for the relay's own words, `emstudio` for the editor,
+#: `photogrammetry` for the reconstruction connector. Here the producer is
+#: whoever posted, and this server does not know who that is beyond their
+#: identity; what it does know is the door they came through. So the word names
+#: the door.
+#:
+#: NOT `CONNECTOR_SOURCE`, which is the string `"photogrammetry"`: a client
+#: filtering by source would see a stratigraphic delivery labelled as a
+#: reconstruction.
+#:
+#: And NOT taken from the request. A caller-chosen `source` is a caller-chosen
+#: provenance, which is the same class of statement as a caller-chosen `author`
+#: — and that one the server already refuses.
+REST_OPS_SOURCE = "rest"
+
+#: How many operations one request may carry. MEASURED, because the constraint
+#: is not the bytes: `apply_from_connector` holds `room.lock` for the WHOLE
+#: batch, so a long batch is a room frozen for everybody editing in it — and
+#: `room.apply` is O(n) in the graph's size. Timed on this machine, one
+#: `add_node` at a time, on a graph that grows underneath:
+#:
+#:      graph      per op
+#:        100      27 µs
+#:       1000      49 µs
+#:       2000      93 µs
+#:       5000     208 µs
+#:      10000     436 µs
+#:
+#: so the lock is held for roughly N × f(graph), not for N. A thousand
+#: operations cost ~93 ms on a two-thousand-node study and ~2 s on a
+#: ten-thousand-node one — which is the honest statement: this cap bounds one
+#: factor of a product, and the other factor belongs to whoever owns the study.
+#:
+#: A THOUSAND is chosen to sit above the real unit of work and below the point
+#: where the hold becomes visible. The unit of work is a site: pyarchinit-mini's
+#: own tutorial database holds 60 stratigraphic units and 187 relationships,
+#: i.e. a few hundred operations for a whole excavation, so one site is one
+#: request. Anything larger is a caller that should be paging, and a 413 tells
+#: them so.
+OPS_BATCH_MAX = int(os.environ.get("OPS_BATCH_MAX") or "1000")
+
+
+class OpsIn(BaseModel):
+    """A batch of CRDT operations, and optionally which section they belong to."""
+
+    ops: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="CRDT operations, in the wire's own shape. `author` is "
+                    "ignored if present: the server writes the caller's.")
+    graph_id: Optional[str] = Field(
+        default=None,
+        description="which graph of the container. Absent means the active one.")
+
+
+class OpsOut(BaseModel):
+    applied: int
+    #: Named individually, because a caller has to be able to tell an operation
+    #: that was refused for being stale from one that was refused for being
+    #: malformed — the first is normal, the second is a bug at their end.
+    refused: List[Dict[str, Any]] = Field(default_factory=list)
+    #: What the snapshot store kept, or null when nothing applied and so nothing
+    #: was written.
+    kept: Optional[Dict[str, Any]] = None
+
+
+@v1.post("/rooms/{room_id}/ops", response_model=OpsOut, tags=["rooms"])
+async def apply_ops(room_id: str, body: OpsIn, request: Request) -> OpsOut:
+    """Hand a batch of graph operations to a room, over HTTP.
+
+    **Who may**: editor and above, resolved by the same `_acting_role` the
+    WebSocket door and the photogrammetry door use — because two
+    implementations of «who are you here» is one more than the number that can
+    stay right.
+
+    **The author is the caller's identity, always.** An `author` in the payload
+    is dropped (`apply_from_connector` pops it): an author nobody verified is
+    not an author.
+
+    **A REFUSAL IS NOT AN ERROR.** An operation that is stale, or that has
+    already been applied, comes back inside `refused` on a **200**. This is the
+    one design decision in this endpoint worth arguing, so here is the argument:
+    a 4xx tells a client to change something and try again, and a CRDT client
+    that retries a refused operation will be refused again for ever — the
+    refusal IS the convergent answer. The status code answers «did the room
+    hear you», and the body answers «what did it do about it».
+
+    **413 above `OPS_BATCH_MAX`**, and the constant carries the measurement.
+    """
+    _acl, room, role, who = await _acting_role(room_id, request)
+    if role is None or not role.can_write:
+        raise HTTPException(
+            status_code=403,
+            detail="writing operations into this room needs editor or above: "
+                   "it changes the graph everybody else is reading")
+    if who is None and authenticator.settings.enforcing:
+        # The same belt and braces as the photogrammetry door, and the same
+        # reason: the contract's core refuses an unattributed write, and a 500
+        # from deeper in is a worse place to learn it.
+        raise HTTPException(status_code=403,
+                            detail="operations with nobody's name on them are a "
+                                   "record nobody can defend: sign in")
+
+    if not body.ops:
+        # Nothing to do, and nothing wrong with asking. Not a 400: an adapter
+        # that produced no operations because a site has no units has behaved
+        # correctly, and a client should not have to special-case the empty
+        # delivery.
+        return OpsOut(applied=0, refused=[], kept=None)
+    if len(body.ops) > OPS_BATCH_MAX:
+        raise HTTPException(
+            status_code=413,
+            detail=f"{len(body.ops)} operations in one request, and this node "
+                   f"accepts {OPS_BATCH_MAX}. The limit is the room's lock: the "
+                   f"batch is applied under it, so a long batch is a room frozen "
+                   f"for everybody editing in it. Send it in parts — the "
+                   f"operations are idempotent, so parts are safe.")
+
+    outcome = await _ws.apply_from_connector(
+        room, body.ops, source=REST_OPS_SOURCE,
+        graph_id=body.graph_id, author=who)
+    return OpsOut(**outcome)
+
+
 class ArchiveIn(BaseModel):
     archived: bool = Field(default=True,
                            description="false brings the room back")
