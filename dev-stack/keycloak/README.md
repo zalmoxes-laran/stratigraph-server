@@ -22,6 +22,55 @@ What it seeds, and why each piece is needed to get a token with `curl`:
 
 No custom scope is required, so `OIDC_REQUIRED_SCOPE` stays unset.
 
+## `em-console`'s redirect URIs, and the two that are deliberately NOT there
+
+pyarchinit-mini joined the realm on 2026-09-12 by REUSING `em-console` — the
+public client the other browser pages already use — rather than by getting a
+third client. It needs nothing `em-console` does not already have: the standard
+flow and the `orcid` mapper. A client per page would be three places to add a
+mapper to.
+
+**And it needs the `orcid` mapper through `/userinfo`, not through the
+id_token.** Worth writing down, because the first live sign-in failed on it and
+the next reader will hit the same wall: both mappers on both clients carry
+
+    id.token.claim       = false
+    access.token.claim   = true
+    userinfo.token.claim = true      (orcid only)
+
+So an id_token from this realm carries **no `orcid`** and **no
+`aud: em-server`** — and neither is a gap. An id_token's `aud` is the client
+that requested it (OpenID Connect Core); `em-server` is the audience of the
+ACCESS token, which is what a resource server validates and what the `audience`
+mapper exists to write. A CLIENT reading its own id_token must check `aud`
+against its own `client_id`, and must ask `/userinfo` for the ORCID.
+
+The alternative — flipping `id.token.claim` to true here — was deliberately not
+taken: it changes a file the whole stack imports, and on the institutional node
+this realm belongs to somebody else. A door that only opens while a third party
+keeps a flag set is a door that closes one day without warning.
+
+Two spellings were added:
+
+    http://localhost:8090/*
+    http://127.0.0.1:8090/*
+
+and **two more were considered and refused**, because they name a door that does
+not exist:
+
+    https://em.localhost:8443/pyarchinit/*     ← NOT added
+    https://localhost:8443/pyarchinit/*        ← NOT added
+
+MEASURED: `Caddyfile.dev` has no `/pyarchinit/*` route, so the front door does
+not carry this service at all — 8090 on the host is the only way in. And adding
+the route is not a four-line job: pyarchinit-mini is a Flask application whose
+`url_for` emits paths from the ORIGIN's root (`/auth/login`, `/static/...`), so
+behind a stripped `/pyarchinit` prefix every link and every form action would
+point outside the prefix. Making it work needs `APPLICATION_ROOT` plus
+`ProxyFix` in the app, which is a change to the application and not to this
+realm. Until somebody does that, those two URIs would be a permission granted
+to a door nobody built — so they are named here instead of granted.
+
 Changing any of this means changing **this file**, not only `.env.dev`: the env
 file selects which realm/client to ask for, the JSON is what actually exists.
 

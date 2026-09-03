@@ -699,6 +699,49 @@ services:
       # Postgres esiste e funziona (database/connection.py), e si accende
       # scrivendo questa variabile — mai per caso.
       # DATABASE_URL: "postgresql://…"
+      #
+      # --- identita': lo STESSO realm degli altri, ma NON le stesse variabili --
+      # Le tre insieme o nessuna: `create_app()` chiama
+      # `oidc_routes.configuration_error()` prima di aprire un database e
+      # RIFIUTA di partire se una manca, invece di servire pagine con
+      # l'autenticazione a meta'. Nessuna variabile = pyarchinit-mini come e'
+      # sempre stato, che e' il modo in cui gira su Railway.
+      #
+      # L'issuer PUBBLICO — cio' che dice `iss` e il posto dove il BROWSER viene
+      # mandato. Stessa riga di stratigraph-catalog, per lo stesso motivo: due
+      # grafie del realm sono due `iss`, e una delle due viene rifiutata.
+      OIDC_ISSUER: "${OIDC_ISSUER:-https://em.localhost:${HTTPS_PORT:-8443}/auth/realms/${DEV_REALM}}"
+      # …e l'indirizzo INTERNO da cui si prendono le chiavi. Diverso di proposito:
+      # `iss` e' un NOME che il token porta, il JWKS e' una macchina che si
+      # chiama. Far passare la lettura delle chiavi da Caddy legherebbe la
+      # capacita' di VALIDARE al proprio stesso proxy.
+      #
+      # Qui questa variabile fa DUE cose in piu' che negli altri servizi, e vanno
+      # dette: pyarchinit-mini non valida soltanto, SCAMBIA il codice e poi
+      # interroga /userinfo. `OidcSettings` deriva da QUESTA base sia il token
+      # endpoint sia quello di userinfo, non dall'issuer, perche' sono le altre
+      # due chiamate server-a-server dello stesso giro.
+      OIDC_JWKS_URI: "http://keycloak:8080/auth/realms/${DEV_REALM}/protocol/openid-connect/certs"
+      # Il client con cui il BROWSER fa il giro. Questa e' l'unica variabile che
+      # gli altri servizi non hanno: loro validano un token che qualcun altro ha
+      # ottenuto, questo lo ottiene, quindi deve dire chi e'. `em-console` — il
+      # client pubblico che le altre pagine usano gia', a cui il 2026-09-12 sono
+      # stati aggiunti i due redirect URI di 8090 (e non i due dietro Caddy, che
+      # sarebbero una porta che nessuno ha costruito: vedi il README del realm).
+      OIDC_CLIENT_ID: "em-console"
+      #
+      # E `OIDC_AUDIENCE` NON C'E', a differenza di ogni altro servizio qui:
+      # nessuno la legge. Il primo accesso vero ha rifiutato un token
+      # perfettamente buono con «Invalid audience», e la misura nel realm dice
+      # perche': il mapper `audience` scrive `em-server` nell'ACCESS token con
+      # `id.token.claim = false`. E non e' una mancanza del realm — l'`aud` di
+      # un id_token E' il client che l'ha chiesto (OpenID Connect Core), mentre
+      # `em-server` e' l'audience dell'access token che un resource server
+      # valida. stratigraph-server e' quel resource server e ha ragione a
+      # pretendere `em-server`; questo qui e' un CLIENT che legge il proprio
+      # id_token, quindi l'audience su cui insiste e' il suo `client_id`.
+      # Tornera', con un lettore vero, quando pyarchinit-mini entrera' in una
+      # stanza e terra' un access token.
     ports:
       # 8080 e' occupata su questa macchina (Moodle, e un tunnel ssh), 8085 e'
       # Keycloak: l'host prende 8090, il container resta sulla sua 8080.
