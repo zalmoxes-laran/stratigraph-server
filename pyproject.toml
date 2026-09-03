@@ -4,7 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stratigraph-server"
-version = "0.1.0.dev0"
+# Kept in step with `app/__init__.py.__version__` — static metadata cannot
+# import, so this is the one unavoidable repetition, and a test refuses a
+# disagreement. See that module for what the number means.
+version = "1.6.0.dev1"
 description = "The s3Dgraphy access API over HTTP — thin FastAPI wrapper (StratiGraph)"
 readme = "README.md"
 requires-python = ">=3.10"

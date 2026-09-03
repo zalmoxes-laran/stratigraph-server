@@ -238,6 +238,10 @@ def _probe_self(version: str, s3dgraphy: Optional[str],
     """StratiGraph Server itself. It answered — that is what a request reaching this line
     means — so the useful part is what it IS: the version, the library it speaks,
     and how long it has been up."""
+    # Imported HERE and not at module level: `app.main` imports this module, so
+    # a top-level import would close a cycle.
+    from .main import _speaks
+
     return Check(name="stratigraph-server", state=OK, target="self", latency_ms=0,
                  detail=f"this process answered (up "
                         f"{int(time.time() - started_at)}s)",
@@ -246,6 +250,13 @@ def _probe_self(version: str, s3dgraphy: Optional[str],
                  browser=_public_door(),
                  probe="(this process — the request that reached this line)",
                  facts={"version": version, "s3dgraphy": s3dgraphy,
+                        # …and WHAT IT SPEAKS, beside who it is. `version` is
+                        # the number a person quotes in a test report; this is
+                        # the triple a peer reads to decide whether the two
+                        # understand each other. Same reader as `/node` and
+                        # `/health` — `main._speaks()` — so the three cannot
+                        # disagree about it.
+                        "speaks": _speaks(),
                         "uptime_s": int(time.time() - started_at),
                         "host": socket.gethostname()})
 

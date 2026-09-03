@@ -115,7 +115,11 @@ except ImportError as exc:  # pragma: no cover — deployment error, not runtime
         f"(or -e ../s3Dgraphy). {exc}"
     ) from exc
 
-__version__ = "0.1.0.dev0"
+# IMPORTED, not declared again. There were two literals in this package until
+# 2026-09-18 (`app/__init__.py:3` and this line), which is one more than the
+# number that can stay right. `app/__init__.py` carries the reasoning about the
+# convention.
+from . import __version__
 
 app = FastAPI(
     title="StratiGraph Server",
@@ -242,6 +246,21 @@ def _load(doc: Dict[str, Any]):
                             detail=f"not a readable em.json: {exc}") from exc
 
 
+def _speaks() -> Dict[str, Any]:
+    """The version triple, asked of the library that owns it.
+
+    Wrapped in a `try` because a node that cannot answer «what do I speak»
+    should still answer «am I alive»: `/health` is what a probe calls, and a
+    liveness check that raises because a contract module moved would take the
+    node down in every dashboard while the node was fine.
+    """
+    try:
+        from s3dgraphy.contract.connector import current_versions
+        return current_versions().as_dict()
+    except Exception:      # pragma: no cover — an older s3dgraphy, or none
+        return {}
+
+
 # ── health ────────────────────────────────────────────────────────────────────
 
 class Health(BaseModel):
@@ -252,6 +271,19 @@ class Health(BaseModel):
     service: str = "stratigraph-server"
     version: str
     s3dgraphy: Optional[str] = None
+    #: WHAT THIS NODE CAN SPEAK, as opposed to who it is.
+    #:
+    #: `version` above is a number FOR PEOPLE — the coordinate somebody puts in
+    #: a test report. This is the triple FOR MACHINES: the em.json schema, the
+    #: connections datamodel (the EM language itself), and the connector API.
+    #: A peer reads it to decide whether the two of them understand each other,
+    #: and `None` in any slot means *not declared*, which a handshake must treat
+    #: as unknown rather than as compatible.
+    #:
+    #: Not composed here: `s3dgraphy.contract.connector.current_versions()`
+    #: already answers it, and two implementations of «what do I speak» is one
+    #: more than the number that can stay right.
+    speaks: Dict[str, Any] = Field(default_factory=dict)
     #: which optional ops this build can actually perform. A client that reads
     #: this does not have to discover a 501 by trying.
     capabilities: Dict[str, bool] = Field(default_factory=dict)
@@ -425,6 +457,19 @@ class NodeOffers(BaseModel):
 
     service: str = "stratigraph-server"
     version: str
+    #: WHAT THIS NODE CAN SPEAK, as opposed to who it is.
+    #:
+    #: `version` above is a number FOR PEOPLE — the coordinate somebody puts in
+    #: a test report. This is the triple FOR MACHINES: the em.json schema, the
+    #: connections datamodel (the EM language itself), and the connector API.
+    #: A peer reads it to decide whether the two of them understand each other,
+    #: and `None` in any slot means *not declared*, which a handshake must treat
+    #: as unknown rather than as compatible.
+    #:
+    #: Not composed here: `s3dgraphy.contract.connector.current_versions()`
+    #: already answers it, and two implementations of «what do I speak» is one
+    #: more than the number that can stay right.
+    speaks: Dict[str, Any] = Field(default_factory=dict)
     #: what the node calls itself publicly — `EM_PUBLIC_BASE`, which is also
     #: what the handoff links are built from. Empty on a node that never said.
     public_base: str = ""
@@ -479,6 +524,7 @@ def node_offers() -> NodeOffers:
 
     return NodeOffers(
         version=__version__,
+        speaks=_speaks(),
         # Empty when nobody configured it — `public_base` already returns "" in
         # that case rather than guessing `localhost`, and the page then says the
         # node has no public name instead of printing one that only works here.
@@ -514,6 +560,7 @@ def health() -> Health:
     return Health(
         version=__version__,
         s3dgraphy=version,
+        speaks=_speaks(),
         capabilities={
             "validate": True,
             "export_ttl": importable("rdflib"),

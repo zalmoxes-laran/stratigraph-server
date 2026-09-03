@@ -759,7 +759,32 @@ services:
     ports:
       # 8080 e' occupata su questa macchina (Moodle, e un tunnel ssh), 8085 e'
       # Keycloak: l'host prende 8090, il container resta sulla sua 8080.
-      - "${PYARCHINIT_PORT:-8090}:8080"
+      #
+      # `127.0.0.1:` DAVANTI, e non e' pignoleria. Senza, Docker pubblica su
+      # `0.0.0.0` — misurato il 2026-09-18: da `192.168.1.234:8090` l'app
+      # rispondeva 302, e con `X-Forwarded-Prefix: /pwned` rispondeva
+      # `Location: /pwned/auth/login?next=%2Fpwned%2F`, cioe' credeva al
+      # chiamante. Il residuo era gia' dichiarato nell'end-of della porta di
+      # casa («la variabile protegge chi non ha un proxy, non chi ha un proxy E
+      # una porta pubblicata») e valutato accettabile «su un portatile».
+      #
+      # IL CONTESTO VERO NON E' UN PORTATILE. Il Field Computing Node, per
+      # progetto, FA DA HOTSPOT ai tablet del cantiere: e' il deployment in cui
+      # «siamo tutti sulla stessa rete» non e' un incidente ma la specifica.
+      # Una porta su `0.0.0.0` con ProxyFix che si fida delle intestazioni, li',
+      # e' raggiungibile da ogni dispositivo attaccato — e chi la raggiunge
+      # decide il prefisso e l'host con cui l'applicazione costruisce i propri
+      # link.
+      #
+      # Legata al loopback la seconda porta RESTA, quindi regge ancora
+      # l'argomento che ha deciso la forma del `redirect_uri` di OIDC: due
+      # porte, due indirizzi giusti, e nessuna base pubblica dichiarata che
+      # possa essere giusta per una sola.
+      #
+      # A chi fra sei mesi volesse riaprirla «per comodita'»: la comodita' e'
+      # `ssh -L 8090:127.0.0.1:8090`, che costa una riga e non mette una porta
+      # di scrittura sull'hotspot di un cantiere.
+      - "127.0.0.1:${PYARCHINIT_PORT:-8090}:8080"
     volumes:
       # TUTTO lo stato dell'app: sqlite, secret.key, media, backup, coda di sync.
       # La directory e' creata NELL'IMMAGINE con l'owner giusto — senza, il volume

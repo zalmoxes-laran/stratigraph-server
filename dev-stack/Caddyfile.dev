@@ -21,6 +21,69 @@
 {$EM_SITE:https://em.localhost} {
 	tls internal
 
+	# ── A BARE PREFIX IS NOT A 404 ───────────────────────────────────────────
+	#
+	# Measured on 2026-09-18, and it was SEVEN OUT OF SEVEN: every prefix this
+	# site routes answered 404 without its trailing slash, while answering with
+	# it (`/chat/` 200, `/iiif/` 301, `/assets/` 403, `/pyarchinit/` 302,
+	# `/auth/` 302). So it was never a defect of one route — it is a property of
+	# this file, and it is cured with ONE RULE rather than seven patches.
+	#
+	# The reason a bare prefix misses everything: every `handle` here matches
+	# `/x/*`, and `/x` is not `/x/…`. Nothing claims it, so it falls to the 404
+	# at the bottom.
+	#
+	# **308, and neither 301 nor 302.** A 308 is permanent AND PRESERVES THE
+	# METHOD. A `POST` to a bare prefix has to still be a `POST` after the
+	# redirect; 301 and 302 permit a browser to turn it into a `GET`, and that
+	# is the kind of loss that presents as «the form sometimes does not save»
+	# and is never traced back to a redirect.
+	#
+	# TWO MATCHERS FOR ONE IDEA, and the split is about not losing data: a
+	# redirect that drops the query string is a redirect that throws away part
+	# of the request. `{path}/` alone would do exactly that, and `{path}/?{query}`
+	# on a request without a query leaves a bare `?` on the address.
+	#
+	# AND THE FORM OF `redir` IS THE TRAP THIS FILE ALREADY DOCUMENTS, at
+	# `handle /` below: `redir` reads a LEADING SLASH AS A PATH MATCHER, so
+	# `redir /em/ 308` parses as «match /em/, redirect to 308» and answers 200
+	# with an empty body. Here the matcher is named (`@…`) and the destination
+	# is a placeholder, so there is no leading slash to be misread.
+	# `/iiif` IS DELIBERATELY NOT IN THIS LIST, and the reason was measured by
+	# putting it in first: Cantaloupe has the OPPOSITE convention. It answers
+	# `/iiif/` with a 301 to `/iiif` — Jetty stripping the trailing slash — so
+	# the two rules hand the request back and forth:
+	#
+	#   1. /iiif   → 308 (this rule)      Location: /iiif/
+	#   2. /iiif/  → 301 (Jetty)          Location: /iiif
+	#   3. /iiif   → 308 …                and so on
+	#
+	# A 404 turned into an infinite loop, which is worse than what it replaced.
+	#
+	# AND THE STRONGER REASON, measured against Cantaloupe directly on :8182:
+	# neither spelling is an endpoint there.
+	#
+	#   :8182/iiif    → 404
+	#   :8182/iiif/   → 301  Location: /iiif   (i.e. to its own 404)
+	#   :8182/iiif/3  → 200                    ← the API starts one level down
+	#
+	# So there is nothing to redirect TO. The 404 at `/iiif` is Cantaloupe's own
+	# answer for that path and not this file failing to add a slash — which is
+	# the difference between an omission and a limit.
+	#
+	# One documented exception is not seven patches: the rule stands, and the
+	# one upstream that disagrees about slashes is named here with its answers.
+	@bare_prefix_with_query {
+		path /em /catalog /assets /pyarchinit /chat /auth
+		expression {query} != ""
+	}
+	@bare_prefix {
+		path /em /catalog /assets /pyarchinit /chat /auth
+		expression {query} == ""
+	}
+	redir @bare_prefix_with_query {path}/?{query} 308
+	redir @bare_prefix {path}/ 308
+
 	# StratiGraph · EMSTUDIO, on the NODE'S OWN ORIGIN — the editor at
 	# `/em/studio/`, the dissemination reader at `/em/read/`.
 	#
