@@ -50,26 +50,30 @@ taken: it changes a file the whole stack imports, and on the institutional node
 this realm belongs to somebody else. A door that only opens while a third party
 keeps a flag set is a door that closes one day without warning.
 
-Two spellings were added:
+Four spellings, and they arrived in two goes for a reason worth keeping:
 
-    http://localhost:8090/*
-    http://127.0.0.1:8090/*
+    http://localhost:8090/*                    (2026-09-12)
+    http://127.0.0.1:8090/*                    (2026-09-12)
+    https://em.localhost:8443/pyarchinit/*     (2026-09-17)
+    https://localhost:8443/pyarchinit/*        (2026-09-17)
 
-and **two more were considered and refused**, because they name a door that does
-not exist:
+On 12 September the last two were **considered and refused**, because
+`Caddyfile.dev` had no `/pyarchinit/*` route: granting them would have made
+Keycloak answer «accepted» for an address that could not be reached, which is
+worse than a refusal because it looks like it works.
 
-    https://em.localhost:8443/pyarchinit/*     ← NOT added
-    https://localhost:8443/pyarchinit/*        ← NOT added
+On 17 September the route was built, so the reason lapsed and they were added.
+The two on **8090 stay**: the direct port is still how the service is reached in
+development, and this is an addition rather than a replacement — measured as
+such, both flows work.
 
-MEASURED: `Caddyfile.dev` has no `/pyarchinit/*` route, so the front door does
-not carry this service at all — 8090 on the host is the only way in. And adding
-the route is not a four-line job: pyarchinit-mini is a Flask application whose
-`url_for` emits paths from the ORIGIN's root (`/auth/login`, `/static/...`), so
-behind a stripped `/pyarchinit` prefix every link and every form action would
-point outside the prefix. Making it work needs `APPLICATION_ROOT` plus
-`ProxyFix` in the app, which is a change to the application and not to this
-realm. Until somebody does that, those two URIs would be a permission granted
-to a door nobody built — so they are named here instead of granted.
+What made the route possible was not a Caddy line but the thing that Caddy line
+needs on the other side: pyarchinit-mini serves at its own root, so
+`handle_path` strips `/pyarchinit` and hands it back in `X-Forwarded-Prefix`,
+and the application turns that into WSGI's `SCRIPT_NAME` with `ProxyFix` — but
+**only when `PYARCHINIT_BEHIND_PROXY` is set**, which the compose does for that
+one service. Without it those headers are caller-supplied, and most people who
+run pyarchinit-mini expose it directly.
 
 Changing any of this means changing **this file**, not only `.env.dev`: the env
 file selects which realm/client to ask for, the JSON is what actually exists.

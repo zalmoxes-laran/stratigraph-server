@@ -730,6 +730,20 @@ services:
       # sarebbero una porta che nessuno ha costruito: vedi il README del realm).
       OIDC_CLIENT_ID: "em-console"
       #
+      # --- e la porta di casa: c'e' un proxy davanti -------------------------
+      # Caddy serve questo servizio sotto `/pyarchinit/` con `handle_path`, che
+      # SPOGLIA il prefisso, e lo restituisce in `X-Forwarded-Prefix`. Questa
+      # variabile e' cio' che autorizza l'applicazione a CREDERGLI: senza,
+      # `ProxyFix` resta spento e quelle intestazioni sono cio' che dice il
+      # chiamante, non cio' che dice il proxy — e chi espone pyarchinit-mini
+      # direttamente (cioe' quasi tutti) non deve regalare a un client la
+      # facolta' di dichiarare il proprio host e il proprio prefisso.
+      #
+      # Accesa QUI e in nessun altro posto. Sulla porta diretta 8090 non passa
+      # da Caddy, ma il prefisso semplicemente non arriva e l'app serve alla
+      # radice: le due vie convivono, ed e' misurato.
+      PYARCHINIT_BEHIND_PROXY: "1"
+      #
       # E `OIDC_AUDIENCE` NON C'E', a differenza di ogni altro servizio qui:
       # nessuno la legge. Il primo accesso vero ha rifiutato un token
       # perfettamente buono con «Invalid audience», e la misura nel realm dice

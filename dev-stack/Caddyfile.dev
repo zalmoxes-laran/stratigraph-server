@@ -119,6 +119,54 @@
 		reverse_proxy stratigraph-catalog:8000
 	}
 
+	# StratiGraph · pyarchinit-mini — THE EXCAVATION'S OWN RECORDS, on the
+	# node's front door instead of on a port number.
+	#
+	# It ran beside Keycloak, MinIO, the room server and the catalogue from
+	# 2026-09-11, and it was the only one of them reached as
+	# `http://localhost:8090` — which is a process on the same machine rather
+	# than a part of the node. This closes that.
+	#
+	# `handle_path` — which STRIPS — and the reason is the distinction this file
+	# keeps drawing. pyarchinit-mini is a Flask application serving at its own
+	# ROOT: `/auth/login`, `/static/…`, `/us/…`. It knows nothing about
+	# `/pyarchinit`, so the prefix has to come off — the same side as the field
+	# assistant above, and the opposite side from the Catalog and IIIF, whose
+	# prefix IS part of their endpoints.
+	#
+	# BUT stripping alone would break every link. Flask builds them with
+	# `url_for`, from the ROOT it thinks it is at, so a stripped prefix means
+	# `/auth/login` in every href and every form `action` — outside the prefix,
+	# and a 404. So the prefix is HANDED BACK in a header:
+	#
+	#   `X-Forwarded-Prefix` → Werkzeug's `ProxyFix` → WSGI `SCRIPT_NAME`
+	#
+	# and from there Flask prepends it by itself. No template is touched, which
+	# is the test of whether this is done right: if a template needs editing,
+	# `SCRIPT_NAME` is not arriving.
+	#
+	# `header_up` and not a page-side convention, because the page cannot know:
+	# unlike the field assistant, which derives its API base from its own
+	# document URL, a server-rendered application has already written its links
+	# by the time a browser sees them.
+	#
+	# AND THE APPLICATION DOES NOT BELIEVE THIS HEADER UNLESS IT IS TOLD TO.
+	# `ProxyFix` is off in pyarchinit-mini unless `PYARCHINIT_BEHIND_PROXY` is
+	# set — the compose sets it for this service and nothing else does. Without
+	# that, a header like this one is caller-supplied, and a caller that can
+	# declare its own prefix and host can steer the links the application
+	# writes. Most people who run pyarchinit-mini expose it directly.
+	handle_path /pyarchinit/* {
+		reverse_proxy pyarchinit-mini:8080 {
+			# INSIDE the `reverse_proxy` block, and that is not a formatting
+			# preference: `header_up` is one of its subdirectives, and Caddy
+			# refuses it as a child of `handle_path` («unrecognized directive:
+			# header_up»). Measured with `caddy validate` before this file was
+			# ever loaded, which is what that command is for.
+			header_up X-Forwarded-Prefix /pyarchinit
+		}
+	}
+
 	# The IIIF Image API. `handle` and NOT `handle_path`: the API version lives
 	# in the path (`/iiif/3/...`), so stripping the prefix would take the
 	# endpoint with it.
