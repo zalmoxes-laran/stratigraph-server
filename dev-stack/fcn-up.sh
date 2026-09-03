@@ -142,6 +142,6 @@ $( # RILEVATO, mai eseguito: fcn-trust-ca.sh chiede una password di sistema, e u
   · altro computer: serve un HOSTNAME (mai IP nudo, rompe il TLS della CA interna) e che le
     due macchine si vedano in rete (hotspot che isola → travel-router · Internet-Sharing · Tailscale).
     Per usarlo come primario:  ./fcn-up.sh ${BONJOUR:-<mac>.local}
-$( [ "$LOCAL_S3D" = "yes" ] && echo "  · dopo aver editato s3Dgraphy:  docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart stratigraph-server stratigraph-catalog" )
+$( [ "$LOCAL_S3D" = "yes" ] && echo "  · dopo aver editato s3Dgraphy:  docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart stratigraph-server stratigraph-catalog pyarchinit-mini" )
 Giù:  ./fcn-down.sh   (o --stop / --wipe / --colima)
 EOF

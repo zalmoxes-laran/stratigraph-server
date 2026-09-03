@@ -33,7 +33,7 @@ name: em-dev
 # in a file a fresh clone does not have is a version nobody else has. An anchor
 # and not three copies, for the reason this whole change exists. The environment
 # may still override it for a deliberate experiment; what it cannot do is drift.
-x-s3dgraphy-version: &s3dgraphy_version "${S3DGRAPHY_VERSION:-1.6.0.dev16}"
+x-s3dgraphy-version: &s3dgraphy_version "${S3DGRAPHY_VERSION:-1.6.0.dev17}"
 
 services:
   # =======================================================================
@@ -665,6 +665,51 @@ services:
       - ../../EMStudio/frontend/dist:/srv/em-reader-dist:ro
     restart: unless-stopped
 
+  # =======================================================================
+  # pyarchinit-mini — lo scavo che entra dalla porta dei dati
+  # =======================================================================
+  #
+  # Fork `StratiGraph-ECCCH/pyarchinit-mini` (upstream `enzococca/pyarchinit-mini`,
+  # GPL-2.0), branch `stratigraph/01-container`. Costruito dal CHECKOUT, come
+  # stratigraph-server e stratigraph-catalog: in produzione l'Ansible tira
+  # un'immagine dal registry di 3DR, qui non esiste ancora un'immagine da tirare.
+  #
+  # PRIMO INNESTO, e va detto cosa NON fa ancora: non conosce le stanze, non
+  # valida un token di Keycloak, non parla s3Dgraphy con nessuno. Autentica con
+  # la sua tabella utenti Flask-Login e scrive nelle sue tabelle. Sta nella stack
+  # perche' lo si possa guardare girare accanto agli altri, non perche' sia gia'
+  # seduto al tavolo. Le tre cose che gli mancano hanno gia' un ordine:
+  # identita' OIDC+ORCID, adapter em.json, client-stanza come modulo.
+  pyarchinit-mini:
+    build:
+      context: ../../pyarchinit-mini
+      dockerfile: Dockerfile
+      args:
+        # Come per gli altri: gli extra sono affare del servizio, la VERSIONE no.
+        # Viene dall'ancora in testa a questo file, e il build RIFIUTA senza.
+        S3DGRAPHY_VERSION: *s3dgraphy_version
+    image: pyarchinit-mini:dev
+    container_name: em-dev-pyarchinit
+    environment:
+      # La chiave Fernet con cui cifra le impostazioni. Valore da laptop: sarebbe
+      # una vulnerabilita' su qualsiasi cosa raggiungibile, come tutto in .env.dev.
+      PYARCHINIT_SECRET_KEY: "${PYARCHINIT_SECRET_KEY:-dev-not-a-secret-change-me}"
+      # DATABASE_URL NON impostata di proposito: l'app cade sul suo default
+      # sqlite dentro PYARCHINIT_HOME, cioe' dentro il volume qui sotto. Il ramo
+      # Postgres esiste e funziona (database/connection.py), e si accende
+      # scrivendo questa variabile — mai per caso.
+      # DATABASE_URL: "postgresql://…"
+    ports:
+      # 8080 e' occupata su questa macchina (Moodle, e un tunnel ssh), 8085 e'
+      # Keycloak: l'host prende 8090, il container resta sulla sua 8080.
+      - "${PYARCHINIT_PORT:-8090}:8080"
+    volumes:
+      # TUTTO lo stato dell'app: sqlite, secret.key, media, backup, coda di sync.
+      # La directory e' creata NELL'IMMAGINE con l'owner giusto — senza, il volume
+      # nasce root-owned e il processo non-root non scrive il primo file.
+      - pyarchinit_data:/srv/pyarchinit-data
+    restart: unless-stopped
+
   # The DEPLOY index, for the runs that want to exercise it. Off by default:
   # the dev index is SQLite and needs nothing, and a CouchDB nobody asked for
   # would be a container running for a code path this stack does not take.
@@ -689,6 +734,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  pyarchinit_data:   # sqlite, secret.key, media, backup — dati di scavo, non derivati
   em_catalog_data:   # the SQLite index — derivable, so losing it costs a reindex
   couchdb_data:
   caddy_data:      # the internal CA + issued certs — losing it means re-trusting

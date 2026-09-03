@@ -13,7 +13,7 @@
 #   docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml --profile https up -d --build
 #
 # Dopo aver editato s3Dgraphy, per raccogliere le modifiche:
-#   docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart stratigraph-server stratigraph-catalog
+#   docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart stratigraph-server stratigraph-catalog pyarchinit-mini
 services:
   stratigraph-server:
     volumes:
@@ -21,6 +21,16 @@ services:
     environment:
       PYTHONPATH: /s3dgraphy-src        # antepone il sorgente locale a quello installato
   stratigraph-catalog:
+    volumes:
+      - ../../s3Dgraphy/src:/s3dgraphy-src:ro
+    environment:
+      PYTHONPATH: /s3dgraphy-src
+  # pyarchinit-mini: stesso meccanismo. Il suo CMD ANTEPONE il PYTHONPATH
+  # ereditato al proprio (`${PYTHONPATH:+$PYTHONPATH:}/srv/pyarchinit-mini`),
+  # quindi il checkout vince sul wheel installato — se un giorno quel CMD
+  # tornasse ad ASSEGNARE PYTHONPATH, questo mount diventerebbe muto e le
+  # modifiche a s3Dgraphy semplicemente non comparirebbero.
+  pyarchinit-mini:
     volumes:
       - ../../s3Dgraphy/src:/s3dgraphy-src:ro
     environment:
