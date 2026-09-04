@@ -917,6 +917,46 @@ services:
       # id_token, quindi l'audience su cui insiste e' il suo `client_id`.
       # Tornera', con un lettore vero, quando pyarchinit-mini entrera' in una
       # stanza e terra' un access token.
+      #
+      # AGGIORNAMENTO 2026-09-04, capitolo 6: pyarchinit-mini ORA entra in una
+      # stanza e tiene un access token — e `OIDC_AUDIENCE` NON e' tornata lo
+      # stesso. La riga sopra prevedeva «un lettore vero», e non ce n'e' uno:
+      # il token non viene letto, viene INOLTRATO al servizio a cui e'
+      # indirizzato. La scadenza si prende da `expires_in`, che e' un numero
+      # che il token endpoint ha dato a noi, non un claim dentro un token
+      # indirizzato a qualcun altro. Un client che ISPEZIONA un token altrui ha
+      # smesso di essere un client; un client che lo CONSEGNA al suo
+      # destinatario sta facendo cio' per cui il token e' stato emesso.
+      #
+      # --- e la stanza a cui consegnare -------------------------------------
+      # Le due insieme o nessuna, per la terza volta in questo servizio:
+      # assenti, il blueprint non viene nemmeno registrato (le due URL sono
+      # 404 e la voce di menu non compare); mezze, `create_app` rifiuta
+      # nominando quella che manca.
+      #
+      # L'indirizzo e' INTERNO e per nome di servizio: `stratigraph-server` e'
+      # un alias di rete reale del container `em-dev-server` sulla rete
+      # `em-dev_default`, misurato da dentro questo container
+      # (`http://stratigraph-server:8000/health` → 200). NON
+      # `https://em.localhost:8443`, che metterebbe il nostro stesso proxy nel
+      # percorso di una chiamata server-a-server e pretenderebbe la CA interna
+      # dentro il container per niente. Stessa regola gia' scritta nella
+      # docstring di `OidcSettings.token_endpoint`.
+      #
+      # `8000` e' pubblicata solo su `127.0.0.1` del VM dal 2026-09-19: da
+      # fuori non si raggiunge, e va bene, perche' chi chiama e' dentro.
+      STRATIGRAPH_SERVER_URL: "http://stratigraph-server:8000"
+      # `scavo` — «Scavo (in corso)», la stanza che `seed_rooms.py` semina gia'
+      # (`ROOMS`, riga 134). E' il default giusto perche' esiste ed e' cio' che
+      # significa: uno scavo in corso e' esattamente cio' che pyarchinit-mini
+      # consegna. In un nodo vero questa e' la stanza di quello scavo, e
+      # cambiarla e' una decisione di chi scava, non un default.
+      #
+      # Il giro di misura del capitolo 6 NON ha usato questa: ha usato una
+      # stanza sonda dedicata, passata con `STRATIGRAPH_ROOM_ID=` esplicito e
+      # archiviata alla fine, per non scrivere 112 operazioni dentro una
+      # fixture seminata.
+      STRATIGRAPH_ROOM_ID: "${STRATIGRAPH_ROOM_ID:-scavo}"
     ports:
       # 8080 e' occupata su questa macchina (Moodle, e un tunnel ssh), 8085 e'
       # Keycloak: l'host prende 8090, il container resta sulla sua 8080.
