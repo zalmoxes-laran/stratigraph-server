@@ -32,6 +32,7 @@ import hashlib
 import json
 import os
 import pathlib
+import ssl
 import sys
 import urllib.error
 import urllib.parse
@@ -79,12 +80,33 @@ def skip(label: str, why: str) -> None:
     SKIPS.append(f"{label}: {why}")
 
 
+#: The dev stack's Caddy uses an INTERNAL CA, and this helper had no TLS context
+#: until 2026-09-19 — because until then nothing it fetched was https on that CA.
+#:
+#: What changed: `EM_IIIF_PUBLIC` moved from Cantaloupe's direct port to the
+#: node's front door, so a manifest's image URL is now
+#: `https://em.localhost:8443/iiif/3/…`. `smoke_iiif.py` fetches exactly that URL
+#: to check that «the image the canvas paints really resolves», and it came back
+#: as 112 bytes of
+#:
+#:   [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get
+#:   local issuer certificate
+#:
+#: The CHECK was right and the HELPER could not reach the thing. `smoke_common.py`
+#: had already solved this, and its reasoning is borrowed rather than reinvented:
+#: «a smoke that refused to talk to it would be a smoke nobody runs; the
+#: certificate is the operator's own, on their own machine».
+_TLS = ssl.create_default_context()
+_TLS.check_hostname = False
+_TLS.verify_mode = ssl.CERT_NONE
+
+
 def request(url: str, *, method: str = "GET", data: bytes | None = None,
             headers: dict | None = None, timeout: float = 30.0):
     req = urllib.request.Request(url, data=data, method=method,
                                  headers=headers or {})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as answer:
+        with urllib.request.urlopen(req, timeout=timeout, context=_TLS) as answer:
             return answer.status, answer.read(), _headers(answer)
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read(), _headers(exc)

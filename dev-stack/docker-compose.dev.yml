@@ -47,8 +47,30 @@ services:
       MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
       MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
     ports:
-      - "${MINIO_API_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      # `127.0.0.1:` DAVANTI. Il nodo di campo, per progetto, FA DA HOTSPOT ai
+      # tablet del cantiere: «siamo tutti sulla stessa rete» non e' un
+      # incidente, e' la specifica. Una porta su `0.0.0.0` qui e' un servizio
+      # raggiungibile da ogni dispositivo attaccato.
+      #
+      # Loopback significa «solo da questa macchina», NON «da nessuno»: gli
+      # smoke, `token.sh`, `seed_rooms.py` e un browser sul Mac continuano a
+      # funzionare — misurato prima di legarle, cercando ogni porta in
+      # `dev-stack/`, negli `smoke_*.py`, in `.env.dev*` e nel `Caddyfile.dev`.
+      # Fra container si parla per nome di servizio sulla rete di compose, e
+      # Caddy fa lo stesso: nessuna di queste porte e' sul percorso di un'altra.
+      #
+      # L'UNICA che resta su `0.0.0.0` e' la 8443 di Caddy, e non e'
+      # negoziabile: e' la porta del nodo, ed e' quella da cui passera' la
+      # prova a due macchine sulla rete locale.
+      #
+      # 9001 e' la CONSOLE DI AMMINISTRAZIONE di MinIO, con le credenziali di
+      # root in `.env.dev`. Su loopback resta apribile dal browser di questo
+      # Mac — `EM_MINIO_CONSOLE_URL` la nomina come `http://localhost:9001`, e
+      # `localhost` in un browser e' sempre stata la macchina di chi guarda,
+      # quindi per un altro dispositivo non ha mai funzionato e non cambia
+      # niente.
+      - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -58,6 +80,24 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    # `unless-stopped` COME TUTTI GLI ALTRI, e fino al 2026-09-19 questa chiave
+    # mancava — non era una decisione scritta, era un'assenza. Misurato: il
+    # file ha `restart: unless-stopped` su ogni servizio di lunga durata
+    # (cantaloupe, caddy, stratigraph-server, chatbot, catalog, nodeodm,
+    # couchdb, pyarchinit-mini) e `restart: "no"` UNA volta sola, su
+    # `minio-init`, che e' un one-shot e li' e' giusto. Nessun commento, in
+    # nessun punto del file o di `fcn-up.sh`, spiegava l'assenza qui.
+    #
+    # La conseguenza l'ha mostrata un riavvio della VM di Colima: il nodo e'
+    # risalito con sei servizi su e sani e SENZA identita' e SENZA object store,
+    # che e' la condizione peggiore — sembra accesso e non lo e'.
+    #
+    # E il rischio di far ripartire Keycloak da solo e' misurato, non sperato:
+    # un RESTART riusa il filesystem del container, quindi il database interno
+    # di `start-dev` sopravvive, l'import non rigira e le chiavi del realm NON
+    # cambiano. E' un RECREATE che le rifa' — ed e' quello che serve dopo una
+    # modifica al realm (vedi `keycloak/README.md`).
+    restart: unless-stopped
 
   # A one-shot: create the bucket, then exit. em-server would create it itself
   # (its `_ensure_bucket`), but doing it here means the bucket exists before the
@@ -139,7 +179,30 @@ services:
       CANTALOUPE_CACHE_SERVER_INFO_ENABLED: "false"
       CANTALOUPE_LOG_APPLICATION_LEVEL: "info"
     ports:
-      - "${CANTALOUPE_PORT:-8182}:8182"
+      # `127.0.0.1:` DAVANTI. Il nodo di campo, per progetto, FA DA HOTSPOT ai
+      # tablet del cantiere: «siamo tutti sulla stessa rete» non e' un
+      # incidente, e' la specifica. Una porta su `0.0.0.0` qui e' un servizio
+      # raggiungibile da ogni dispositivo attaccato.
+      #
+      # Loopback significa «solo da questa macchina», NON «da nessuno»: gli
+      # smoke, `token.sh`, `seed_rooms.py` e un browser sul Mac continuano a
+      # funzionare — misurato prima di legarle, cercando ogni porta in
+      # `dev-stack/`, negli `smoke_*.py`, in `.env.dev*` e nel `Caddyfile.dev`.
+      # Fra container si parla per nome di servizio sulla rete di compose, e
+      # Caddy fa lo stesso: nessuna di queste porte e' sul percorso di un'altra.
+      #
+      # L'UNICA che resta su `0.0.0.0` e' la 8443 di Caddy, e non e'
+      # negoziabile: e' la porta del nodo, ed e' quella da cui passera' la
+      # prova a due macchine sulla rete locale.
+      #
+      # E QUESTA E' LA PIU' IMPORTANTE, perche' non era solo esposta: era una
+      # SCORCIATOIA. L'embargo sulle immagini e' applicato da Caddy con
+      # `forward_auth` verso `/v1/iiif-authz`, e Cantaloupe legge il bucket per
+      # sha256 senza sapere niente di ruoli. Una richiesta su :8182 non passa
+      # dal cancello. Chiudere la porta senza spostare `EM_IIIF_PUBLIC` avrebbe
+      # rotto le immagini; spostarlo senza chiudere la porta avrebbe lasciato
+      # la scorciatoia: le due cose vanno insieme, e sono in questo commit.
+      - "127.0.0.1:${CANTALOUPE_PORT:-8182}:8182"
     volumes:
       - cantaloupe_cache:/var/cache/cantaloupe
     restart: unless-stopped
@@ -173,6 +236,12 @@ services:
       - cantaloupe
       - minio
     ports:
+      # SU `0.0.0.0`, DELIBERATAMENTE, e l'unica del dev-stack che ci resta.
+      # E' la porta del nodo: tutto il resto e' stato legato al loopback il
+      # 2026-09-19 perche' il nodo di campo fa da hotspot al cantiere, e questa
+      # e' la via da cui passera' la prova a due macchine sulla rete locale.
+      # Se qualcuno «uniformasse» anche questa, il nodo diventerebbe
+      # irraggiungibile da qualunque altro dispositivo.
       - "${HTTPS_PORT:-8443}:443"
     volumes:
       - ./Caddyfile.dev:/etc/caddy/Caddyfile:ro
@@ -227,7 +296,27 @@ services:
       KC_HOSTNAME_STRICT: "false"
       KC_HOSTNAME_STRICT_BACKCHANNEL: "false"
     ports:
-      - "${KEYCLOAK_PORT:-8085}:8080"
+      # `127.0.0.1:` DAVANTI. Il nodo di campo, per progetto, FA DA HOTSPOT ai
+      # tablet del cantiere: «siamo tutti sulla stessa rete» non e' un
+      # incidente, e' la specifica. Una porta su `0.0.0.0` qui e' un servizio
+      # raggiungibile da ogni dispositivo attaccato.
+      #
+      # Loopback significa «solo da questa macchina», NON «da nessuno»: gli
+      # smoke, `token.sh`, `seed_rooms.py` e un browser sul Mac continuano a
+      # funzionare — misurato prima di legarle, cercando ogni porta in
+      # `dev-stack/`, negli `smoke_*.py`, in `.env.dev*` e nel `Caddyfile.dev`.
+      # Fra container si parla per nome di servizio sulla rete di compose, e
+      # Caddy fa lo stesso: nessuna di queste porte e' sul percorso di un'altra.
+      #
+      # L'UNICA che resta su `0.0.0.0` e' la 8443 di Caddy, e non e'
+      # negoziabile: e' la porta del nodo, ed e' quella da cui passera' la
+      # prova a due macchine sulla rete locale.
+      #
+      # `token.sh` usa DI PROPOSITO questa porta diretta (nessun certificato da
+      # fidare) e continua a funzionare: gira su questa macchina. Il browser
+      # passa da `/auth` su 8443, perche' `KC_HOSTNAME_URL` fissa un solo
+      # frontend url.
+      - "127.0.0.1:${KEYCLOAK_PORT:-8085}:8080"
     volumes:
       - ./keycloak/realm-em-dev.json:/opt/keycloak/data/import/realm-em-dev.json:ro
     healthcheck:
@@ -236,6 +325,24 @@ services:
       interval: 5s
       timeout: 5s
       retries: 40
+    # `unless-stopped` COME TUTTI GLI ALTRI, e fino al 2026-09-19 questa chiave
+    # mancava — non era una decisione scritta, era un'assenza. Misurato: il
+    # file ha `restart: unless-stopped` su ogni servizio di lunga durata
+    # (cantaloupe, caddy, stratigraph-server, chatbot, catalog, nodeodm,
+    # couchdb, pyarchinit-mini) e `restart: "no"` UNA volta sola, su
+    # `minio-init`, che e' un one-shot e li' e' giusto. Nessun commento, in
+    # nessun punto del file o di `fcn-up.sh`, spiegava l'assenza qui.
+    #
+    # La conseguenza l'ha mostrata un riavvio della VM di Colima: il nodo e'
+    # risalito con sei servizi su e sani e SENZA identita' e SENZA object store,
+    # che e' la condizione peggiore — sembra accesso e non lo e'.
+    #
+    # E il rischio di far ripartire Keycloak da solo e' misurato, non sperato:
+    # un RESTART riusa il filesystem del container, quindi il database interno
+    # di `start-dev` sopravvive, l'import non rigira e le chiavi del realm NON
+    # cambiano. E' un RECREATE che le rifa' — ed e' quello che serve dopo una
+    # modifica al realm (vedi `keycloak/README.md`).
+    restart: unless-stopped
 
   # =======================================================================
   # THE ROOM — built from em-server's own Dockerfile, unchanged
@@ -300,7 +407,19 @@ services:
       # PUBLIC: what goes into a manifest. Other people's viewers fetch it, so it
       # must name a host they can reach — `localhost` here, the proxy's name in
       # production.
-      EM_IIIF_PUBLIC: "http://localhost:${CANTALOUPE_PORT:-8182}/iiif/3"
+      # L'indirizzo che finisce DENTRO I MANIFEST che questo nodo consegna, e
+      # che i visualizzatori di altri vanno a chiedere. Fino al 2026-09-19 era
+      # `http://localhost:${CANTALOUPE_PORT}/iiif/3`, cioe' la porta diretta di
+      # Cantaloupe — la via che NON passa dal `forward_auth` dell'embargo.
+      # Misurato su un manifest vero (`/rooms/mostra/iiif/img-1/manifest`):
+      # conteneva `http://localhost:8182/iiif/3/<sha256>/full/!400,400/0/`.
+      #
+      # Cioe' il nodo diceva al mondo di usare la scorciatoia. Ora nomina la
+      # porta di casa, e l'embargo e' sul percorso di ogni pixel.
+      #
+      # E `localhost` era sbagliato due volte: in un manifest consegnato a un
+      # altro, `localhost` e' la macchina di chi legge.
+      EM_IIIF_PUBLIC: "https://em.localhost:${HTTPS_PORT:-8443}/iiif/3"
       # INTERNAL: how em-server itself dials the image server, to read info.json
       # and learn each image's real size. NOT the same address — inside this
       # network `localhost` is em-server. Using the public form here measures
@@ -391,7 +510,25 @@ services:
       # — so this is a convenience, never a requirement.
       PYTHONPATH: "/srv/s3dgraphy-src"
     ports:
-      - "${EM_SERVER_PORT:-8000}:8000"
+      # `127.0.0.1:` DAVANTI. Il nodo di campo, per progetto, FA DA HOTSPOT ai
+      # tablet del cantiere: «siamo tutti sulla stessa rete» non e' un
+      # incidente, e' la specifica. Una porta su `0.0.0.0` qui e' un servizio
+      # raggiungibile da ogni dispositivo attaccato.
+      #
+      # Loopback significa «solo da questa macchina», NON «da nessuno»: gli
+      # smoke, `token.sh`, `seed_rooms.py` e un browser sul Mac continuano a
+      # funzionare — misurato prima di legarle, cercando ogni porta in
+      # `dev-stack/`, negli `smoke_*.py`, in `.env.dev*` e nel `Caddyfile.dev`.
+      # Fra container si parla per nome di servizio sulla rete di compose, e
+      # Caddy fa lo stesso: nessuna di queste porte e' sul percorso di un'altra.
+      #
+      # L'UNICA che resta su `0.0.0.0` e' la 8443 di Caddy, e non e'
+      # negoziabile: e' la porta del nodo, ed e' quella da cui passera' la
+      # prova a due macchine sulla rete locale.
+      #
+      # `smoke_corpus_resident.py` ha `http://localhost:8000/v1` come default e
+      # `seed_rooms.py` la nomina nel suo docstring: entrambi girano qui.
+      - "127.0.0.1:${EM_SERVER_PORT:-8000}:8000"
     volumes:
       - em_data:/srv/em-data
       # The dev stack runs the CODE YOU ARE EDITING, on both sides of the line:
@@ -562,7 +699,13 @@ services:
     ports:
       # 3000 is a crowded port on a laptop; the CONTAINER's is what matters and
       # that one is fixed at 3000 by the image.
-      - "${NODEODM_PORT:-3010}:3000"
+      # `127.0.0.1:` come le altre. Non era nell'elenco del 2026-09-19 solo
+      # perche' il profilo `engine` e' spento e `docker port` non la mostrava —
+      # ma la regola era «tutto tranne 8443», e il giorno che qualcuno accende
+      # il motore fotogrammetrico questa porta si aprirebbe sull'hotspot del
+      # cantiere. NodeODM non ha autenticazione: chi la raggiunge accoda un
+      # lavoro di ricostruzione.
+      - "127.0.0.1:${NODEODM_PORT:-3010}:3000"
     volumes:
       # the engine's own working area: tasks, intermediate products, the archives
       # it serves back. A named volume, so a restart does not lose a run that is
@@ -652,7 +795,25 @@ services:
       # breaks.
       EM_CATALOG_READER: "/srv/em-reader-dist"
     ports:
-      - "${EM_CATALOG_PORT:-8010}:8000"
+      # `127.0.0.1:` DAVANTI. Il nodo di campo, per progetto, FA DA HOTSPOT ai
+      # tablet del cantiere: «siamo tutti sulla stessa rete» non e' un
+      # incidente, e' la specifica. Una porta su `0.0.0.0` qui e' un servizio
+      # raggiungibile da ogni dispositivo attaccato.
+      #
+      # Loopback significa «solo da questa macchina», NON «da nessuno»: gli
+      # smoke, `token.sh`, `seed_rooms.py` e un browser sul Mac continuano a
+      # funzionare — misurato prima di legarle, cercando ogni porta in
+      # `dev-stack/`, negli `smoke_*.py`, in `.env.dev*` e nel `Caddyfile.dev`.
+      # Fra container si parla per nome di servizio sulla rete di compose, e
+      # Caddy fa lo stesso: nessuna di queste porte e' sul percorso di un'altra.
+      #
+      # L'UNICA che resta su `0.0.0.0` e' la 8443 di Caddy, e non e'
+      # negoziabile: e' la porta del nodo, ed e' quella da cui passera' la
+      # prova a due macchine sulla rete locale.
+      #
+      # Dietro Caddy c'e' `/catalog/`; questa porta serviva al debug e nessuno
+      # script la nomina — misurato.
+      - "127.0.0.1:${EM_CATALOG_PORT:-8010}:8000"
     volumes:
       - em_catalog_data:/srv/em-catalog-data
       # the code you are editing, on both sides of the line — same reason as
@@ -805,7 +966,12 @@ services:
       COUCHDB_USER: "${COUCHDB_USER:-admin}"
       COUCHDB_PASSWORD: "${COUCHDB_PASSWORD:-admin}"
     ports:
-      - "${COUCHDB_PORT:-5984}:5984"
+      # `127.0.0.1:` come le altre, e per la stessa ragione di `nodeodm`:
+      # fuori dall'elenco solo perche' il profilo `couchdb` e' spento. E' un
+      # database con le credenziali in `.env.dev`; e' anche una delle due voci
+      # segnalate nell'end-of di ieri sul template di produzione, dove invece
+      # e' pubblicata per davvero.
+      - "127.0.0.1:${COUCHDB_PORT:-5984}:5984"
     volumes:
       - couchdb_data:/opt/couchdb/data
     healthcheck:
