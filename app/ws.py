@@ -38,6 +38,7 @@ from . import access
 from .access import (Acl, Groups, Role, acl_store_from_env,
                      group_store_from_env)
 from .auth import authenticator
+from . import keeping
 from .rooms import RoomRegistry, now_iso
 from .store import store_from_env
 from .wire import WIRE, WireError, envelope, read
@@ -76,6 +77,77 @@ HOST_TOOL = "StratiGraph Server (relay)"
 #: `request_snapshot` is a read — asking for the document again is what a
 #: viewer does when it loses its place.
 _WRITING_VERBS = frozenset({"op", "request_save", "command"})
+
+
+# ── LA RETE, E CHI LA STENDE ─────────────────────────────────────────────────
+#
+# `room.snapshot` si chiama da questo modulo e da nessun altro
+# (`tests/test_write_paths.py`), quindi l'ATTO sta qui e la POLITICA sta in
+# `app/keeping.py`. Il temporizzatore chiede; questa funzione sa dove si scrive.
+
+
+async def _keep(room, why: str, *, asked: bool = False):
+    """Scrivere la stanza, sotto il suo lock, e dirlo a chi c'è dentro.
+
+    **Il lock non è una precauzione generica**: `apply_from_connector` tiene
+    quello stesso lock per un lotto intero, perché «uno snapshot preso fra due
+    operazioni di un delta sarebbe un grafo che nessuno ha scritto». Prendendolo
+    anche qui, il salvataggio differito non può cadere in mezzo a un lotto: al
+    massimo aspetta che finisca.
+
+    `asked=True` quando è un `request_save`, e cambia due cose — **trovato
+    rompendo `test_6c`, che è il motivo per cui il parametro esiste invece di
+    una condizione sola**:
+
+    * si scrive **anche se non c'è niente di nuovo**. Chi chiede vuole il file
+      sul disco adesso, non un giudizio del server su quanto sia utile;
+    * si risponde **sempre**. Il differito che salta un giro può tacere, perché
+      nessuno lo stava aspettando; un client che ha chiesto sta aspettando, e il
+      silenzio è la peggiore delle risposte possibili.
+    """
+    async with room.lock:
+        if not room.unsaved and not asked:
+            # Qualcun altro ha salvato mentre questo compito aspettava il lock.
+            # Non è una corsa persa: è la corsa vinta da chi doveva vincerla.
+            return None
+        # ── DURARE E COMPATTARE SONO DUE COSE, E LA RETE NE FA UNA SOLA ──────
+        #
+        # `gc=False` quando non l'ha chiesto nessuno, e la ragione è misurata.
+        # `gc_watermark()` è il minimo dei watermark dei connessi, e quei
+        # watermark **li muove `_fanout` quando SPEDISCE**, non l'`ack` quando
+        # il client conferma (ws.py, in fondo: `member.watermark = body["ts"]`
+        # dentro il ciclo di invio). Quindi il watermark misura la CONSEGNA,
+        # non l'applicazione.
+        #
+        # Finché si compattava solo quando un client lo chiedeva, era una sua
+        # decisione. Una rete che scatta ogni 64 operazioni o ogni due secondi
+        # renderebbe quella compattazione continua, e la finestra in cui il
+        # bookkeeping di un client lento viene buttato mentre lui non l'ha
+        # ancora applicato si allargherebbe di parecchio — **senza che nessuno
+        # l'abbia chiesto**, che è esattamente il difetto che questa notte sta
+        # riparando dall'altro lato.
+        #
+        # Quindi la rete tiene, e basta. Compattare resta un atto di chi sa
+        # cosa sta facendo: `request_save`.
+        info = room.snapshot(SNAPSHOT_STORE, gc=asked)
+    info["why"] = why
+    await _fanout(room, envelope("snapshot_written", info, source="em-server"))
+    return info
+
+
+#: Uno per processo, come le stanze.
+KEEPER = keeping.Keeper(_keep)
+
+
+def _keeping_info(room) -> dict:
+    """Cosa il relay dice di sé a chi entra: se tiene lui la stanza, e con quali
+    soglie. **I numeri viaggiano** perché un client che li conosce può decidere
+    con cognizione — e perché una soglia che nessuno può leggere è una politica
+    segreta."""
+    return {"host_keeps": KEEPER.covers(room),
+            "after_ops": KEEPER.after_ops,
+            "after_quiet_seconds": KEEPER.after_quiet,
+            **room.keeping()}
 
 ws_router = APIRouter(prefix="/v1")
 
@@ -238,6 +310,12 @@ async def room_socket(websocket: WebSocket, room_id: str,
                             # Announcing it is the difference between a gap that
                             # is handled and one that is discovered.
                             "gc_watermark": room.compacted_upto,
+                            # COSA FARÀ IL SERVER CON QUESTA STANZA, detto alla
+                            # porta. Un client che sa di essere coperto non ha
+                            # bisogno di inventarsi un `request_save` a
+                            # intervalli, e uno che vuole occuparsene da sé sa
+                            # cosa deve dichiarare per farlo (`client_info`).
+                            "keeping": _keeping_info(room),
                             "accepts_commands": False}, source="em-server"))
     await _send(websocket, envelope("snapshot", {
                             "doc": room.document,
@@ -282,9 +360,20 @@ async def room_socket(websocket: WebSocket, room_id: str,
     except WebSocketDisconnect:
         pass
     finally:
+        could_write = bool(member.role and member.role.can_write)
         room.leave(connection_id)
         # presence is ephemeral: leaving removes it, and nothing is written down
         await _broadcast_presence(room)
+        # …MA IL DOCUMENTO NON È EFFIMERO. Se se n'è andato l'ultimo che sapeva
+        # scrivere, questo è l'istante in cui nessuno chiederà più niente — ed è
+        # esattamente la forma in cui è sparita la scheda del 25 settembre: il
+        # client che avrebbe dovuto chiedere `request_save` se n'era già andato.
+        if could_write and not any(
+                m.role is not None and getattr(m.role, "can_write", False)
+                for m in room.members.values()):
+            await KEEPER.emptied(room)
+        elif not room.members:
+            KEEPER.forget(room_id)
 
 
 async def _handle(room, member, websocket: WebSocket, message: Dict[str, Any],
@@ -339,6 +428,12 @@ async def _handle(room, member, websocket: WebSocket, message: Dict[str, Any],
             "op_result",
             {"applied": True, "reason": result.get("reason", ""), "op": op},
             source="em-server"))
+        # LA RETE, DOPO AVER RISPOSTO. Ultima riga e fuori dal lock: chi ha
+        # scritto ha già il suo `op_result` e gli altri hanno già l'operazione,
+        # quindi un salvataggio che dura 26 ms sulla stanza più grande non è 26
+        # ms di attesa per nessuno. E se scatta, `_keep` riprende il lock da
+        # solo.
+        await KEEPER.kept(room)
         return
 
     if kind == "select":
@@ -366,10 +461,37 @@ async def _handle(room, member, websocket: WebSocket, message: Dict[str, Any],
         return
 
     if kind == "request_save":
-        # the client asks the host to persist: for a relay that IS the snapshot
-        async with room.lock:
-            info = room.snapshot(SNAPSHOT_STORE)
-        await _fanout(room, envelope("snapshot_written", info, source="em-server"))
+        # Il client chiede: per un relay, quello È lo snapshot. Passa da `_keep`
+        # come tutto il resto, così `why` esiste sempre e un registro distingue
+        # «l'ha chiesto qualcuno» da «è scattata la rete».
+        #
+        # E RESTA, adesso che c'è il differito, con il senso giusto: non è più
+        # il rattoppo che sostituisce la rete, è l'INTENTO — una scheda è un
+        # atto compiuto, e un atto compiuto si tiene subito invece che fra due
+        # secondi.
+        await _keep(room, keeping.BY_REQUEST, asked=True)
+        return
+
+    if kind == "client_info":
+        # §2.3 · IL CLIENT DICHIARA, E CHI NON DICHIARA RICEVE LA RETE.
+        #
+        # Non c'è niente da rifiutare qui: l'assenza di questa frame è
+        # l'impostazione sicura, quindi un client vecchio — che non sa nemmeno
+        # che esista la domanda — non si rompe e non riceve un errore. Riceve
+        # il differito, che è ciò che gli serviva senza saperlo.
+        #
+        # È una dichiarazione sulla DIVISIONE DEL LAVORO. Non dice chi è
+        # seduto: quello si vede da una cosa sola, che la sessione è tenuta
+        # aperta, e lo racconta la presenza.
+        member.saves_itself = bool(payload.get("saves_itself"))
+        await _send(websocket, envelope("host_info", {
+            "tool": HOST_TOOL, "file": room.room_id, "room": room.room_id,
+            "connection_id": member.connection_id,
+            "keeping": _keeping_info(room)}, source="em-server"))
+        if not member.saves_itself:
+            # Un client che si è appena tolto la responsabilità può avere
+            # lasciato del lavoro non tenuto: la rete riparte da adesso.
+            await KEEPER.kept(room)
         return
 
     if kind == "ack":

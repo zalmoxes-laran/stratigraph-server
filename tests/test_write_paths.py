@@ -46,10 +46,30 @@ the one that goes stale in the direction of passing.
 
 The socket does **not** persist every operation, and that is deliberate rather
 than a hole: a relay that wrote the room on every keystroke would rewrite a study
-while somebody is typing in it. Its route to durability is `request_save`, which
-the client asks for and EMStudio does ask for. What the connector door needed is
-different because there is no client to ask: the job finishes and nobody is left
-to say «keep it».
+while somebody is typing in it.
+
+## AND WHAT THIS FILE USED TO SAY, WHICH WAS THE HOLE (corrected 2026-09-26)
+
+It used to continue: *«Its route to durability is `request_save`, which the
+client asks for and EMStudio does ask for.»* That sentence was a **presumption
+about the behaviour of whoever is on the other side, never verified** — and it
+cost a night's work. StratiField's `RoomWriter` never asked; it opened a
+connection per delivery and closed it, so by the time anybody could have asked
+there was nobody there. Measured on 25 September: 217 declared rooms, 14
+documents on disk, and a 26-field record dictated on a plane that had never
+existed outside one process's memory.
+
+The repair is `app/keeping.py`: the room is kept after 64 operations, after 2
+seconds of quiet, or when the last writer leaves — whichever comes first — and a
+client may take that responsibility back by declaring it (`client_info`). Nothing
+about the location rule below changed: `room.snapshot` is still called from
+`ws.py` and nowhere else, and the deferred save is a TIMER that asks that one
+place to do its job.
+
+**The rule this leaves behind:** if a line declares that something depends on
+another party's behaviour, the next line is the check that the behaviour
+happened. `tests/test_la_rete_che_tiene.py` is that check, and it includes the
+case that trips it — the net switched off, and the loss measured again.
 
 So the assertions below are about REACHING the contract, not about saving on
 every op. A future transport that writes and neither keeps nor announces is what

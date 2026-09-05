@@ -74,6 +74,19 @@ class Member:
     #: across members is what makes compaction safe (see `gc_watermark`).
     watermark: Optional[str] = None
     joined_at: str = field(default_factory=now_iso)
+    #: §2.3 · IL CLIENT DICHIARA se dei salvataggi si occupa lui.
+    #:
+    #: `False` è l'assenza di dichiarazione, ed è l'impostazione SICURA: un
+    #: client vecchio — che non sa nemmeno che esista la domanda — riceve la
+    #: rete d'ufficio invece di un errore. EMStudio chiede `request_save` e
+    #: oggi non dichiara niente: prende la rete in più, che è la direzione
+    #: giusta in cui sbagliare.
+    #:
+    #: **È UNA DICHIARAZIONE SULLA DIVISIONE DEL LAVORO, NON UNA POSTURA.**
+    #: Dice chi scrive il file, non chi è seduto in questa stanza. Sedersi si
+    #: vede da una cosa sola — che la sessione è tenuta aperta — e la presenza
+    #: la racconta `as_presence`, non questo campo.
+    saves_itself: bool = False
 
     def as_presence(self) -> Dict[str, Any]:
         # The role travels with presence too: "who is here" and "who may write"
@@ -102,6 +115,13 @@ class Room:
         self.lock = asyncio.Lock()
         self.snapshot_at: Optional[str] = None
         self.last_op_at: Optional[str] = None
+        #: QUANTE OPERAZIONI SONO STATE APPLICATE DOPO L'ULTIMO SALVATAGGIO.
+        #:
+        #: Non «quando ho salvato»: quella è una data, questa è un rischio. Una
+        #: stanza che ha applicato centoquaranta operazioni e non è mai stata
+        #: salvata aveva esattamente lo stesso aspetto di una salvata a ogni
+        #: giro, e il 25 settembre una scheda di 26 campi è sparita così.
+        self.unsaved: int = 0
         #: P4.3 · how far this room has been COMPACTED. Announced to every client
         #: (`host_info`, `snapshot`) because it is the one number a client needs
         #: to know whether its own history is still reconcilable here: below this
@@ -197,6 +217,11 @@ class Room:
     # ── the op-log ───────────────────────────────────────────────────────────
 
     def record(self, op: Dict[str, Any]) -> None:
+        # UN SOLO POSTO CONTA, ed è questo perché è l'unico che tutte e due le
+        # vie di scrittura attraversano: il socket (`ws.py`) e la porta dei
+        # connettori. Contare nei due chiamanti sarebbe stato due contatori che
+        # si allontanano il giorno che ne arriva un terzo.
+        self.unsaved += 1
         self.oplog.append(op)
         if len(self.oplog) > OPLOG_LIMIT:
             del self.oplog[: len(self.oplog) - OPLOG_LIMIT]
@@ -247,6 +272,30 @@ class Room:
 
     # ── snapshot + GC ────────────────────────────────────────────────────────
 
+    def keeping(self) -> Dict[str, Any]:
+        """Se questa stanza sta accumulando lavoro non tenuto, e quanto.
+
+        Il numero che conta è `unsaved`, non `snapshot_at`: una data dice
+        quand'è successa una cosa, un conteggio dice cosa c'è da perdere.
+
+        `writers_present` distingue i due modi in cui una stanza può avere
+        lavoro non salvato: qualcuno la sta scrivendo adesso (normale, e il
+        differito la coprirà), oppure **non c'è più nessuno** e quel lavoro sta
+        lì da solo — che è la forma in cui è sparita la scheda del 25 settembre.
+        """
+        writers = [m for m in self.members.values()
+                   if m.role is not None and getattr(m.role, "can_write", False)]
+        return {"unsaved_ops": self.unsaved,
+                "snapshot_at": self.snapshot_at,
+                "last_op_at": self.last_op_at,
+                "writers_present": len(writers),
+                # I client che si sono presi la responsabilità. Se sono TUTTI i
+                # presenti che sanno scrivere, la rete si tira via; se ne arriva
+                # uno che non dichiara, torna.
+                "writers_saving_themselves": sum(1 for m in writers
+                                                 if m.saves_itself),
+                "at_risk": bool(self.unsaved) and not writers}
+
     def gc_watermark(self) -> Optional[str]:
         """The instant every connected member has been brought past.
 
@@ -281,8 +330,21 @@ class Room:
             self.compacted_upto = before
         store.put(self.room_id, self.document)
         self.snapshot_at = now_iso()
-        if before:
+        # …e il debito è pagato. Azzerato DOPO `store.put`: se la scrittura
+        # solleva, il contatore deve continuare a dire la verità.
+        self.unsaved = 0
+        if gc and before:
             # the log up to the watermark is now inside the snapshot
+            #
+            # `gc and`, dal 2026-09-26, e non solo `before`: TAGLIARE SENZA
+            # COMPATTARE È PERDERE PER NIENTE. Il registro è il buffer di
+            # riproduzione per chi rientra; troncarlo fino a un punto a cui il
+            # documento non si è ancora assestato butta la storia senza
+            # incassare lo spazio. Le due cose sono un atto solo, e adesso lo
+            # sono anche nel codice.
+            #
+            # Serve al salvataggio differito, che passa `gc=False`: quello è
+            # DURATA, non compattazione (vedi `app/keeping.py`).
             self.oplog = [op for op in self.oplog if str(op.get("ts") or "") > before]
         return {"at": self.snapshot_at, "compaction": report,
                 "gc_watermark": self.compacted_upto,

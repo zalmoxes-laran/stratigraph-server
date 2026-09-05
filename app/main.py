@@ -327,6 +327,13 @@ class Health(BaseModel):
     #:
     #: `POST /v1/health/reach` knocks again.
     reachability: Dict[str, Any] = Field(default_factory=dict)
+    #: LE STANZE CHE STANNO ACCUMULANDO LAVORO NON TENUTO. Un fatto sulla salute
+    #: del nodo, non una curiosità: il 25 settembre questo numero sarebbe stato
+    #: alto per ore e nessuno aveva un posto dove leggerlo.
+    #:
+    #: Contato sulle stanze VIVE in questo processo — le uniche che possono
+    #: avere lavoro in memoria — e costa un giro su una lista di interi.
+    keeping: Dict[str, Any] = Field(default_factory=dict)
     #: P4.2 · WHERE THE DURABLE TRUTH IS. The relay holds a working copy in RAM;
     #: this says what is behind it — and an operator who reads "memory" knows
     #: their snapshots die with the process, instead of finding out.
@@ -615,7 +622,37 @@ def health() -> Health:
         # LETTO, non bussato: la bussata è all'avvio e su richiesta. Vedi
         # `REACHABILITY` e `app/reach.py`.
         reachability=REACHABILITY.as_dict(),
+        keeping=_keeping_health(),
     )
+
+
+def _keeping_health() -> Dict[str, Any]:
+    """Quante stanze vive hanno lavoro non tenuto, e la peggiore.
+
+    **`at_risk` non è «unsaved > 0»**, ed è la distinzione che rende il numero
+    leggibile: una stanza con qualcuno dentro che sta scrivendo ha sempre
+    qualcosa di non tenuto per qualche secondo, ed è il funzionamento normale.
+    Una stanza con lavoro non tenuto e **nessuno dentro** è lavoro lasciato per
+    terra — la forma esatta in cui è sparita la scheda del 25 settembre.
+
+    Contare solo la prima farebbe un allarme che suona sempre; contare solo la
+    seconda nasconderebbe il picco di una raffica. Ci sono tutte e due.
+    """
+    live = [_ws.ROOMS.peek(room_id) for room_id in _ws.ROOMS.rooms()]
+    reports = [(room.room_id, room.keeping()) for room in live if room]
+    unsaved = [(rid, rep) for rid, rep in reports if rep["unsaved_ops"]]
+    abandoned = [(rid, rep) for rid, rep in unsaved if rep["at_risk"]]
+    worst = max(unsaved, key=lambda pair: pair[1]["unsaved_ops"],
+                default=None)
+    return {
+        "policy": {"after_ops": _ws.KEEPER.after_ops,
+                   "after_quiet_seconds": _ws.KEEPER.after_quiet},
+        "rooms_live": len(reports),
+        "rooms_with_unsaved_ops": len(unsaved),
+        # …e queste sono quelle su cui un operatore deve guardare due volte
+        "rooms_at_risk": [rid for rid, _ in abandoned],
+        "worst": ({"room": worst[0], **worst[1]} if worst else None),
+    }
 
 
 # ── BUSSARE A CIÒ CHE SI DICHIARA ────────────────────────────────────────────
@@ -2650,6 +2687,10 @@ class RoomWaiting(BaseModel):
     #: e un debito che ringiovanisce è un debito che si rimanda.
     oldest_from_field_clock: bool = False
     by_model: Dict[str, int] = Field(default_factory=dict)
+    #: IL DEBITO DI SPECIE PEGGIORE. Un campo non validato è un'affermazione di
+    #: cui nessuno risponde ancora; un documento non salvato è un'affermazione
+    #: che può smettere di esistere. Sta qui perché questo è il posto dei debiti.
+    unsaved: Dict[str, Any] = Field(default_factory=dict)
 
 
 class RoomStatistics(BaseModel):
@@ -2723,10 +2764,16 @@ async def room_waiting(room_id: str, request: Request,
     Non c'è una chiave `refused`, e la ragione sta nella docstring di
     `roomview.waiting_for`: i rifiuti non sono registrati da nessuna parte, e
     una lista sempre vuota si leggerebbe come «nessun rifiuto».
+
+    C'è invece `unsaved`, dal 26 settembre: quante operazioni sono state
+    applicate dopo l'ultimo salvataggio. È il debito peggiore che una stanza
+    possa avere, perché gli altri aspettano una firma e questo aspetta di non
+    sparire.
     """
     room, who = await _reader(room_id, request)
-    return RoomWaiting(**roomview.waiting_for(
-        room.document, subject=(who if mine else None)))
+    return RoomWaiting(unsaved=roomview.unsaved_work(room),
+                       **roomview.waiting_for(
+                           room.document, subject=(who if mine else None)))
 
 
 @v1.get("/rooms/{room_id}/statistics", response_model=RoomStatistics,

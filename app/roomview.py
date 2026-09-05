@@ -328,6 +328,29 @@ def waiting_for(document: Dict[str, Any], *,
             "by_model": dict(models.most_common())}
 
 
+def unsaved_work(room: Any) -> Dict[str, Any]:
+    """Il debito di specie peggiore: lavoro applicato e non ancora tenuto.
+
+    Sta in «cosa aspetta me» accanto ai campi non validati, e non è un accostamento
+    disinvolto: un campo composto da un modello e non confermato è un'affermazione
+    di cui nessuno risponde ancora, un documento non salvato è un'affermazione che
+    **può smettere di esistere**. La seconda è più urgente della prima.
+
+    Il numero è `unsaved_ops`, non `snapshot_at`. Una data dice quando è successa
+    una cosa; un conteggio dice cosa c'è da perdere — e il 25 settembre la
+    differenza è stata ventisei campi.
+
+    `at_risk` è vero solo quando non c'è più nessuno che sa scrivere nella stanza:
+    con qualcuno dentro il lavoro non tenuto è normale e la rete lo coprirà fra
+    poco, senza nessuno è lavoro lasciato per terra.
+    """
+    keeping = room.keeping()
+    return {"unsaved_ops": keeping["unsaved_ops"],
+            "saved_at": keeping["snapshot_at"],
+            "writers_present": keeping["writers_present"],
+            "at_risk": keeping["at_risk"]}
+
+
 # ── §2.4 · com'è fatto quello che abbiamo ───────────────────────────────────
 
 def statistics(document: Dict[str, Any]) -> Dict[str, Any]:
