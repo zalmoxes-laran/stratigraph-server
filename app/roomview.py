@@ -66,6 +66,8 @@ from __future__ import annotations
 import collections
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from . import presence
+
 #: Dove StratiField scrive l'autorialità di un campo, dentro `data`.
 AUTHORSHIP_PREFIX = "authorship."
 #: I due soli autori che quella convenzione ammette.
@@ -175,6 +177,19 @@ def who_is_here(room: Any, *, recent_after: Optional[str] = None) -> Dict[str, A
     `recent_after` è un istante ISO: se manca, `wrote_recently` è **vuota** e
     lo dice. Un default («le ultime 24 ore») sarebbe una politica inventata
     qui, e la finestra la sceglie chi guarda.
+
+    ════════════════════════════════════════════════════════════════════════
+    ## E DA STANOTTE `seated` NON È PIÙ UN SÌ O UN NO
+
+    Ogni seduto porta il suo `state`: `in`, oppure `quiet` con `quiet_since` e
+    `silent_for` («HH:MM»). Non è cosmesi. Chi scava accanto a Elisa deve
+    poter decidere **da solo** se aspettarla, e «silenziosa da tre minuti» è un
+    fatto su cui si agisce mentre «c'è» non lo è.
+
+    E `left` è il terzo stato: chi era seduto e non c'è più, con l'ora e con
+    `was_quiet` — perché «ha chiuso» e «la rete ha ceduto» sono due uscite
+    diverse. Senza questa lista una persona che se ne va si legge come una che
+    non è mai passata di qui, che è la seconda delle due bugie.
     """
     seated = list(room.presence())
     seated_authors = {m.get("author") for m in seated if m.get("author")}
@@ -197,14 +212,32 @@ def who_is_here(room: Any, *, recent_after: Optional[str] = None) -> Dict[str, A
         key=lambda e: e["last_at"], reverse=True)
     wrote_authors = {e["author"] for e in wrote}
 
+    left = list(room.departures())
+    quiet = [m for m in seated if m.get("state") == "quiet"]
+
     return {
         "seated": [dict(m, wrote_recently=(m.get("author") in wrote_authors))
                    for m in seated],
         "wrote_recently": wrote,
+        # IL TERZO STATO, e in una lista sua. Fonderlo con `seated` rifarebbe
+        # esattamente l'errore che questa funzione evita fra seduti e
+        # scriventi: una lista che mente in tutte e due le direzioni.
+        "left": left,
         # LA FINESTRA È DEL CHIAMANTE, e la risposta la ripete: un conteggio
         # senza il suo «da quando» è un numero che sembra assoluto.
         "recent_after": recent_after,
-        "counts": {"seated": len(seated), "wrote_recently": len(wrote)},
+        # E LE SOGLIE, perché `quiet` è un giudizio e un giudizio senza il suo
+        # criterio non si può contestare.
+        "beat": {"every_seconds": presence.BEAT_SECONDS,
+                 "quiet_after_seconds": presence.QUIET_AFTER},
+        "counts": {"seated": len(seated),
+                   # `in` + `quiet` = `seated`. Il conteggio vecchio non cambia
+                   # significato — chi lo leggeva continua a leggere «quanti
+                   # socket aperti» — e i due nuovi lo spiegano.
+                   "in": len(seated) - len(quiet),
+                   "quiet": len(quiet),
+                   "left": len(left),
+                   "wrote_recently": len(wrote)},
     }
 
 

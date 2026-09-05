@@ -131,7 +131,14 @@ def test_seduto_e_ha_scritto_di_recente_sono_due_liste(relay, whoever, client):
     # l'unione senza che sia il server a decidere che sono la stessa cosa
     assert answer["seated"][0]["wrote_recently"] is False
     assert answer["wrote_recently"][0]["seated"] is False
-    assert answer["counts"] == {"seated": 1, "wrote_recently": 1}
+    # I conteggi, per intero e non per campione: se ne comparisse uno nuovo
+    # senza che nessuno l'abbia deciso, questa riga lo dice.
+    #
+    # `seated` NON ha cambiato significato quando sono arrivati i tre stati —
+    # continua a valere «quanti socket aperti» — e `in`/`quiet` lo spiegano:
+    # sommano a `seated`, e Carla è appena entrata quindi è `in`.
+    assert answer["counts"] == {"seated": 1, "in": 1, "quiet": 0,
+                                "left": 0, "wrote_recently": 1}
 
 
 def test_senza_una_finestra_non_si_inventa_un_recente(relay, whoever, client):

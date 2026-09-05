@@ -143,9 +143,15 @@ class Keeper:
         lavoro di chi non salva viaggia dentro il salvataggio di chi salva — ma
         solo se quello salva, e solo quando lo fa. Un client che entra senza
         dichiarare niente è, per quanto ne sa il relay, il `RoomWriter` di ieri.
+
+        **E UN SILENZIOSO NON È UN PRESENTE.** `writers_present()` toglie chi
+        tace da più di `QUIET_AFTER`, e la ragione sta nel suo docstring: da un
+        client congelato non arriverà nessun `request_save`, per quanto lo abbia
+        dichiarato. La dichiarazione vale finché c'è qualcuno a mantenerla — la
+        stessa frase che `emptied()` dice qui sotto per chi se n'è andato,
+        applicata a chi è rimasto senza esserci.
         """
-        writers = [m for m in room.members.values()
-                   if m.role is not None and getattr(m.role, "can_write", False)]
+        writers = room.writers_present()
         if not writers:
             # Nessuno dentro: non c'è nessuno da cui aspettarsi un
             # `request_save`, quindi la rete c'è per definizione.

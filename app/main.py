@@ -2712,9 +2712,20 @@ async def get_room(room_id: str, request: Request) -> RoomOut:
 
 
 class RoomWho(BaseModel):
+    #: Ogni voce porta il suo `state` — `in` oppure `quiet` con `quiet_since` e
+    #: `silent_for`. Un roster che sa dire solo sì o no dice «c'è» di chi è in
+    #: galleria da tre minuti, e quella è una bugia su cui qualcuno decide se
+    #: aspettare.
     seated: List[Dict[str, Any]] = Field(default_factory=list)
     wrote_recently: List[Dict[str, Any]] = Field(default_factory=list)
+    #: IL TERZO STATO: chi era seduto e non c'è più, con l'ora e con `was_quiet`
+    #: — «ha chiuso» e «la rete ha ceduto» sono due uscite diverse. In memoria e
+    #: limitata: si perde al riavvio, come la presenza che spiega.
+    left: List[Dict[str, Any]] = Field(default_factory=list)
     recent_after: Optional[str] = None
+    #: Le soglie con cui `quiet` è stato deciso. Un giudizio senza il suo
+    #: criterio non si può contestare.
+    beat: Dict[str, Any] = Field(default_factory=dict)
     counts: Dict[str, int] = Field(default_factory=dict)
 
 

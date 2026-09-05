@@ -40,6 +40,7 @@ from .access import (Acl, Groups, Role, acl_store_from_env,
                      group_store_from_env)
 from .auth import authenticator
 from . import keeping
+from . import presence
 from .rooms import RoomRegistry, now_iso
 from .store import store_from_env
 from .wire import WIRE, WireError, envelope, read
@@ -326,6 +327,75 @@ def authorize(room, author: Optional[str], *, dev_mode: bool = False
                           groups_of=groups().expander())
 
 
+def _role_now(room, member) -> Optional[Role]:
+    """Il ruolo che questa persona ha in questa stanza **adesso**.
+
+    ════════════════════════════════════════════════════════════════════════════
+    ## PERCHÉ NON È `authorize()`
+
+    Sono due domande diverse e mescolarle sarebbe caro. `authorize()` è la porta:
+    fa anche il **bootstrap del proprietario**, che legge l'header dello studio
+    (`owner_from_document` cammina il documento) e all'occorrenza **scrive**
+    l'ACL. Sono cose che vanno fatte una volta, quando qualcuno entra.
+
+    Rifarle a ogni operazione vorrebbe dire attraversare un documento da 1845
+    nodi per ogni campo di una scheda, e — peggio — lasciare un percorso di
+    scrittura sull'ACL dentro il cammino caldo. Questa funzione fa **solo** la
+    risoluzione: leggi l'ACL, espandi i gruppi, torna il ruolo.
+
+    ## E IL MODO SVILUPPO NON RILEGGE NIENTE
+
+    Senza OIDC non ci sono identità: `authorize()` risponde `owner` per
+    costruzione, e rileggere un ACL per risolvere un'identità che non esiste
+    sarebbe teatro. La risposta è la stessa della porta, e costa zero.
+    """
+    if member.dev_mode:
+        return Role.OWNER
+    acl = load_acl(room.room_id)
+    return access.role_of(acl, member.author, room.visibility,
+                          embargo=room.embargo, groups_of=groups().expander())
+
+
+async def _access_changed(websocket: WebSocket, room, member,
+                          role: Optional[Role]) -> None:
+    """Il ruolo di questa persona è cambiato mentre era dentro: dirglielo.
+
+    **Un frame apposta, e non solo il rifiuto che segue.** Un rifiuto risponde a
+    una cosa che hai provato a fare; questo dice che è cambiato il mondo. È la
+    forma di `SessionRefused` in StratiField, dall'altro lato: là il difetto era
+    che un rifiuto non si distingueva da una rete che manca, e qui sarebbe lo
+    stesso difetto se l'unico segnale fosse un'operazione che non passa.
+
+    Un client che riceve questo aggiorna la propria interfaccia **prima** di
+    provare a scrivere — e chi è stato revocato smette di vedere un'interfaccia
+    di scrittura che non funziona, che è il modo in cui un permesso tolto si
+    legge come un'applicazione rotta.
+    """
+    was = getattr(member.role, "value", None)
+    member.role = role
+    await _send(websocket, envelope("access_changed", {
+        "room": room.room_id,
+        "author": member.author,
+        "was": was,
+        "role": getattr(role, "value", None),
+        "can_write": bool(role and role.can_write),
+        # LA PAROLA CHE DISTINGUE LE DUE COSE. «Revocato» e «declassato» si
+        # gestiscono diversamente: il primo chiude la stanza, il secondo la
+        # lascia aperta in lettura.
+        "change": ("revoked" if role is None
+                   else "granted" if was is None
+                   else "changed"),
+        # E COSA RESTA APERTO, detto invece che lasciato credere chiuso: chi è
+        # dentro resta connesso e continua a leggere finché non se ne va.
+        "still_connected": True,
+    }, source="em-server"))
+    # …e il roster lo dice a tutti: «chi c'è» e «chi può scrivere» sono una
+    # domanda sola per chi guarda la lista.
+    await _broadcast_presence(room)
+    log.info("room %s: %s went from %s to %s mid-session",
+             room.room_id, member.author, was, getattr(role, "value", None))
+
+
 async def _deny(websocket: WebSocket, member, verb: str, reason: str) -> None:
     """Say no, out loud. A dropped message is indistinguishable from a network
     fault, and the person on the other end deserves the difference."""
@@ -396,7 +466,7 @@ async def room_socket(websocket: WebSocket, room_id: str,
     connection_id = uuid.uuid4().hex[:12]
     member = room.join(connection_id, websocket, author,
                        display=str(claims.get("name") or author or "anon"),
-                       role=role)
+                       role=role, dev_mode=bool(claims.get("em_dev_mode")))
 
     # ── the join: who you are, what the room is, what you missed ─────────────
     await _send(websocket, envelope("host_info", {
@@ -428,6 +498,12 @@ async def room_socket(websocket: WebSocket, room_id: str,
                             # **applicato** dal server: un client che ignora
                             # questa riga non riceve comunque il replay.
                             "replay": plan,
+                            # §1 · OGNI QUANTO DICHIARARE DI ESSERCI, e dopo
+                            # quanto silenzio questa stanza smette di dire che
+                            # ci sei. Un client che li conosce può battere al
+                            # ritmo giusto invece di inventarselo, e una soglia
+                            # che nessuno può leggere è una politica segreta.
+                            "presence": _beat_info(),
                             "accepts_commands": False}, source="em-server"))
     await _send(websocket, envelope("snapshot", {
                             "doc": room.document,
@@ -458,8 +534,16 @@ async def room_socket(websocket: WebSocket, room_id: str,
                 message = json.loads(raw)
             except (TypeError, ValueError):
                 continue
+            # Un frame è arrivato: il prossimo silenzio possibile di QUESTA
+            # stanza è fra `QUIET_AFTER` secondi, e allora bisogna guardare
+            # anche se per allora non parla più nessuno.
+            WATCHER.heard(room)
             try:
                 await _handle(room, member, websocket, message, author)
+                # …e POI si guarda se il roster è cambiato. Dopo, non dentro:
+                # `_handle` può aver già diffuso la presenza per conto suo (un
+                # cambio di ruolo lo fa), e questa riga non deve rifarlo.
+                await _refresh_presence(room)
             except WireError as exc:
                 # A speaker from another protocol version is TOLD, not
                 # half-understood. There are no external clients to migrate, but
@@ -478,25 +562,55 @@ async def room_socket(websocket: WebSocket, room_id: str,
     except WebSocketDisconnect:
         pass
     finally:
-        could_write = bool(member.role and member.role.can_write)
+        # …E SE SE N'È ANDATO GIÀ SILENZIOSO, non contava più come scrittore
+        # presente da un pezzo: `writers_present()` l'aveva già tolto, quindi la
+        # rete si era già riarmata e `emptied` sotto non ha più niente da fare.
+        # Chiederlo con `writers_present` invece che con `member.role` tiene le
+        # due domande allineate — «chi sa scrivere» e «da chi mi aspetto un
+        # `request_save`» devono avere sempre la stessa risposta.
+        could_write = (bool(member.role and member.role.can_write)
+                       and not presence.is_quiet(member))
         room.leave(connection_id)
         # presence is ephemeral: leaving removes it, and nothing is written down
+        # — `Room.departed` è in memoria e muore col processo, che è il senso in
+        # cui il recinto 3 parlava (vedi `_remember_departure`).
         await _broadcast_presence(room)
         # …MA IL DOCUMENTO NON È EFFIMERO. Se se n'è andato l'ultimo che sapeva
         # scrivere, questo è l'istante in cui nessuno chiederà più niente — ed è
         # esattamente la forma in cui è sparita la scheda del 25 settembre: il
         # client che avrebbe dovuto chiedere `request_save` se n'era già andato.
-        if could_write and not any(
-                m.role is not None and getattr(m.role, "can_write", False)
-                for m in room.members.values()):
+        if could_write and not room.writers_present():
             await KEEPER.emptied(room)
         elif not room.members:
             KEEPER.forget(room_id)
+            WATCHER.forget(room_id)
 
 
 async def _handle(room, member, websocket: WebSocket, message: Dict[str, Any],
                   author: Optional[str]) -> None:
     kind, payload = read(message)          # …and a wrong version raises WireError
+
+    # ── IL SEGNO DI VITA ─────────────────────────────────────────────────────
+    # Qualunque frame, non solo il battito: chi lavora sta già dicendo di
+    # esserci a ogni operazione, e chiedergli di dirlo due volte sarebbe
+    # traffico per un fatto già noto. Una riga, in un posto solo, prima di
+    # qualunque smistamento — così non esiste un verbo che si dimentichi.
+    member.heard()
+
+    if kind == "still_here":
+        # §1 · IL NODO DICHIARA. Non è una risposta a una domanda del server, ed
+        # è la differenza che conta: a una domanda automatica risponderebbe di
+        # nuovo il livello che risponde ai PONG — cioè il browser, o il sistema
+        # operativo, anche per una scheda congelata da dieci minuti. Questa la
+        # manda il codice dell'applicazione, e se l'applicazione è ferma non
+        # parte. È l'unica delle due che misura la cosa giusta.
+        #
+        # Non risponde niente: il segno di vita è già stato preso qui sopra, e
+        # un `ack` a ogni battito raddoppierebbe il costo del meccanismo più
+        # economico della stanza. Chi si accorge dei cambi di stato è il ciclo,
+        # dopo ogni frame — non questo ramo, o solo un battito potrebbe
+        # riportare qualcuno «dentro».
+        return
 
     # ── the write gate ───────────────────────────────────────────────────────
     # A viewer reads. Everything that CHANGES something — an operation, or the
@@ -504,10 +618,24 @@ async def _handle(room, member, websocket: WebSocket, message: Dict[str, Any],
     # a frame with a reason rather than a silence: a client that saw its edits
     # vanish without a word would report a lost connection, and the room would
     # get blamed for a rule it applied correctly.
-    if kind in _WRITING_VERBS and not (member.role and member.role.can_write):
-        await _deny(websocket, member, kind,
-                    "this room is read-only for your role")
-        return
+    if kind in _WRITING_VERBS:
+        # §4 · IL RUOLO SI RILEGGE, e si rilegge QUI. Prima era congelato su
+        # `member.role` alla porta, e la conseguenza è misurata: `US911: DOPO
+        # la revoca`. Una sessione sopravviveva alla revoca del proprio accesso
+        # perché `_authenticate` e `authorize` giravano una volta sola, prima
+        # del ciclo, e nessuno li richiamava più.
+        #
+        # Costa una lettura dell'ACL per scrittura, ed è misurata invece che
+        # sperata — vedi `tests/test_chi_ce_e_chi_non_ce_piu.py`.
+        role = _role_now(room, member)
+        if role != member.role:
+            await _access_changed(websocket, room, member, role)
+        if not (role and role.can_write):
+            await _deny(websocket, member, kind,
+                        "your access to this room has been withdrawn"
+                        if role is None else
+                        "this room is read-only for your role")
+            return
 
     if kind == "op":
         # THE AUTHOR IS THE TOKEN'S, always. A client that names somebody else is
@@ -694,11 +822,27 @@ async def apply_from_connector(room, ops: List[Dict[str, Any]], *,
     return {"applied": len(applied), "refused": refused, "kept": info}
 
 
-async def _send(websocket: WebSocket, payload: Dict[str, Any]) -> None:
+async def _send(websocket: WebSocket, payload: Dict[str, Any]) -> bool:
+    """Manda, e **dice se ci è riuscito**.
+
+    Il valore di ritorno è nuovo, e non è un dettaglio di stile: `_fanout`
+    muoveva il watermark di un membro dopo aver chiamato questa funzione, e
+    questa funzione inghiottiva l'eccezione. Un socket rotto veniva quindi
+    **accreditato di una consegna mai avvenuta**, e il watermark — che è
+    l'argomento di sicurezza della compattazione — diventava una bugia
+    esattamente su chi non stava ricevendo niente.
+
+    Misurato il 30 settembre 2026 su un socket che esplode a ogni scrittura: un
+    tentativo, zero byte consegnati, watermark avanzato lo stesso a
+    `2026-09-30T12:00:00Z`. Inghiottire l'errore va bene — un relay che muore
+    perché un client è caduto porta giù la stanza — ma **inghiottirlo e poi
+    contarlo come riuscito è un'altra cosa**.
+    """
     try:
         await websocket.send_text(json.dumps(payload, ensure_ascii=False))
+        return True
     except Exception:      # a socket that died mid-write is a disconnect
-        pass
+        return False
 
 
 async def _fanout(room, message: Dict[str, Any], *, skip: Optional[str] = None) -> None:
@@ -709,16 +853,90 @@ async def _fanout(room, message: Dict[str, Any], *, skip: Optional[str] = None) 
     for connection_id, socket in list(room.sockets.items()):
         if connection_id == skip:
             continue
-        await _send(socket, message)
+        delivered = await _send(socket, message)
         member = room.members.get(connection_id)
-        if member is not None and message.get("type") == "op":
+        if member is not None and delivered and message.get("type") == "op":
             # the timestamp is a field OF THE OP, and the op lives in the payload
+            #
+            # …E SOLO SE È PARTITA DAVVERO (`delivered`). Il watermark misura la
+            # CONSEGNA, e prima di questa riga misurava il TENTATIVO — vedi
+            # `_send`, e `Room.gc_watermark` per cosa ne dipende.
             member.watermark = str(body.get("ts") or member.watermark or "")
 
 
+def _roster_shape(room) -> tuple:
+    """L'impronta di ciò che il roster DICE, per sapere se è cambiato.
+
+    Solo le cose che una persona vede cambiare: chi c'è, che stato ha, che ruolo
+    ha. **Non** `silent_for_seconds`, che si muove di un secondo al secondo e
+    renderebbe «è cambiato» sempre vero — e la presenza tornerebbe a essere il
+    traffico che il battito è stato progettato per non produrre.
+    """
+    return tuple(sorted(
+        (m.connection_id, presence.state_of(m),
+         getattr(m.role, "value", m.role))
+        for m in room.members.values()))
+
+
 async def _broadcast_presence(room) -> None:
+    room.roster_shape = _roster_shape(room)
     message = envelope("presence", {"room": room.room_id,
-                                    "members": room.presence()},
+                                    "members": room.presence(),
+                                    # IL TERZO STATO. Non dentro `members`: chi
+                                    # è uscito non è un membro, e infilarcelo
+                                    # obbligherebbe ogni client a filtrare una
+                                    # lista che credeva di poter disegnare.
+                                    "left": room.departures(),
+                                    "beat": _beat_info()},
                        source="em-server")
     for socket in list(room.sockets.values()):
         await _send(socket, message)
+
+
+def _beat_info() -> Dict[str, Any]:
+    """I numeri del battito, detti a chi entra. Una soglia che nessuno può
+    leggere è una politica segreta — la stessa ragione per cui `_keeping_info`
+    manda le sue."""
+    return {"every_seconds": presence.BEAT_SECONDS,
+            "quiet_after_seconds": presence.QUIET_AFTER,
+            "verb": "still_here"}
+
+
+async def _refresh_presence(room) -> None:
+    """Ri-derivare gli stati e diffondere **solo se qualcosa è cambiato**.
+
+    Si chiama a ogni frame in arrivo, da chiunque: un frame è un segno di vita
+    per chi lo manda, e insieme l'occasione di accorgersi che un ALTRO ha
+    smesso di darne. Costa un confronto di tuple; il fan-out costa un roster per
+    presente, e per questo parte solo quando c'è qualcosa di nuovo da dire.
+    """
+    if _roster_shape(room) == getattr(room, "roster_shape", None):
+        return
+    await _broadcast_presence(room)
+    # …E IL SALVATAGGIO, perché uno stato che cambia può aver tolto alla stanza
+    # il suo ultimo scrittore **senza che nessuno abbia chiuso niente**.
+    #
+    # `emptied` e non `kept`, e la differenza è tutta qui: `kept` arma la rete e
+    # aspetta la quiete, il che va benissimo finché c'è qualcuno che potrebbe
+    # chiedere. Quando non c'è più nessuno da cui aspettarsi un `request_save`,
+    # aspettare è esattamente ciò che è costato la scheda del 25 settembre — e
+    # `emptied` è la funzione scritta per quell'istante lì. Che stavolta nessuno
+    # abbia chiuso un socket non cambia la situazione della stanza di una virgola.
+    #
+    # `emptied` non fa niente se non c'è niente da salvare, quindi un roster che
+    # cambia per un motivo qualunque non produce scritture a vuoto.
+    if not room.writers_present():
+        await KEEPER.emptied(room)
+    else:
+        await KEEPER.kept(room)
+
+
+async def _sweep_presence(room) -> None:
+    """Il colpo di scopa del temporizzatore: identico al risveglio di un frame,
+    e per questo è la stessa funzione. Serve al caso in cui **non arriva nessun
+    frame** perché l'unico rimasto si è congelato — vedi `presence.Watcher`."""
+    await _refresh_presence(room)
+
+
+#: Uno per processo, come le stanze e come la rete dei salvataggi.
+WATCHER = presence.Watcher(_sweep_presence)

@@ -39,6 +39,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from s3dgraphy import api as em
 
+from . import presence
 from .oplog import journal_for
 from .store import RoomStore, SnapshotStore, deep_copy, room_store_from_env
 
@@ -91,15 +92,54 @@ class Member:
     #: vede da una cosa sola — che la sessione è tenuta aperta — e la presenza
     #: la racconta `as_presence`, non questo campo.
     saves_itself: bool = False
+    #: SE QUESTA CONNESSIONE È IN MODO SVILUPPO. Serve a rivalutare il ruolo a
+    #: ogni scrittura senza rifare il giro dell'autenticazione: in dev non ci
+    #: sono identità, quindi non c'è niente da rivalutare e la risposta è
+    #: `owner` come alla porta.
+    dev_mode: bool = False
+    #: L'ULTIMO ISTANTE IN CUI SI È SENTITO QUESTO CLIENT, in due orologi.
+    #:
+    #: `last_seen` è ISO perché viaggia e lo legge una persona; `last_seen_mono`
+    #: è monotòno perché le DURATE si misurano con un orologio che non torna
+    #: indietro. Con l'ora del muro, una correzione NTP produce «silenzioso da
+    #: -4 minuti», che è un difetto che si vede solo in produzione.
+    #:
+    #: **Qualunque frame in arrivo li muove**, non solo il battito: chi lavora
+    #: sta già dicendo di esserci a ogni operazione, e farglielo dire due volte
+    #: sarebbe traffico per un fatto già noto.
+    last_seen: str = field(default_factory=now_iso)
+    last_seen_mono: float = field(default_factory=presence.monotonic)
+
+    def heard(self) -> None:
+        """Un segno di vita. Una riga sola, chiamata da un posto solo."""
+        self.last_seen = now_iso()
+        self.last_seen_mono = presence.monotonic()
 
     def as_presence(self) -> Dict[str, Any]:
         # The role travels with presence too: "who is here" and "who may write"
         # is one question for the person reading the roster, and a client that
         # had to ask separately would draw a room where everybody looks alike.
-        return {"id": self.connection_id, "author": self.author,
-                "display": self.display, "selection": list(self.selection),
-                "role": getattr(self.role, "value", self.role),
-                "joined_at": self.joined_at}
+        #
+        # E DA STANOTTE ANCHE LO STATO. `state` è `in` o `quiet`, DERIVATO qui e
+        # non memorizzato da nessuna parte: uno stato scritto avrebbe bisogno di
+        # qualcuno che lo aggiorni, e quel qualcuno può restare indietro. Così è
+        # vero nell'istante in cui lo si chiede.
+        state = presence.state_of(self)
+        silent = presence.silent_for(self)
+        entry = {"id": self.connection_id, "author": self.author,
+                 "display": self.display, "selection": list(self.selection),
+                 "role": getattr(self.role, "value", self.role),
+                 "joined_at": self.joined_at,
+                 "state": state,
+                 "last_seen": self.last_seen}
+        if state == presence.QUIET:
+            # DA QUANDO, non «da quando me ne sono accorto». Chi scava accanto a
+            # Elisa decide se aspettarla, e la differenza fra «tace da tre
+            # minuti» e «tace da dieci secondi» è tutta la decisione.
+            entry["quiet_since"] = self.last_seen
+            entry["silent_for_seconds"] = int(silent)
+            entry["silent_for"] = presence.hhmm(silent)
+        return entry
 
 
 class Room:
@@ -126,6 +166,15 @@ class Room:
         self.journal = journal
         self.members: Dict[str, Member] = {}
         self.sockets: Dict[str, Any] = {}
+        #: CHI È USCITO, di recente. In memoria, limitata (`DEPARTED_KEPT`), e
+        #: mai scritta in nessuno store — vedi `_remember_departure` per perché
+        #: questo non viola il recinto 3.
+        self.departed: Dict[str, Dict[str, Any]] = {}
+        #: L'IMPRONTA DELL'ULTIMO ROSTER DIFFUSO. Serve a `ws.py` per diffondere
+        #: la presenza **solo quando cambia**: senza, un battito ogni dieci
+        #: secondi per dieci presenti costerebbe cento volte se stesso in roster
+        #: rimandati per non dire niente di nuovo.
+        self.roster_shape: Optional[tuple] = None
         self.lock = asyncio.Lock()
         self.snapshot_at: Optional[str] = None
         self.last_op_at: Optional[str] = None
@@ -219,19 +268,68 @@ class Room:
     # ── membership ───────────────────────────────────────────────────────────
 
     def join(self, connection_id: str, socket: Any, author: Optional[str],
-             display: str = "", role: Any = None) -> Member:
+             display: str = "", role: Any = None,
+             dev_mode: bool = False) -> Member:
         member = Member(connection_id=connection_id, author=author,
-                        display=display or (author or "anon"), role=role)
+                        display=display or (author or "anon"), role=role,
+                        dev_mode=dev_mode)
         self.members[connection_id] = member
         self.sockets[connection_id] = socket
+        # È TORNATO: la riga «uscito» non deve restare accanto a lui presente,
+        # o la stanza direbbe le due cose insieme.
+        self.departed.pop(self._departure_key(member), None)
         return member
 
     def leave(self, connection_id: str) -> None:
-        self.members.pop(connection_id, None)
+        member = self.members.pop(connection_id, None)
         self.sockets.pop(connection_id, None)
+        if member is not None:
+            self._remember_departure(member)
 
     def presence(self) -> List[Dict[str, Any]]:
         return [m.as_presence() for m in self.members.values()]
+
+    # ── il terzo stato ───────────────────────────────────────────────────────
+    #
+    # «C'è» e «non c'è mai stata» sono due bugie diverse, e finché `leave()`
+    # cancellava e basta la stanza sapeva dire solo la seconda. Chi era seduto e
+    # se n'è andato deve leggersi come **uscito alle 14:32**, non come qualcuno
+    # che non è mai passato di qui.
+    #
+    # E IL RECINTO 3 REGGE LO STESSO. «La presenza è effimera: uscire la toglie e
+    # non si scrive niente» parla dello STORE — che uno sguardo non è un fatto
+    # sullo studio, e non deve finire nell'em.json. Queste righe vivono in
+    # memoria, muoiono col processo e non arrivano a nessuno store: sono
+    # esattamente effimere quanto il roster che stanno spiegando.
+
+    def _departure_key(self, member: Member) -> str:
+        """Per ORCID quando c'è, per connessione quando no.
+
+        Per persona e non per socket: un client che si riconnette tre volte in
+        un minuto è **una** persona che ha avuto problemi di rete, e tre righe
+        direbbero di tre uscite che non ci sono state."""
+        return member.author or f"conn:{member.connection_id}"
+
+    def _remember_departure(self, member: Member) -> None:
+        was_quiet = presence.is_quiet(member)
+        self.departed[self._departure_key(member)] = {
+            "author": member.author,
+            "display": member.display,
+            "role": getattr(member.role, "value", member.role),
+            "left_at": now_iso(),
+            # SE SE N'È ANDATO PARLANDO O TACENDO. Sono due uscite diverse: la
+            # prima è una persona che ha chiuso, la seconda è una rete che ha
+            # ceduto — e chi legge il roster agisce diversamente sulle due.
+            "was_quiet": was_quiet,
+            "last_seen": member.last_seen,
+        }
+        while len(self.departed) > presence.DEPARTED_KEPT:
+            self.departed.pop(next(iter(self.departed)))
+
+    def departures(self) -> List[Dict[str, Any]]:
+        """Chi è uscito, il più recente per primo."""
+        return sorted(self.departed.values(),
+                      key=lambda e: e.get("left_at") or "", reverse=True)
 
     # ── the op-log ───────────────────────────────────────────────────────────
 
@@ -349,19 +447,56 @@ class Room:
         lavoro non salvato: qualcuno la sta scrivendo adesso (normale, e il
         differito la coprirà), oppure **non c'è più nessuno** e quel lavoro sta
         lì da solo — che è la forma in cui è sparita la scheda del 25 settembre.
+
+        **E da stanotte un silenzioso non conta.** Vedi `writers_present` per
+        la decisione e per il caso che la impone.
         """
-        writers = [m for m in self.members.values()
-                   if m.role is not None and getattr(m.role, "can_write", False)]
+        writers = self.writers_present()
         return {"unsaved_ops": self.unsaved,
                 "snapshot_at": self.snapshot_at,
                 "last_op_at": self.last_op_at,
                 "writers_present": len(writers),
+                # …e quanti ce n'erano prima di togliere i silenziosi. Il
+                # confronto fra i due numeri È la risposta alla domanda «perché
+                # questa stanza si sta salvando da sola se c'è ancora gente
+                # dentro», e senza il secondo numero non si può dare.
+                "writers_seated": sum(
+                    1 for m in self.members.values()
+                    if m.role is not None and getattr(m.role, "can_write", False)),
                 # I client che si sono presi la responsabilità. Se sono TUTTI i
                 # presenti che sanno scrivere, la rete si tira via; se ne arriva
                 # uno che non dichiara, torna.
                 "writers_saving_themselves": sum(1 for m in writers
                                                  if m.saves_itself),
                 "at_risk": bool(self.unsaved) and not writers}
+
+    def writers_present(self) -> List[Member]:
+        """Chi sa scrivere **e si sente**.
+
+        ════════════════════════════════════════════════════════════════════════
+        LA DECISIONE, E IL CASO CHE LA IMPONE
+
+        `KEEPER.emptied` scatta quando se ne va l'ultimo che sa scrivere, e
+        `Keeper.covers` tira via la rete quando tutti i presenti che sanno
+        scrivere dichiarano di salvarsi da soli. Tutte e due chiedono **chi c'è**,
+        e finché la risposta comprendeva i silenziosi la stanza rispondeva di sì
+        a una domanda che voleva dire un'altra cosa: non «quanti socket sono
+        aperti», ma **da quanti mi posso aspettare un `request_save`**.
+
+        Da un silenzioso non ci si aspetta niente, e il caso in cui la
+        differenza fa danno è preciso: un client che ha dichiarato
+        `saves_itself` e si congela. Il trasporto non lo toglierà — una scheda
+        del browser congelata risponde ai PONG lo stesso, misurato — quindi
+        `covers()` resterebbe falso per sempre, la rete resterebbe tirata via
+        per sempre, e la sua scheda resterebbe non salvata **per sempre**. È la
+        forma del 25 settembre, con un socket ancora aperto sopra.
+
+        Sbagliare da questa parte costa un salvataggio in più (0,6–26 ms
+        misurati); sbagliare dall'altra costa una scheda.
+        """
+        return [m for m in self.members.values()
+                if m.role is not None and getattr(m.role, "can_write", False)
+                and not presence.is_quiet(m)]
 
     def gc_watermark(self) -> Optional[str]:
         """The instant every connected member has been brought past.
@@ -374,8 +509,35 @@ class Room:
         With nobody connected there is nothing to protect — but nothing to
         promise either: an absent client can come back with an old op-log, which
         this cannot know about. That is the declared limit of GC at this stage.
+
+        ════════════════════════════════════════════════════════════════════════
+        E I SILENZIOSI NON CONTANO — ma la ragione non è quella che sembrava.
+
+        Il difetto atteso era «un silenzioso resta nella lista e trattiene la
+        compattazione finché tace». **Misurato prima di toccare niente, era
+        falso**, e il perché è peggio: `_fanout` muoveva il watermark quando
+        SPEDIVA e `_send` inghiottiva l'errore, quindi un socket rotto veniva
+        **accreditato di consegne mai avvenute** — e chi taceva finiva col
+        watermark più nuovo di tutti, mentre a trattenere il GC era l'autore
+        che non manda `ack` (misura del 30 settembre: chi tace 10:00:02Z, chi
+        parla 19:34:43Z).
+
+        Riparato il credito falso in `ws.py::_fanout`, il difetto atteso diventa
+        reale: un socket che non riceve più tiene il suo watermark fermo
+        all'ultima consegna vera, ed è lì che la compattazione si pianta. Questa
+        riga lo toglie.
+
+        **PERCHÉ È SICURO.** L'argomento del minimo protegge chi *sta ancora
+        arrivando*. Un silenzioso non sta arrivando: o è in galleria e non
+        riceve niente, o è congelato e non applica niente. Compattare oltre il
+        suo punto è sicuro perché la guardia del rientro esiste già — se torna
+        con una base più vecchia di `compacted_upto`, `_replay_plan` gli nega la
+        riproduzione (`unsafe`) e gli dà lo snapshot intero. La compattazione si
+        appoggia alla guardia scritta ieri notte, e le due cose si compongono
+        invece di annullarsi.
         """
-        marks = [m.watermark for m in self.members.values() if m.watermark]
+        marks = [m.watermark for m in self.members.values()
+                 if m.watermark and not presence.is_quiet(m)]
         if not marks:
             return None
         return min(marks)

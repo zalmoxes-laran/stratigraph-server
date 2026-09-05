@@ -98,4 +98,28 @@ sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).
 
 # One worker per container: replicas are the orchestrator's business, and a
 # process count baked into an image is a decision taken in the wrong place.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+#
+# ── IL KEEPALIVE DEL TRASPORTO, SCRITTO INVECE CHE EREDITATO ─────────────────
+#
+# Questi due numeri erano già in vigore e non li aveva scelti nessuno: sono i
+# default di uvicorn. Misurati il 30 settembre 2026 contro questa immagine
+# (uvicorn 0.52.1, websockets 17.0.1), con un client vero e non il TestClient:
+#
+#   PING a t=20,0 · 40,0 · 60,0 s — periodo 20,0 s esatti
+#   client che non risponde        → CLOSE a t=40,0 s, «keepalive ping timeout»
+#   client in GALLERIA (pacchetti scartati, socket aperti da tutti e due i capi)
+#                                  → il server chiude il suo capo a t=40,0 s,
+#                                     e `/who` smette di dirlo seduto a t=40,2 s
+#
+# Quaranta secondi è un numero ragionevole e NON è la ragione per scriverlo. La
+# ragione è che finché stava nei default di una dipendenza, un aggiornamento di
+# uvicorn o un `--ws-ping-interval 0` in un playbook lo cambiava **in silenzio**
+# — e la soglia del silenzio dell'applicazione (30 s, `app/presence.py`) è
+# scelta per stare DENTRO questo numero. Se questo si allunga senza che nessuno
+# se ne accorga, «uscito» arriva dopo «silenzioso» invece che dopo, e i tre
+# stati tornano a essere due.
+#
+# `tests/test_chi_ce_e_chi_non_ce_piu.py` legge questa riga e confronta i numeri
+# con quelli di `presence.py`: il vincolo è verificato, non commentato.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
+     "--ws-ping-interval", "20", "--ws-ping-timeout", "20"]
