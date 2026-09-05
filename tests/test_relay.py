@@ -417,15 +417,64 @@ def test_7_the_relay_adds_no_logic():
                 f"{name}: {forbidden} — the relay goes through s3dgraphy.api only"
 
 
+def _without_prose(path):
+    """Il sorgente senza commenti e senza docstring.
+
+    **Perché serve, e ci è costato un rosso.** Il 28 settembre `ws.py` ha
+    guadagnato un commento che spiega COSA fa la compattazione e perché un
+    replay dopo di essa può resuscitare un arco. Il controllo qui sotto leggeva
+    il testo grezzo e ha visto la parola: ha misurato una **spiegazione** e
+    l'ha scambiata per una regola.
+
+    È la stessa lezione che questo ecosistema ha già imparato quattro volte —
+    `anno` dentro «cannot», `white` dentro `--sg-off-white`, `area` dentro un
+    commento italiano. Un rilevatore che legge la prosa misura un'ortografia.
+
+    Il flusso di token e non una regex, come fa già `stratigraph-chatbot`.
+    """
+    import tokenize
+
+    kept, previous = [], tokenize.INDENT
+    with open(path, "rb") as handle:
+        for token in tokenize.tokenize(handle.readline):
+            if token.type in (tokenize.COMMENT, tokenize.ENCODING):
+                continue
+            if token.type == tokenize.STRING and previous in (
+                    tokenize.INDENT, tokenize.NEWLINE, tokenize.NL):
+                continue                      # una docstring
+            kept.append(token.string)
+            if token.type not in (tokenize.NL, tokenize.NEWLINE):
+                previous = token.type
+    return " ".join(kept)
+
+
 def test_7b_no_convergence_or_gc_rule_is_written_in_the_relay():
     """A heuristic with teeth: the words a merge rule needs. Clock arithmetic,
-    tombstone decisions and compaction do not appear in the transport."""
+    tombstone decisions and compaction do not appear in the transport.
+
+    Sul CODICE e non sulla prosa: vedi `_without_prose`."""
     for name in ("ws.py", "rooms.py"):
-        source = (_REPO / "app" / name).read_text(encoding="utf-8")
+        codice = _without_prose(_REPO / "app" / name)
         for forbidden in ("compare_clocks", "field_clock", "merge_payloads",
-                          "compact_section", "is_removed("):
-            assert forbidden not in source, \
+                          "compact_section", "is_removed"):
+            assert forbidden not in codice, \
                 f"{name}: {forbidden} — that decision belongs to s3Dgraphy"
+
+
+def test_7b_bis_il_rilevatore_rileva(tmp_path):
+    """E che il rilevatore morda ancora, dopo essere stato addolcito.
+
+    Togliere i commenti a un cancello è il modo classico di spegnerlo senza
+    accorgersene: questo lo riaccende su una riga di codice vera."""
+    finto = tmp_path / "finto.py"
+    finto.write_text(
+        "# parla di compare_clocks in un commento\n"
+        "def f(a, b):\n"
+        "    '''e in una docstring: compact_section'''\n"
+        "    return compare_clocks(a, b)\n", encoding="utf-8")
+    codice = _without_prose(finto)
+    assert "compare_clocks" in codice, "il rilevatore non vede più il codice"
+    assert "compact_section" not in codice, "…e vede ancora la prosa"
 
 
 def test_7c_the_durable_truth_is_an_interface_not_a_path():

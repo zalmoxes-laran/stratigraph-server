@@ -68,6 +68,7 @@ from .blend_backups import (BLEND_MEDIA_TYPE, BlendBackups,
                             describe as backup_describe,
                             register_from_env as backup_register_from_env)
 from .node_health import node_health, node_services
+from . import oplog as oplog_module
 from . import reach as reach_module
 from . import roomview
 from .rooms import RoomDescriptor, RoomGraphTaken
@@ -327,6 +328,13 @@ class Health(BaseModel):
     #:
     #: `POST /v1/health/reach` knocks again.
     reachability: Dict[str, Any] = Field(default_factory=dict)
+    #: SE LA STORIA DI UNA STANZA SOPRAVVIVE A UN RIAVVIO, e fin dove.
+    #:
+    #: Sta accanto a `snapshot_store` per la stessa ragione: un operatore deve
+    #: poter chiedere «quello che questo nodo tiene, lo tiene davvero?» senza
+    #: leggere il deployment. Un registro in memoria non è un guasto — è una
+    #: funzione spenta — e si dice così.
+    oplog: Dict[str, Any] = Field(default_factory=dict)
     #: LE STANZE CHE STANNO ACCUMULANDO LAVORO NON TENUTO. Un fatto sulla salute
     #: del nodo, non una curiosità: il 25 settembre questo numero sarebbe stato
     #: alto per ore e nessuno aveva un posto dove leggerlo.
@@ -623,7 +631,40 @@ def health() -> Health:
         # `REACHABILITY` e `app/reach.py`.
         reachability=REACHABILITY.as_dict(),
         keeping=_keeping_health(),
+        oplog=_oplog_health(),
     )
+
+
+def _oplog_health() -> Dict[str, Any]:
+    """Cosa il registro tiene, e per quante stanze.
+
+    Contato sulle stanze VIVE, come `keeping`: sono le uniche che hanno un
+    registro aperto in questo processo. Il numero che conta per un operatore è
+    **fin dove si può guardare indietro**, e quello lo dice `reaches_back_to`
+    della stanza più povera — perché è quella che si arrende per prima.
+    """
+    esempio = oplog_module.journal_for(snapshot_store(), "esempio")
+    live = [_ws.ROOMS.peek(rid) for rid in _ws.ROOMS.rooms()]
+    diari = [(room.room_id, room.journal) for room in live
+             if room and room.journal is not None]
+    voci = sum(len(diario) for _rid, diario in diari)
+    piu_povera = None
+    for rid, _diario in diari:
+        room = _ws.ROOMS.peek(rid)
+        arriva = room.replay_reaches() if room else None
+        if arriva and (piu_povera is None or arriva > piu_povera[1]):
+            piu_povera = (rid, arriva)
+    return {
+        "durable": esempio is not None,
+        "describe": oplog_module.describe(esempio),
+        "keep_per_room": oplog_module.KEEP_OPS,
+        "rooms_with_a_log": len(diari),
+        "entries": voci,
+        # la stanza che guarda MENO indietro: è quella che rifiuterà per prima
+        "shortest_memory": ({"room": piu_povera[0],
+                             "reaches_back_to": piu_povera[1]}
+                            if piu_povera else None),
+    }
 
 
 def _keeping_health() -> Dict[str, Any]:

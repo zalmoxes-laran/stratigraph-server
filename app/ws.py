@@ -29,6 +29,7 @@ merge trusts.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Any, Dict, Optional
 
@@ -42,6 +43,8 @@ from . import keeping
 from .rooms import RoomRegistry, now_iso
 from .store import store_from_env
 from .wire import WIRE, WireError, envelope, read
+
+log = logging.getLogger("stratigraph.ws")
 
 #: This process's rooms and the store behind them. Built at import so a
 #: misconfigured store fails when the process starts, not at the first join.
@@ -137,6 +140,106 @@ async def _keep(room, why: str, *, asked: bool = False):
 
 #: Uno per processo, come le stanze.
 KEEPER = keeping.Keeper(_keep)
+
+
+# ── IL RIFIUTO, E PERCHÉ È DEL SERVER ────────────────────────────────────────
+#
+# `host_info` annuncia `compacted_upto` da P4.3, con la regola scritta accanto:
+# un client la cui base è più vecchia di quel punto non deve rigiocare la
+# propria storia, deve risincronizzarsi.
+#
+# **Era annunciata, e decideva il client.** Finché il registro moriva al riavvio
+# era innocuo: non c'era niente da rigiocare. Con un registro che dura non basta
+# più, perché il danno cambia specie.
+#
+# IL DANNO, preciso: `em.compact` butta gli archi rimossi il cui tombstone è più
+# vecchio del watermark (`crdt.py::compact_section`). Un vecchio `add_edge`
+# rigiocato dopo quella pulizia **resuscita un arco cancellato**, perché il
+# tombstone che l'avrebbe rifiutato non c'è più. Il grafo tornerebbe a dire che
+# due unità sono in rapporto quando qualcuno aveva stabilito che non lo sono —
+# e non è lavoro perso, è un'affermazione falsa in un dato archeologico.
+#
+# È la stessa forma di `ws.py:387`, la riga che dichiarava che la persistenza
+# era del client e non verificava che il client la chiedesse, e che è costata la
+# scheda del 25 settembre. **Una regola annunciata a chi sta dall'altra parte
+# non è una regola, è una speranza.** Stavolta il controllo sta da questa parte.
+
+#: Perché un replay è stato negato. Parole e non codici: chi le legge è una
+#: persona che guarda un log, e «too_old» non spiega niente a nessuno.
+REPLAY_UNSAFE = "unsafe"
+REPLAY_INCOMPLETE = "incomplete"
+
+
+def _replay_plan(room, since: Optional[str]) -> Dict[str, Any]:
+    """Se questo cursore può ricevere una riproduzione, e se no perché.
+
+    Tre esiti, e nessuno è un silenzio:
+
+    * **nessun cursore** — non è un rifiuto: lo snapshot appena mandato È tutto
+      il documento, e riprodurci sopra riapplicherebbe quello che c'è già;
+    * **`unsafe`** — il cursore è più vecchio del punto di compattazione. Le
+      operazioni ci sarebbero anche, ma rigiocarle può resuscitare qualcosa che
+      qualcuno aveva cancellato;
+    * **`incomplete`** — il registro non arriva così indietro. Una riproduzione
+      parziale è **peggio del niente**: il client crederebbe di essere
+      allineato, e non lo sarebbe.
+
+    In tutti e tre i casi il documento intero è già partito con lo snapshot, che
+    è il motivo per cui negare la riproduzione non lascia nessuno a mani vuote.
+    """
+    if not since:
+        return {"granted": False, "since": None, "reason": "no cursor",
+                "detail": "the snapshot you were just sent is the whole "
+                          "document; there is nothing to replay on top of it"}
+    if room.compacted_upto and since < room.compacted_upto:
+        return {"granted": False, "since": since, "reason": REPLAY_UNSAFE,
+                "compacted_upto": room.compacted_upto,
+                **_two_memories(room, room.replay_reaches()),
+                "detail": f"your cursor {since} is older than this room's "
+                          f"compaction point {room.compacted_upto}: replaying "
+                          f"from there could re-assert something already "
+                          f"settled and forgotten here. Use the snapshot you "
+                          f"were just sent."}
+    reaches = room.replay_reaches()
+    if reaches and since < reaches:
+        return {"granted": False, "since": since, "reason": REPLAY_INCOMPLETE,
+                "reaches_back_to": reaches,
+                **_two_memories(room, reaches),
+                "detail": f"this room's log only reaches back to {reaches}, "
+                          f"and your cursor is {since}: a partial replay would "
+                          f"leave you believing you are caught up. Use the "
+                          f"snapshot you were just sent."}
+    return {"granted": True, "since": since,
+            "reaches_back_to": reaches, "compacted_upto": room.compacted_upto,
+            **_two_memories(room, reaches)}
+
+
+def _two_memories(room, reaches: Optional[str]) -> Dict[str, Any]:
+    """**Rigiocabile** e **leggibile**: due usi dello stesso file, e il confine.
+
+    La ritenzione del registro è più lunga della finestra di compattazione — di
+    proposito, perché dipendono da cose diverse: la prima è una politica di
+    `app/oplog.py`, la seconda è il minimo dei watermark dei connessi. Quindi
+    esiste una parte di registro **più vecchia di `compacted_upto`**, e la
+    domanda giusta è a cosa serve.
+
+    Non a rigiocare: rigiocarla è precisamente ciò che resusciterebbe un arco.
+
+    A **leggere**. Chi ha fatto cosa, quando, in che ordine — che per un dato
+    archeologico non è contabilità, è il verbale di un disaccordo
+    interpretativo. È quello che serve al cruscotto della stanza e a «cosa è
+    cambiato da quando non guardavo», e nessuna delle due riapplica niente.
+
+    Due nomi perché sono due cose: una si può applicare, l'altra si può solo
+    raccontare. Chiamarle allo stesso modo sarebbe l'invito a rigiocare la
+    seconda.
+    """
+    piu_vecchio = reaches
+    rigiocabile = piu_vecchio
+    if room.compacted_upto and (not piu_vecchio
+                                or room.compacted_upto > piu_vecchio):
+        rigiocabile = room.compacted_upto
+    return {"replayable_from": rigiocabile, "readable_from": piu_vecchio}
 
 
 def _keeping_info(room) -> dict:
@@ -286,6 +389,10 @@ async def room_socket(websocket: WebSocket, room_id: str,
                     else "this room needs a signed-in member"))
         return
 
+    # DECISO PRIMA DI PARLARE, così `host_info` può dirlo e il replay può
+    # obbedirci: una sola decisione, letta due volte.
+    plan = _replay_plan(room, since)
+
     connection_id = uuid.uuid4().hex[:12]
     member = room.join(connection_id, websocket, author,
                        display=str(claims.get("name") or author or "anon"),
@@ -316,6 +423,11 @@ async def room_socket(websocket: WebSocket, room_id: str,
                             # intervalli, e uno che vuole occuparsene da sé sa
                             # cosa deve dichiarare per farlo (`client_info`).
                             "keeping": _keeping_info(room),
+                            # SE LA TUA STORIA VALE ANCORA QUI, e se no perché.
+                            # Detto alla porta, e — questa è la differenza —
+                            # **applicato** dal server: un client che ignora
+                            # questa riga non riceve comunque il replay.
+                            "replay": plan,
                             "accepts_commands": False}, source="em-server"))
     await _send(websocket, envelope("snapshot", {
                             "doc": room.document,
@@ -327,10 +439,16 @@ async def room_socket(websocket: WebSocket, room_id: str,
     await _broadcast_presence(room)
     # …and only then the replay: what a late arrival missed comes as the stream
     # it would have received had it been here, not as part of the handshake
-    for op in room.replay_since(since):
+    # …E SOLO SE IL SERVER LO CONCEDE. Il piano è stato deciso alla porta e
+    # annunciato in `host_info`; qui si obbedisce. Un client che ignora
+    # l'annuncio non ottiene niente di diverso, che è il punto.
+    for op in (room.replay_since(since) if plan["granted"] else []):
         # wrapped like any other op frame: what a client missed must arrive in
         # the SAME shape it would have had live, or a replay needs its own reader
         await _send(websocket, envelope("op", op, source="em-server"))
+    if since and not plan["granted"]:
+        log.info("room %s refused a replay from %s: %s",
+                 room_id, since, plan["reason"])
     member.watermark = room.last_op_at or now_iso()
 
     try:

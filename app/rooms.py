@@ -34,15 +34,19 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
+import logging
 from typing import Any, Dict, List, Optional, Set
 
 from s3dgraphy import api as em
 
+from .oplog import journal_for
 from .store import RoomStore, SnapshotStore, deep_copy, room_store_from_env
 
 #: How many recent operations a room keeps so a late arrival can catch up
 #: without a fresh snapshot. Bounded on purpose: an unbounded log is a memory
 #: leak with a good excuse.
+log = logging.getLogger("stratigraph.rooms")
+
 OPLOG_LIMIT = 512
 
 #: "not looked up yet", distinct from "looked up and there is none".
@@ -106,10 +110,20 @@ class Room:
     representation of a project.
     """
 
-    def __init__(self, room_id: str, document: Dict[str, Any]):
+    def __init__(self, room_id: str, document: Dict[str, Any],
+                 journal: Optional[Any] = None):
         self.room_id = room_id
         self.document = document
+        #: LA FINESTRA IN MEMORIA, veloce, 512 operazioni. Serve il caso normale
+        #: — un client che si riaffaccia dopo qualche minuto — e muore col
+        #: processo, come è sempre stato.
         self.oplog: List[Dict[str, Any]] = []
+        #: LA MEMORIA PROFONDA (`app/oplog.py`), che invece dura. Si legge solo
+        #: quando la finestra non arriva abbastanza indietro, cioè quasi mai.
+        #: `None` quando lo store è in memoria: là non c'è niente che
+        #: sopravviva al processo, e un registro che finge di durare sarebbe
+        #: peggio di nessun registro.
+        self.journal = journal
         self.members: Dict[str, Member] = {}
         self.sockets: Dict[str, Any] = {}
         self.lock = asyncio.Lock()
@@ -126,7 +140,12 @@ class Room:
         #: (`host_info`, `snapshot`) because it is the one number a client needs
         #: to know whether its own history is still reconcilable here: below this
         #: point the room no longer holds what a replay would argue with.
-        self.compacted_upto: Optional[str] = None
+        #: RIPRESO DAL REGISTRO, se ce n'è uno. Vive in memoria come prima, ma
+        #: adesso riparte da dove era: dopo un riavvio il documento sul disco è
+        #: già compattato, e un `None` qui lascerebbe rigiocare operazioni che
+        #: la compattazione ha reso pericolose. Vedi `Journal.mark_compacted`.
+        self.compacted_upto: Optional[str] = (journal.compacted_upto()
+                                              if journal is not None else None)
         #: lazily read, see the `embargo` property. `_UNREAD` and not None
         #: because "no embargo" is an answer worth remembering too.
         self._embargo: Any = _UNREAD
@@ -226,6 +245,22 @@ class Room:
         if len(self.oplog) > OPLOG_LIMIT:
             del self.oplog[: len(self.oplog) - OPLOG_LIMIT]
         self.last_op_at = str(op.get("ts") or now_iso())
+        # …E SUL DISCO, che è la sola metà che sopravvive a un riavvio.
+        #
+        # `at` è l'istante del SERVER e non il `ts` dell'operazione: il secondo
+        # è l'orologio del client, onorato apposta perché una nota dettata alle
+        # 10 e sincronizzata alle 18 porta le 10. Servono tutti e due, e per due
+        # cose diverse — vedi `app/oplog.py`.
+        #
+        # Un registro che non scrive NON deve far fallire un'operazione che la
+        # stanza ha già applicato: si annota e si continua, e chi legge
+        # `/health` vede che quella stanza non sta tenendo la sua storia.
+        if self.journal is not None:
+            try:
+                self.journal.append(op, at=now_iso())
+            except Exception as exc:      # noqa: BLE001
+                log.warning("the room %s could not journal an operation: %s",
+                            self.room_id, exc)
 
     def replay_since(self, since: Optional[str]) -> List[Dict[str, Any]]:
         """The operations after `since` — what a late arrival missed.
@@ -234,10 +269,42 @@ class Room:
         which already contains everything, and replaying the log on top would
         only re-apply what is there (harmless, because the ops are idempotent,
         and pointless, which is the better reason not to).
+
+        ── DUE MEMORIE, E SI SCEGLIE DA SOLA ───────────────────────────────
+
+        La finestra in memoria copre il caso normale ed è immediata. Quando il
+        cursore è più vecchio di quello che la finestra tiene — o quando la
+        finestra è vuota perché il processo è appena ripartito — si legge il
+        registro sul disco.
+
+        Il confronto che decide è sul `ts` della PRIMA operazione in memoria:
+        se il cursore è già dentro quella finestra, il disco non aggiungerebbe
+        niente.
         """
         if not since:
             return []
-        return [op for op in self.oplog if str(op.get("ts") or "") > since]
+        in_memoria = [op for op in self.oplog if str(op.get("ts") or "") > since]
+        if self.journal is None:
+            return in_memoria
+        primo = str(self.oplog[0].get("ts") or "") if self.oplog else ""
+        if primo and since >= primo:
+            # il cursore cade dentro la finestra: il disco direbbe la stessa cosa
+            return in_memoria
+        return self.journal.since(since)
+
+    def replay_reaches(self) -> Optional[str]:
+        """Fin dove indietro questa stanza sa guardare. `None` = non si sa.
+
+        È il `ts` più vecchio che il registro tiene ancora, e serve al rifiuto:
+        un cursore più vecchio non può ricevere un replay COMPLETO, e riceverne
+        uno parziale sarebbe peggio del niente — il client crederebbe di essere
+        allineato.
+        """
+        if self.journal is not None:
+            piu_vecchio = self.journal.oldest()
+            if piu_vecchio:
+                return piu_vecchio
+        return str(self.oplog[0].get("ts")) if self.oplog else None
 
     # ── the operations (the library does the work) ───────────────────────────
 
@@ -328,6 +395,14 @@ class Room:
             # …and the point is REMEMBERED, because a client that was away has to
             # be able to ask "is my history still worth anything here?"
             self.compacted_upto = before
+            # …e ricordato SUL DISCO, perché da stanotte il registro sopravvive
+            # al riavvio e la guardia che lo protegge deve sopravvivere con lui.
+            if self.journal is not None:
+                try:
+                    self.journal.mark_compacted(before, at=now_iso())
+                except Exception as exc:      # noqa: BLE001
+                    log.warning("the room %s could not journal its compaction "
+                                "point: %s", self.room_id, exc)
         store.put(self.room_id, self.document)
         self.snapshot_at = now_iso()
         # …e il debito è pagato. Azzerato DOPO `store.put`: se la scrittura
@@ -649,7 +724,9 @@ class RoomRegistry:
                 if snapshot is not None:
                     break
             document = deep_copy(snapshot) if snapshot else _empty_container(room_id)
-            room = Room(room_id, document)
+            # IL REGISTRO ACCOMPAGNA IL DOCUMENTO: sta accanto agli snapshot, e
+            # non c'è quando lo store è in memoria (vedi `oplog.journal_for`).
+            room = Room(room_id, document, journal=journal_for(self.store, room_id))
             self._rooms[room_id] = room
             return room
 
