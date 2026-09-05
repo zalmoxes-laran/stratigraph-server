@@ -612,6 +612,19 @@ services:
       EM_SERVER_URL: "${EM_CHATBOT_SERVER_URL:-}"
       EM_CHATBOT_ROOM: "${EM_CHATBOT_ROOM:-}"
       EM_CHATBOT_TOKEN: "${EM_CHATBOT_TOKEN:-}"
+      # --- LE SCHEDE che questo nodo sa servire ------------------------------
+      # Una DIRECTORY, e il meccanismo e' quello: una definizione nuova compare
+      # lasciandoci cadere un file, senza ricostruire il front-end e senza
+      # riavviare il servizio (provato il 2026-09-23 con una scheda ungherese).
+      #
+      # Assente = nessuna scheda, e l'assistente e' esattamente quello che era:
+      # un nodo che prende dettature. La stessa regola di ogni altra variabile
+      # di questa stack.
+      #
+      # Punta al checkout di `stratigraph-templates` montato qui sotto, perche'
+      # su questa macchina le definizioni si stanno ancora scrivendo. Su un nodo
+      # vero e' una directory del nodo, e le definizioni ci arrivano come dati.
+      STRATIGRAPH_SCHEDE_DIR: "/srv/schede"
     volumes:
       # A field node is switched off by pulling the plug. What was recorded has
       # to survive that.
@@ -620,6 +633,10 @@ services:
       # change to the page is invisible until the image is rebuilt.
       - ../../stratigraph-chatbot/app:/srv/stratigraph-chatbot/app:ro
       - ../../stratigraph-chatbot/web:/srv/stratigraph-chatbot/web:ro
+      # …e le DEFINIZIONI, in sola lettura: questo servizio le legge e non le
+      # scrive mai. Chi le scrive e' `stratigraph-templates`, che e' il motore
+      # d'autoria e non sta nel percorso del modulo.
+      - ../../stratigraph-templates/templates:/srv/schede:ro
     restart: unless-stopped
 
   # =======================================================================
