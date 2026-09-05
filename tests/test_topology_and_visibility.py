@@ -293,12 +293,20 @@ def test_3c_measure_images_refuses_an_unconfigured_base(dialled):
 def test_3d_the_only_outbound_calls_read_their_address_from_config():
     """The audit, kept as a tripwire.
 
-    FOUR places in this service open a socket to another one: the JWKS fetch,
-    the `info.json` measurement, the node-console Health probes, and — since the
-    photogrammetric driver moved here out of s3Dgraphy (2026-08-29) — the engine.
-    All of them take their address from configuration. A fifth one arriving is
-    not forbidden; it just has to arrive with this test updated, which is the
-    point (and is what happened here, twice).
+    FIVE places in this service open a socket to another one: the JWKS fetch,
+    the `info.json` measurement, the node-console Health probes, the
+    photogrammetric engine (moved here out of s3Dgraphy, 2026-08-29), and — since
+    2026-09-25 — the reachability prober. A sixth one arriving is not forbidden;
+    it just has to arrive with this test updated, which is the point (and is what
+    happened here, three times).
+
+    `reach.py` is the odd one, and it is worth a line: it opens sockets ON
+    PURPOSE and for no other reason. Every other caller here dials somebody
+    because it needs an answer; that one dials to find out whether anybody is
+    there, which is the whole of `/health` finally doing what it claimed. Its
+    address comes from configuration like the others — it is the SAME
+    `jwks_uri`, the SAME MinIO client — because a prober with an address of its
+    own would be measuring a different deployment.
     """
     import re
 
@@ -309,7 +317,7 @@ def test_3d_the_only_outbound_calls_read_their_address_from_config():
         if re.search(r"urlopen\(|httpx\.|requests\.(get|post)\(", source):
             callers[path.name] = source
     assert set(callers) == {"auth.py", "main.py", "node_health.py",
-                            "nodeodm_client.py"}, \
+                            "nodeodm_client.py", "reach.py"}, \
         f"a new outbound call site appeared: {sorted(callers)}"
 
     # the engine's address is a setting with a compose-network default, and the

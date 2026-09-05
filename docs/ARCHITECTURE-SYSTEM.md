@@ -102,7 +102,23 @@ IIIF manifests for its images.
   same digest, so there is no second copy of the pixels and no thumbnail
   pipeline;
 * **stateless** — no session, no upload directory. The durable truth is the
-  object store, never this process's disk.
+  object store, never this process's disk;
+* **what a room can say about itself** (2026-09-25) — four read-only views over
+  the room's own graph, for the surface that opens when somebody sits down:
+  `/v1/rooms/{id}/who` (who is *seated* and, separately, who *wrote recently* —
+  a correspondent is not seated), `/v1/rooms/{id}/waiting` (fields an AI author
+  composed and nobody has validated), `/v1/rooms/{id}/statistics` (by node type,
+  epoch, author, validation — **and the holes**), `/v1/rooms/{id}/operators`
+  (authorship as a directory, with verified identities). Counted on the graph at
+  every request, no index: measured at 0.2–2.0 ms on the largest room this node
+  holds. There is deliberately **no** "what changed since I last looked": that
+  would need an operation log that survives a restart, and this one does not —
+  see the room's own `tests/test_il_registro_della_stanza.py`;
+* **`/health` knocks** — every other field of the health payload describes the
+  configuration; `reachability` is the only one that has touched something. The
+  knock happens at start-up and on `POST /v1/health/reach`, never on `/health`
+  itself, because an orchestrator's probe must not dial the identity provider
+  every few seconds.
 
 **Repo:** [`StratiGraph Server`](../) · API under `/v1` · [`docs/URL-TOPOLOGY.md`](URL-TOPOLOGY.md)
 

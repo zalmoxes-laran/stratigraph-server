@@ -37,6 +37,7 @@ orchestrator's, and they return the same thing.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import pathlib
 from typing import Any, Dict, List, Optional
@@ -67,6 +68,8 @@ from .blend_backups import (BLEND_MEDIA_TYPE, BlendBackups,
                             describe as backup_describe,
                             register_from_env as backup_register_from_env)
 from .node_health import node_health, node_services
+from . import reach as reach_module
+from . import roomview
 from .rooms import RoomDescriptor, RoomGraphTaken
 from .store import describe as snapshot_describe
 from .store import describe_rooms as room_describe
@@ -121,7 +124,26 @@ except ImportError as exc:  # pragma: no cover — deployment error, not runtime
 # convention.
 from . import __version__
 
+@contextlib.asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """L'avvio bussa una volta a ciò che questo nodo dichiara.
+
+    **Non può impedire l'avvio.** Un server che si rifiuta di partire perché
+    MinIO è lento parte dopo MinIO per sempre, e lo scopo di questa misura è
+    farla vedere, non farne una precondizione: si annota e si continua.
+
+    `knock` è definita molto più in basso, dove stanno gli store: qui il nome si
+    risolve alla chiamata, che è dopo che il modulo è finito di caricarsi.
+    """
+    try:
+        knock("startup")
+    except Exception as exc:          # noqa: BLE001
+        log.warning("reachability: the start-up knock itself failed: %s", exc)
+    yield
+
+
 app = FastAPI(
+    lifespan=_lifespan,
     title="StratiGraph Server",
     version=__version__,
     summary="The s3Dgraphy access API over HTTP — read-only (P0), under /v1.",
@@ -292,6 +314,19 @@ class Health(BaseModel):
     #: nobody reads: this way "is this deployment actually protected?" is one
     #: unauthenticated GET away, for the operator and for the client alike.
     auth: str = "dev-no-auth"
+    #: WHAT WAS ACTUALLY REACHED, and when. Every other field on this model is a
+    #: description of the configuration: `asset_store` says «minio at
+    #: http://minio:9000» whether or not anything is listening there. This one is
+    #: the only field that has touched something.
+    #:
+    #: It carries a DATE because the knock happens at start-up and on request,
+    #: never on this route: a Docker HEALTHCHECK runs every few seconds, and a
+    #: probe that dialled the identity provider each time would be a denial of
+    #: service the operator installed themselves. An observation with its instant
+    #: is honest an hour later; a cache pretending to be current is not.
+    #:
+    #: `POST /v1/health/reach` knocks again.
+    reachability: Dict[str, Any] = Field(default_factory=dict)
     #: P4.2 · WHERE THE DURABLE TRUTH IS. The relay holds a working copy in RAM;
     #: this says what is behind it — and an operator who reads "memory" knows
     #: their snapshots die with the process, instead of finding out.
@@ -577,7 +612,79 @@ def health() -> Health:
         operators=ops.describe(),
         blend_backup_store=backup_describe(BACKUPS.blobs, BACKUPS.register),
         rooms=len(rooms().rooms()),
+        # LETTO, non bussato: la bussata è all'avvio e su richiesta. Vedi
+        # `REACHABILITY` e `app/reach.py`.
+        reachability=REACHABILITY.as_dict(),
     )
+
+
+# ── BUSSARE A CIÒ CHE SI DICHIARA ────────────────────────────────────────────
+#
+# Tutto quello che `health()` elenca sopra è una lettura della configurazione.
+# Questa parte è la sola che tocca qualcosa, e sta separata perché ha un costo:
+# `app/reach.py` spiega perché non gira sull'healthcheck.
+
+#: L'ultima bussata di QUESTO processo. Non condivisa fra repliche: «tu ci
+#: arrivi?» ha una risposta per processo, e metterla in comune ne farebbe una
+#: media di due misure diverse.
+REACHABILITY = reach_module.Reachability()
+
+
+def _probe_for(store: Any):
+    """La prova giusta per lo store che c'è — o `None`, che vuol dire spento.
+
+    La scelta è sul TIPO e non su una stringa di configurazione: è la stessa
+    ragione per cui questa parte esiste. Uno store in memoria non ha niente da
+    raggiungere, e dirlo `off` è la regola di casa (*assente = funzione
+    spenta*), non un guasto mascherato.
+    """
+    name = type(store).__name__
+    if name.startswith("InMemory"):
+        return None
+    if hasattr(store, "_client") and hasattr(store, "bucket"):
+        return reach_module.probe_minio(store)
+    root = getattr(store, "root", None)
+    if root is not None:
+        return reach_module.probe_directory(str(root))
+    return None
+
+
+def knock(why: str) -> reach_module.Reachability:
+    """Bussa a ogni dipendenza dichiarata e AGGIORNA il registro del processo.
+
+    Una sola funzione per l'avvio e per la richiesta: due implementazioni di
+    «cosa siamo andati a toccare» sarebbero due elenchi che si allontanano, ed
+    è la specie di difetto che questa funzione è nata per chiudere.
+    """
+    settings = authenticator.settings
+    jwks = getattr(settings, "jwks_uri", "")
+    knocks = [
+        reach_module.knock("snapshot_store", snapshot_describe(snapshot_store()),
+                           _probe_for(snapshot_store())),
+        reach_module.knock("room_store", room_describe(rooms().rooms_store),
+                           _probe_for(rooms().rooms_store)),
+        reach_module.knock("acl_store", acl_describe(ACL_STORE),
+                           _probe_for(ACL_STORE)),
+        reach_module.knock("invite_store", invite_describe(INVITE_STORE),
+                           _probe_for(INVITE_STORE)),
+        reach_module.knock("asset_store", asset_describe(ASSET_STORE),
+                           _probe_for(ASSET_STORE)),
+        reach_module.knock("corpus_store", corpus_describe(CORPUS_STORE),
+                           _probe_for(CORPUS_STORE)),
+        reach_module.knock("blend_backup_store",
+                           backup_describe(BACKUPS.blobs, BACKUPS.register),
+                           _probe_for(BACKUPS.blobs)),
+        # L'IDENTITY PROVIDER, che è l'unica dipendenza il cui silenzio rende
+        # inutile tutto il resto: senza JWKS nessun token si verifica.
+        reach_module.knock("auth", settings.describe(),
+                           reach_module.probe_jwks(jwks) if jwks else None),
+    ]
+    REACHABILITY.at = knocks[0].at
+    REACHABILITY.why = why
+    REACHABILITY.knocks = knocks
+    return REACHABILITY
+
+
 
 
 # ── assets (the other half of what a room provides) ──────────────────────────
@@ -2509,6 +2616,152 @@ async def get_room(room_id: str, request: Request) -> RoomOut:
                           with_members=bool(role.can_manage))
 
 
+# ── COSA SA DIRE UNA STANZA DI SÉ ────────────────────────────────────────────
+#
+# Quattro letture, e nient'altro: `app/roomview.py` non scrive, non tiene un
+# indice e non conosce HTML. La pagina la fa StratiField; qui vivono i fatti.
+#
+# LA QUINTA RISPOSTA NON C'È, e non è una dimenticanza. «Cosa è cambiato da
+# quando non guardavo» vorrebbe il registro delle operazioni della stanza, e
+# quel registro **non sopravvive a un riavvio**: vive in memoria, non finisce
+# nello store, e un'operazione arrivata dal socket non viene nemmeno persistita
+# finché qualcuno non chiede `request_save`.
+#
+# Misurato, non dedotto: `tests/test_il_registro_della_stanza.py`, sette prove,
+# fra cui una stanza dimenticata e ricostruita — che è quello che fa un riavvio
+# — dove il registro è vuoto e l'operazione non è più nel documento. Costruire
+# un cursore sopra quello significherebbe promettere una memoria che non c'è.
+
+
+class RoomWho(BaseModel):
+    seated: List[Dict[str, Any]] = Field(default_factory=list)
+    wrote_recently: List[Dict[str, Any]] = Field(default_factory=list)
+    recent_after: Optional[str] = None
+    counts: Dict[str, int] = Field(default_factory=dict)
+
+
+class RoomWaiting(BaseModel):
+    subject: Optional[str] = None
+    units: List[Dict[str, Any]] = Field(default_factory=list)
+    counts: Dict[str, int] = Field(default_factory=dict)
+    oldest: Optional[str] = None
+    #: se `oldest` viene da un orologio DI CAMPO o dal timbro del nodo. Il
+    #: secondo si muove quando qualcuno tocca un altro campo dello stesso nodo,
+    #: e un debito che ringiovanisce è un debito che si rimanda.
+    oldest_from_field_clock: bool = False
+    by_model: Dict[str, int] = Field(default_factory=dict)
+
+
+class RoomStatistics(BaseModel):
+    nodes: int = 0
+    edges: int = 0
+    units: int = 0
+    by_node_type: Dict[str, int] = Field(default_factory=dict)
+    by_edge_type: Dict[str, int] = Field(default_factory=dict)
+    by_epoch: List[Dict[str, Any]] = Field(default_factory=list)
+    by_author: Dict[str, int] = Field(default_factory=dict)
+    validation: Dict[str, int] = Field(default_factory=dict)
+    #: LA METÀ UTILE. Un elenco di lavori da fare travestito da numeri.
+    holes: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RoomOperators(BaseModel):
+    operators: List[Dict[str, Any]] = Field(default_factory=list)
+    counts: Dict[str, int] = Field(default_factory=dict)
+
+
+async def _reader(room_id: str, request: Request):
+    """La porta di queste quattro: **essere della stanza**, e basta.
+
+    Non `can_manage`, come per la lista dei membri: quella è un elenco di
+    persone e sono affari di chi governa. Questi sono fatti sul lavoro in
+    corso, e chi lavora in una stanza ha diritto di sapere com'è messa — anzi è
+    esattamente la persona per cui esistono.
+    """
+    _acl, room, role, who = await _acting_role(room_id, request)
+    if role is None:
+        raise HTTPException(status_code=403, detail="not a member of this room")
+    return room, who
+
+
+@v1.get("/rooms/{room_id}/who", response_model=RoomWho, tags=["rooms"])
+async def room_who(room_id: str, request: Request,
+                   since: str = Query(default="", description=
+                                      "ISO instant: writers after it. Empty "
+                                      "means the list is empty and says so")
+                   ) -> RoomWho:
+    """Chi c'è dentro adesso — e, separatamente, chi ha scritto di recente.
+
+    **Due liste che non si fondono.** Un corrispondente non è seduto:
+    pyarchinit-mini consegna a raffiche e se ne va, StratiField in trincea può
+    essere offline da un'ora e aver scritto dieci minuti fa. Una lista sola
+    mentirebbe in tutte e due le direzioni.
+
+    `since` è del chiamante e non ha un default: «le ultime 24 ore» sarebbe una
+    politica inventata qui. Senza, `wrote_recently` è vuota e `recent_after` è
+    `null`, che è come si legge «non l'ho chiesto».
+    """
+    room, _who = await _reader(room_id, request)
+    return RoomWho(**roomview.who_is_here(room, recent_after=since or None))
+
+
+@v1.get("/rooms/{room_id}/waiting", response_model=RoomWaiting, tags=["rooms"])
+async def room_waiting(room_id: str, request: Request,
+                       mine: bool = Query(default=False, description=
+                                          "only units this caller wrote")
+                       ) -> RoomWaiting:
+    """Cosa aspetta una firma: i campi composti da un modello e non validati.
+
+    Un debito che si conta si paga; uno nascosto è una palude.
+
+    `mine=true` restringe alle unità che il chiamante ha creato o modificato —
+    la differenza fra «cosa aspetta qualcuno» e «cosa aspetta **me**». In dev
+    mode non c'è un chiamante, e allora `mine` non ha nessuno da filtrare: la
+    risposta lo dice tornando `subject: null` invece di fingere una vista
+    personale.
+
+    Non c'è una chiave `refused`, e la ragione sta nella docstring di
+    `roomview.waiting_for`: i rifiuti non sono registrati da nessuna parte, e
+    una lista sempre vuota si leggerebbe come «nessun rifiuto».
+    """
+    room, who = await _reader(room_id, request)
+    return RoomWaiting(**roomview.waiting_for(
+        room.document, subject=(who if mine else None)))
+
+
+@v1.get("/rooms/{room_id}/statistics", response_model=RoomStatistics,
+        tags=["rooms"])
+async def room_statistics(room_id: str, request: Request) -> RoomStatistics:
+    """Com'è fatto il grafo di questa stanza — e cosa gli manca.
+
+    Non «quanti siti»: quella è la domanda di un catalogo. Per tipo di nodo,
+    per epoca, per autore, per stato di validazione — e i **buchi**, che sono
+    la parte su cui si agisce.
+
+    Contato sul grafo a ogni richiesta, senza indice. Misurato sulla stanza più
+    grande del nodo (`sarmizegetusa`, 1845 nodi e 5650 archi): **2,4 ms**. Il
+    numero sta qui perché è l'argomento contro la cache.
+    """
+    room, _who = await _reader(room_id, request)
+    return RoomStatistics(**roomview.statistics(room.document))
+
+
+@v1.get("/rooms/{room_id}/operators", response_model=RoomOperators,
+        tags=["rooms"])
+async def room_operators(room_id: str, request: Request) -> RoomOperators:
+    """Chi ha scritto in questa stanza, quanto, quali campi, quando, con cosa.
+
+    In pyarchinit la stessa tabella si deduce da una colonna di testo scritta a
+    mano. Qui è una lettura di ciò che il grafo già sa, con identità che un
+    token ha verificato — la funzione si guadagna senza scrivere un modello.
+
+    Lo strumento viene da `data.origin` **se c'è**; se non c'è, `tools_unknown`
+    lo conta invece di attribuire il lavoro a un attrezzo plausibile.
+    """
+    room, _who = await _reader(room_id, request)
+    return RoomOperators(**roomview.operators(room.document))
+
+
 # ── THE REST DOOR FOR OPERATIONS ─────────────────────────────────────────────
 #
 # Not a new capability: `ws.apply_from_connector` has done the work since 9
@@ -3617,6 +3870,29 @@ app.include_router(v1)
 #: authenticates in the handshake rather than through the router dependency —
 #: a WebSocket has no place to put a 401 body, so the refusal is a close code.
 app.include_router(ws_router)
+
+
+class Reachability(BaseModel):
+    at: Optional[str] = None
+    why: str = ""
+    summary: Dict[str, int] = Field(default_factory=dict)
+    dependencies: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+@v1.post("/health/reach", response_model=Reachability, tags=["meta"])
+def knock_now() -> Reachability:
+    """Bussa adesso a ogni dipendenza dichiarata, e aggiorna la salute.
+
+    **POST e non GET**, anche se non scrive niente nel grafo: apre connessioni
+    verso MinIO e verso il realm e sostituisce l'osservazione del processo. Un
+    verbo che dice «fa qualcosa» tiene questa rotta fuori da ciò che un
+    monitoraggio interroga per abitudine — che è precisamente il ciclo che
+    martella da cui `/health` è stato tenuto lontano.
+
+    Sotto `/v1`, quindi vuole un token: bussare a costo di chi ospita è una
+    cosa da operatore, non da passante.
+    """
+    return Reachability(**knock("request").as_dict())
 
 
 @app.get("/health", response_model=Health, tags=["meta"],
