@@ -612,6 +612,29 @@ services:
       EM_SERVER_URL: "${EM_CHATBOT_SERVER_URL:-}"
       EM_CHATBOT_ROOM: "${EM_CHATBOT_ROOM:-}"
       EM_CHATBOT_TOKEN: "${EM_CHATBOT_TOKEN:-}"
+      # …oppure UN LINK SOLO al posto dei due sopra, che e' la grafia nuova:
+      # `stratigraph://open?server=<addr>&room=<id>` — «it carries a place and
+      # never a permission» (`app/handoff.py`). Vince sulle due variabili quando
+      # c'e' entrambe, perche' un link e' l'intenzione piu' recente: e' la cosa
+      # che qualcuno ti ha passato. VUOTO qui, e per la stessa ragione delle due
+      # sopra: un link senza token fa rifiutare l'avvio, e ha ragione.
+      EM_CHATBOT_HANDOFF: "${EM_CHATBOT_HANDOFF:-}"
+      # --- LA DISPENSA: dove aspettano i byte che non sono ancora saliti ------
+      # Misurato il 30 settembre, staccando MinIO con il servizio in piedi: una
+      # foto di cantiere impiega 306 s a fallire e poi non e' da nessuna parte,
+      # mentre l'US scritta un istante prima esiste. Il ponte accanto al
+      # container accoda OPERAZIONI (173 byte l'una) e una foto sono quattro
+      # megabyte: i byte hanno bisogno di un posto loro.
+      #
+      # Sotto lo STESSO volume del container e del ponte, e non altrove: le tre
+      # cose vivono la stessa vita e un nodo di cui si salva il volume si porta
+      # dietro la copia, la coda e cio' che deve ancora partire.
+      EM_ASSET_SPOOL: "/srv/chatbot-data/dispensa"
+      # `EM_ASSET_SPOOL_KEEPS=1` terrebbe la copia locale ANCHE dopo che e'
+      # salita — utile a un nodo che deve servire le immagini da solo, caro su
+      # un telefono dove il disco e' la risorsa che finisce per prima.
+      # Falso di default, e si accende sapendo quel prezzo.
+      EM_ASSET_SPOOL_KEEPS: "${EM_ASSET_SPOOL_KEEPS:-}"
       # --- LE SCHEDE che questo nodo sa servire ------------------------------
       # Una DIRECTORY, e il meccanismo e' quello: una definizione nuova compare
       # lasciandoci cadere un file, senza ricostruire il front-end e senza
