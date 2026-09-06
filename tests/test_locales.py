@@ -27,6 +27,8 @@ from __future__ import annotations
 import pathlib
 import re
 
+from tests import sorgenti
+
 _UI = pathlib.Path(__file__).resolve().parent.parent / "app"
 I18N = (_UI / "node_admin" / "i18n.js").read_text(encoding="utf-8")
 
@@ -100,8 +102,12 @@ def test_the_verb_this_SERVER_still_shows_is_the_room_s():
             "note first — the door doing four jobs is what the cut was for.")
 
 
-def test_HDT_is_a_TERM_and_reaches_every_locale_as_one():
-    """«Monuments» was the translation of a term, which the dictionary's own rule
+def test_LA_PROSA_della_porta_dice_HDT_e_non_una_traduzione():
+    """IL SOGGETTO DI QUESTA GUARDIA È LA PROSA, e va detto nel nome perché
+    nessuno la riscriva come guardia di codice: quello che deve impedire è
+    **una parola che una persona legge**, non un comportamento del programma.
+
+    «Monuments» was the translation of a term, which the dictionary's own rule
     forbids: US, DTC, HDT, ORCID do not translate. So the vestibule's door names
     HDT, and it says HDT in all six languages.
 
@@ -111,9 +117,22 @@ def test_HDT_is_a_TERM_and_reaches_every_locale_as_one():
     `test_no_domain_term_was_translated` is what stops that, and this is what
     gives it something to bite on.
     """
+    # ── QUESTA GUARDIA GUARDA LA PROSA, E LA PROSA È IL SOGGETTO ───────────
+    #
+    # Non è la classe di guardie riparate il 4 ottobre: quelle cercavano una
+    # parola nel codice e credevano di cercare un comportamento. Qui il testo È
+    # il comportamento — l'etichetta di una porta, che una persona legge — e non
+    # c'è nessuna struttura sotto da guardare al suo posto.
+    #
+    # Al confine di parola lo stesso, e per la sola ragione che il falso
+    # positivo esiste e si costruisce: un'etichetta che dicesse «Consulta —
+    # studi e HDT (già «Monumenti»)» starebbe *spiegando* il termine e non
+    # traducendolo, e la sottostringa `onument` non sa distinguerle. Con `\b`
+    # nemmeno, ma con `\b` almeno il caso resta uno solo e dichiarato invece di
+    # essere una famiglia.
     source = LOCALES["en"]["go.consult"]
     assert "HDT" in source, source
-    assert "onument" not in source.lower(), (
+    assert not sorgenti.parola("monument").search(source), (
         "«monument» is back on the door: it was the translation of a term")
     for code in EXPECTED:
         shown = LOCALES[code].get("go.consult") or source     # the fallback

@@ -22,6 +22,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app import handoff as ho  # noqa: E402
 from app.main import app  # noqa: E402
 
+from tests import sorgenti  # noqa: E402
+
 client = TestClient(app)
 
 SECRETS = ("token", "access_token", "id_token", "password", "secret", "code",
@@ -338,25 +340,49 @@ def _without_prose(source: str) -> str:
 
 def test_the_room_browser_never_writes_a_token_to_disk():
     page = (_REPO / "app" / "rooms_ui" / "rooms.js").read_text(encoding="utf-8")
-    codice = _without_prose(page)
+    # ── L'USO, NON IL NOME ─────────────────────────────────────────────────
+    #
+    # `senza_prosa` toglieva i commenti e bastava finché il nome compariva solo
+    # lì. Ma `"localStorage"` dentro un messaggio — «questa pagina non usa
+    # localStorage» detto a chi legge — è un nome, non un uso, e il 3 ottobre
+    # questa guardia è già scattata una volta su una riga che diceva il vero.
+    #
+    # `usa_oggetto` cerca l'accesso: `localStorage.` o `localStorage[`. Un nome
+    # dentro una stringa non ha quella forma.
+    #
     # E `sessionStorage` NON È IN QUESTO ELENCO, di proposito. Ci è entrato per
     # un momento il 3 ottobre e il cancello è scattato su codice che è giusto:
     # `sg.silenttry:` tiene un «1» che impedisce un giro infinito di firma
     # silenziosa, muore con la scheda, e ha il suo argomento scritto accanto.
     # Stringere una guardia finché non morde qualcosa di corretto la rende una
     # guardia che qualcuno spegnerà.
-    for sink in ("localStorage", "document.cookie", "indexedDB"):
-        assert sink not in codice, f"{sink} in the room browser"
+    codice = sorgenti.senza_prosa(page)
+    for sink in ("localStorage", "indexedDB"):
+        assert not sorgenti.usa_oggetto(codice, sink), \
+            f"{sink} in the room browser"
+    assert "document.cookie" not in codice, "document.cookie in the room browser"
 
 
 def test_that_storage_gate_still_bites():
-    """Una guardia addolcita che non morde dà lo stesso verde di una che
-    funziona. Questa è la prova che morde ancora dopo il 3 ottobre."""
-    finto = ("// il cruscotto NON usa localStorage, e questo commento lo dice\n"
-             "const x = localStorage.getItem('t');")
-    assert "localStorage" in _without_prose(finto), "il codice resta"
-    solo_prosa = "// niente localStorage qui\nconst x = 1;"
-    assert "localStorage" not in _without_prose(solo_prosa), "la prosa si toglie"
+    """Prova 1 di 2: il caso vero — un deposito usato davvero."""
+    for finto in ("const x = localStorage.getItem('t');",
+                  "localStorage['tok'] = t;",
+                  "if (indexedDB.open) {}"):
+        codice = sorgenti.senza_prosa(finto)
+        assert any(sorgenti.usa_oggetto(codice, s)
+                   for s in ("localStorage", "indexedDB")), finto
+
+
+def test_that_storage_gate_no_longer_bites_a_MENTION():
+    """Prova 2 di 2: il falso positivo — il nome in un commento e in una
+    stringa. Il primo l'ha già morso una volta, il 3 ottobre."""
+    onesti = ("// il cruscotto NON usa localStorage, e questo commento lo dice",
+              'const NOTA = "questa pagina non scrive in localStorage";',
+              "// niente indexedDB qui")
+    for finto in onesti:
+        codice = sorgenti.senza_prosa(finto)
+        assert not any(sorgenti.usa_oggetto(codice, s)
+                       for s in ("localStorage", "indexedDB")), finto
 
 
 def test_the_two_refusal_codes_are_for_two_PROTOCOLS():

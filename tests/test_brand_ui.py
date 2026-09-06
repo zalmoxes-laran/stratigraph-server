@@ -22,6 +22,8 @@ from __future__ import annotations
 import pathlib
 import re
 
+from tests import sorgenti
+
 APP = pathlib.Path(__file__).resolve().parent.parent / "app"
 BRAND = APP / "brand"
 FACES = {
@@ -46,15 +48,48 @@ def test_the_brand_is_vendored_here():
     assert (BRAND / "logo" / "favicon-deep-charcoal.svg").is_file()
 
 
+CDN = ("fonts.googleapis.com", "fonts.gstatic.com", "api.fontshare.com",
+       "cdn.fontshare.com", "cdn.jsdelivr.net", "unpkg.com")
+
+
 def test_neither_face_reaches_a_cdn():
+    """── GLI INDIRIZZI CHE IL DOCUMENTO CHIEDE, non i nomi che nomina ──
+
+    Cercava il nome dell'host in tutto il file (commenti tolti). Un nome di host
+    dentro una FRASE — «questa pagina non carica niente da fonts.googleapis.com»
+    — è una promessa, non una richiesta, e una guardia che le confonde morde chi
+    la sta mantenendo. Adesso guarda `href`, `src`, `@import` e `url()`: le
+    quattro forme con cui un documento chiede davvero qualcosa.
+    """
     for name, (page, sheet) in FACES.items():
         for path in (page, sheet):
-            source = path.read_text(encoding="utf-8")
-            code = re.sub(r"/\*.*?\*/|<!--.*?-->", "", source, flags=re.S)
-            for host in ("fonts.googleapis.com", "fonts.gstatic.com",
-                         "api.fontshare.com", "cdn.fontshare.com",
-                         "cdn.jsdelivr.net", "unpkg.com"):
-                assert host not in code, f"{name}: {path.name} reaches {host}"
+            chiesti = sorgenti.indirizzi(path.read_text(encoding="utf-8"))
+            for host in CDN:
+                colpevoli = [u for u in chiesti if host in u]
+                assert not colpevoli, \
+                    f"{name}: {path.name} reaches {host} ({colpevoli})"
+
+
+def test_LA_GUARDIA_DEL_CDN_MORDE_ANCORA():
+    """Prova 1 di 2: il caso vero, nelle quattro forme."""
+    for finto in ('<link rel="stylesheet" href="https://fonts.googleapis.com/css2?x">',
+                  '<script src="https://cdn.jsdelivr.net/npm/x"></script>',
+                  '@import url("https://fonts.googleapis.com/css2?y");',
+                  '@font-face { src: url("https://fonts.gstatic.com/s/a.woff2"); }'):
+        chiesti = sorgenti.indirizzi(finto)
+        assert any(h in u for u in chiesti for h in CDN), f"non morde: {finto}"
+
+
+def test_LA_GUARDIA_DEL_CDN_NON_MORDE_PIU_UNA_PROMESSA():
+    """Prova 2 di 2: il falso positivo — il nome dell'host in una frase, che è
+    la riga che spiega la politica invece di violarla."""
+    onesti = ('const NOTA = "non carichiamo niente da fonts.googleapis.com";',
+              '<p>Nessun carattere arriva da cdn.jsdelivr.net.</p>',
+              '/* vietato: unpkg.com */\n.x { color: red; }')
+    for finto in onesti:
+        chiesti = sorgenti.indirizzi(finto)
+        assert not [u for u in chiesti for h in CDN if h in u], \
+            f"morde ancora su: {finto} → {chiesti}"
 
 
 def test_the_theme_is_imported_RELATIVELY_so_it_survives_the_proxy():

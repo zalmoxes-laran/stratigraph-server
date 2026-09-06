@@ -43,6 +43,8 @@ _REPO = pathlib.Path(__file__).resolve().parent.parent
 
 from app import ws as ws_module                      # noqa: E402
 from app.main import app                             # noqa: E402
+
+from tests import sorgenti                           # noqa: E402
 from app.rooms import RoomRegistry                   # noqa: E402
 from app.store import DirectorySnapshotStore, InMemorySnapshotStore  # noqa: E402
 from app.wire import WIRE                             # noqa: E402
@@ -477,13 +479,53 @@ def test_7b_bis_il_rilevatore_rileva(tmp_path):
     assert "compact_section" not in codice, "…e vede ancora la prosa"
 
 
+def test_LA_GUARDIA_DEL_DISCO_MORDE_ANCORA():
+    """Prova 1 di 2: il caso vero — un modulo che apre un file davvero."""
+    for finto in ('with open("x") as f:\n    pass\n',
+                  'import pathlib\npathlib.Path("x").open()\n',
+                  'def f(p):\n    return p.open("rb")\n'):
+        assert sorgenti.chiama_python(finto, ("open",)) == {"open"}, finto
+    assert sorgenti.importa_python("import pathlib\n", ("pathlib",)) == {"pathlib"}
+    assert sorgenti.importa_python("from pathlib import Path\n",
+                                   ("pathlib",)) == {"pathlib"}
+
+
+def test_LA_GUARDIA_DEL_DISCO_NON_MORDE_PIU_UNA_MENZIONE():
+    """Prova 2 di 2: il falso positivo. `urlopen(` contiene `open(`, e una
+    docstring che nomina `pathlib` non importa `pathlib`."""
+    onesti = (
+        'import urllib.request\nurllib.request.urlopen(u)\n',
+        'from urllib.request import urlopen\nurlopen(u)\n',
+        '"""Questo modulo non usa pathlib e non chiama open()."""\n',
+        'X = "open("  # una stringa, non una chiamata\n',
+    )
+    for finto in onesti:
+        assert not sorgenti.chiama_python(finto, ("open",)), finto
+        assert not sorgenti.importa_python(finto, ("pathlib",)), finto
+
+
 def test_7c_the_durable_truth_is_an_interface_not_a_path():
     """Fence 1, as a test: the relay writes through the store abstraction, and
     never opens a file of its own."""
+    # ── E SI GUARDA L'ALBERO, NON IL TESTO ─────────────────────────────────
+    #
+    # Cercava `"open(" not in source`, e **`urlopen(` contiene `open(`**: la
+    # stessa parola che il 2 ottobre ha morso nel repo del chatbot. Qui non ha
+    # ancora morso solo perché il relay non ha mai avuto bisogno di `urlopen` —
+    # cioè per fortuna, non per costruzione.
+    #
+    # `pathlib` lo stesso: una docstring che spiegasse *perché* questo modulo
+    # non usa `pathlib` avrebbe fatto fallire la suite dicendo il contrario di
+    # quello che la riga afferma.
+    #
+    # Adesso: una CHIAMATA a `open` (la builtin o `Path(...).open()`) e un
+    # IMPORT di `pathlib`. Una menzione non è né l'una né l'altro.
     for name in ("ws.py", "rooms.py"):
         source = (_REPO / "app" / name).read_text(encoding="utf-8")
-        assert "open(" not in source, f"{name}: the relay must not touch the disk"
-        assert "pathlib" not in source or name == "store.py"
+        apre = sorgenti.chiama_python(source, ("open",))
+        assert not apre, f"{name}: the relay must not touch the disk ({apre})"
+        assert not sorgenti.importa_python(source, ("pathlib",)), \
+            f"{name}: il relay importa pathlib"
     store_source = (_REPO / "app" / "store.py").read_text(encoding="utf-8")
     assert "class MinioSnapshotStore" in store_source, \
         "the production target is named, so the swap is configuration"

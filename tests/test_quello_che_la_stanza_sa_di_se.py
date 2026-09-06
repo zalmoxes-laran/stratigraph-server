@@ -44,6 +44,8 @@ from app import ws as ws_module                            # noqa: E402
 from app.access import Acl, Role                            # noqa: E402
 from app.wire import WIRE                                   # noqa: E402
 
+from tests import sorgenti                                  # noqa: E402
+
 from tests.test_chi_ce_e_chi_non_ce_piu import (            # noqa: E402,F401
     ANNA, CARLO, ELISA, ROOM, T1, _document, _drain_join, _fino_a, _op,
     acls, client, relay, silenzio, whoever)
@@ -494,24 +496,6 @@ CSS = (_REPO / "app" / "rooms_ui" / "rooms.css").read_text(encoding="utf-8")
 I18N = (_REPO / "app" / "node_admin" / "i18n.js").read_text(encoding="utf-8")
 
 
-def _senza_prosa(source: str) -> str:
-    """Il codice senza commenti — NONA volta in questo ecosistema, e stavolta il
-    cancello è scattato **su sé stesso**: `pie` dentro «ripiego», in una riga di
-    questo stesso file che spiegava perché una comodità non è stata comprata.
-
-    Blocchi `/* */` E righe `//`: la prima versione toglieva solo le seconde, e
-    la prosa del cruscotto è quasi tutta in blocchi.
-    """
-    senza = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
-    return "\n".join(riga.split("//")[0] for riga in senza.split("\n"))
-
-
-def test_il_rilevatore_dellarredamento_morde_ancora():
-    finto = "/* niente chart qui */\nconst c = document.createElement('canvas');"
-    codice = _senza_prosa(finto).lower()
-    assert "chart" not in codice and "canvas" in codice
-
-
 def _board_block() -> str:
     inizio = SCRIPT.index("// ── IL CRUSCOTTO DELLA STANZA")
     return SCRIPT[inizio:SCRIPT.index("// ── CONDIVIDI · un luogo solo")]
@@ -550,22 +534,131 @@ def test_IL_LIMITE_STA_IN_CIMA_e_non_in_una_nota_a_pie_di_pagina():
         "il caso di chi chiede da più indietro di quanto la stanza sappia")
 
 
+#: Come si riconosce un grafico, e **non è una parola**.
+#:
+#: La prima versione cercava `canvas`, `chart`, `<svg`, `donut`, `sparkline`,
+#: `d3.` nel testo, ed è scattata su **`pie` dentro «ripiego»** — nona volta in
+#: questo ecosistema. Togliere `pie` non chiudeva niente: `chart` sta dentro
+#: `charter`, `canvas` dentro un URL, `d3.` dentro un numero di versione.
+#:
+#: Adesso si guarda **cosa il codice fa**: crea un elemento, istanzia una
+#: libreria, la importa, o scrive un `<svg` in una stringa. Sono quattro forme
+#: che una parola dentro un'altra parola non può assumere.
+DISEGNA = (
+    ("crea un <canvas>", lambda c: sorgenti.crea_elemento(c, "canvas")),
+    ("crea un <svg>", lambda c: sorgenti.crea_elemento(c, "svg")),
+    ("scrive un <svg> in una stringa",
+     lambda c: sorgenti.markup_letterale(c, "svg")),
+    ("istanzia Chart", lambda c: sorgenti.costruisce(c, "Chart")),
+    ("istanzia ApexCharts", lambda c: sorgenti.costruisce(c, "ApexCharts")),
+    ("importa una libreria di grafici",
+     lambda c: any(sorgenti.importa_js(c, n)
+                   for n in ("chart", "d3", "plotly", "echarts", "apexcharts"))),
+    ("usa d3", lambda c: sorgenti.usa_oggetto(c, "d3")),
+)
+
+
 def test_NESSUN_GRAFICO():
     """Il controesempio misurato: dieci tessere di cui otto a zero, una torta
     divisa a metà fra due regioni (n=2), un istogramma di due barre alte 1. Con
-    n=2 un grafico è arredamento, e queste stanze hanno spesso n=2."""
-    codice = _senza_prosa(_board_block()).lower()
-    for arredo in ("canvas", "chart", "<svg", "donut", "sparkline", "d3."):
-        assert arredo not in codice, f"il cruscotto disegna un {arredo}"
+    n=2 un grafico è arredamento, e queste stanze hanno spesso n=2.
+
+    **Cerca nel programma e non nel testo** — vedi `DISEGNA` qui sopra.
+    """
+    codice = sorgenti.senza_prosa(_board_block())
+    disegna = [nome for nome, guarda in DISEGNA if guarda(codice)]
+    assert not disegna, f"il cruscotto {', '.join(disegna)}"
+
+
+def test_LA_GUARDIA_DEI_GRAFICI_MORDE_ANCORA():
+    """Prova 1 di 2: il caso vero, quello per cui era stata scritta."""
+    for finto, atteso in (
+            ('const c = document.createElement("canvas");', "crea un <canvas>"),
+            ('host.innerHTML = "<svg viewBox=\'0 0 8 8\'></svg>";',
+             "scrive un <svg> in una stringa"),
+            ('const g = new Chart(ctx, {type: "pie"});', "istanzia Chart"),
+            ('import * as d3 from "d3";', "importa una libreria di grafici"),
+            ('d3.select("#x").append("g");', "usa d3"),
+    ):
+        disegna = [nome for nome, guarda in DISEGNA if guarda(finto)]
+        assert atteso in disegna, f"non morde su: {finto}"
+
+
+def test_LA_GUARDIA_DEI_GRAFICI_NON_MORDE_PIU_LA_PROSA():
+    """Prova 2 di 2: il falso positivo che prima la faceva scattare.
+
+    `ripiego` è il caso vero — è la parola che l'ha fatta scattare il 3 ottobre,
+    in una riga che spiegava perché una comodità non era stata comprata — e gli
+    altri tre sono la stessa classe con parole diverse.
+    """
+    onesti = [
+        "// non è un ripiego: il server già lo sa",
+        "const NOTA = 'la charter del progetto dice di no';",
+        'const LOGO = "https://x.example/canvas-logo.png";',
+        "// visto con d3.js e scartato, vedi il referto",
+        "const versione = 'libreria 1.d3.0';",
+    ]
+    for riga in onesti:
+        codice = sorgenti.senza_prosa(riga)
+        disegna = [nome for nome, guarda in DISEGNA if guarda(codice)]
+        assert not disegna, f"morde ancora su una riga onesta: {riga} → {disegna}"
+
+
+def test_E_RIPIEGO_STA_DAVVERO_NEL_CODICE_e_la_guardia_tace():
+    """Il caso che ha aperto il micro, sul file vero e non su un finto: la
+    parola `ripiego` è nel cruscotto, in una riga di prosa che spiega una
+    decisione, e la guardia non dice niente."""
+    assert "ripiego" in _board_block(), (
+        "la riga che ha aperto questo micro è stata tolta: rimettila o togli "
+        "questo test, ma non lasciarlo verde su un caso che non esiste più")
+    codice = sorgenti.senza_prosa(_board_block())
+    assert not [nome for nome, guarda in DISEGNA if guarda(codice)]
 
 
 def test_IL_TELEFONO_ha_la_sua_regola_e_non_nasconde_niente():
     """«La superficie si adatta, il substrato no.» Nascondere un buco su uno
     schermo piccolo sarebbe esattamente il difetto che questo cruscotto esiste
     per non avere."""
-    assert "@media (max-width: 40rem)" in CSS
-    stretto = CSS[CSS.index("@media (max-width: 40rem)"):]
-    assert "display: none" not in stretto, "una riga sparisce sul telefono"
+    # ── IL BLOCCO, CONTATO A GRAFFE ────────────────────────────────────────
+    #
+    # Era `CSS[CSS.index("@media …"):]`, cioè **fino alla fine del file**: una
+    # regola scritta dopo quel blocco, o un commento che nomina `display: none`,
+    # finivano dentro una guardia che credeva di guardare un blocco solo. E il
+    # blocco è l'ultimo del file, quindi passava per posizione.
+    #
+    # E `dichiara` cerca la DICHIARAZIONE, non le due parole: `display:none`,
+    # `display : none` e `display:  none !important` sono la stessa cosa, e
+    # «niente display: none qui» in un commento non lo è.
+    stretto = sorgenti.blocco_css(CSS, "@media (max-width: 40rem)")
+    assert stretto, "il blocco del telefono non c'è più"
+    assert not sorgenti.dichiara(stretto, "display", "none"), \
+        "una riga sparisce sul telefono"
+
+
+def test_LA_GUARDIA_DEL_TELEFONO_MORDE_ANCORA():
+    """Prova 1 di 2: il caso vero — una riga nascosta sotto i 40rem."""
+    finto = ("@media (max-width: 40rem) {\n"
+             "  .share-note { display: none; }\n}\n")
+    dentro = sorgenti.blocco_css(finto, "@media (max-width: 40rem)")
+    assert sorgenti.dichiara(dentro, "display", "none")
+    for grafia in ("display:none", "display : none", "display:  none !important"):
+        assert sorgenti.dichiara(f".x {{ {grafia}; }}", "display", "none"), grafia
+
+
+def test_LA_GUARDIA_DEL_TELEFONO_NON_GUARDA_PIU_TUTTO_IL_FILE():
+    """Prova 2 di 2: i due falsi positivi.
+
+    Un commento dentro il blocco, e una regola **dopo** il blocco — che con la
+    fetta fino a fine file era indistinguibile da una regola dentro."""
+    finto = ("@media (max-width: 40rem) {\n"
+             "  /* qui non si usa display: none: nascondere un buco sarebbe */\n"
+             "  .share-row { flex-direction: column; }\n"
+             "}\n"
+             "@media print { .bar { display: none; } }\n")
+    dentro = sorgenti.blocco_css(finto, "@media (max-width: 40rem)")
+    assert "flex-direction" in dentro, "il blocco giusto"
+    assert "print" not in dentro, "e si ferma alla sua graffa"
+    assert not sorgenti.dichiara(dentro, "display", "none")
 
 
 def test_ZERO_COLORI_LETTERALI():

@@ -44,6 +44,8 @@ WORK = (_APP / "rooms_ui" / "work" / "index.html").read_text(encoding="utf-8")
 SCRIPT = (_APP / "rooms_ui" / "rooms.js").read_text(encoding="utf-8")
 I18N = (_APP / "node_admin" / "i18n.js").read_text(encoding="utf-8")
 
+from tests import sorgenti  # noqa: E402
+
 #: The words that would mean layer 3 or 4 had leaked into layer 1. Both
 #: languages the dictionary completes, plus the ones a translator would reach
 #: for — the four empty locales fall back to English, so English is the gate.
@@ -99,13 +101,59 @@ def test_NO_STRING_ON_THIS_SURFACE_NAMES_AUTHORSHIP():
 def test_NO_MARKUP_OR_CODE_ON_THIS_SURFACE_NAMES_AUTHORSHIP():
     """…and not in an id, a placeholder or a comment either: a field named
     `share-authors` would be the decision made in a variable name."""
+    # ── AL CONFINE DI PAROLA, e il perché ci si ferma lì ───────────────────
+    #
+    # Questa guardia guarda **le parole**, ed è giusto che lo faccia: quello che
+    # deve impedire è che questa superficie NOMINI l'autorialità — in una
+    # etichetta, in un id, in un nome di variabile. Non c'è una struttura da
+    # guardare, perché il difetto è precisamente il nome.
+    #
+    # Ma cercava una sottostringa, e in questo stesso file `Authorization` sta a
+    # tre righe dal blocco recintato (`rooms.js:97`, l'intestazione del bearer).
+    # Passava per FORTUNA: la fetta comincia dopo. Un giorno la fetta si sposta
+    # di dieci righe e la suite dice che il pannello firma le pubblicazioni.
+    #
+    # `\bauthor\b` non tocca `Authorization`, `\bcredit\b` non tocca
+    # `accreditato`. È il minimo sindacale — non distingue un identificatore da
+    # una parola in una stringa — e per questa guardia il minimo è la cosa
+    # giusta, perché una parola in una stringa È il difetto.
     panel = WORK[WORK.index('id="zone-share"'):]
     panel = panel[:panel.index("</section>")]
     for word in AUTHORSHIP:
-        assert word not in panel.lower(), f"the markup names «{word}»"
-    code = re.sub(r"//[^\n]*", "", _share_block())
+        assert not sorgenti.parola(word).search(panel), \
+            f"the markup names «{word}»"
+    code = sorgenti.senza_prosa(_share_block())
     for word in ("author", "autore", "byline", "credit", "contributor"):
-        assert word not in code.lower(), f"the panel's code names «{word}»"
+        assert not sorgenti.parola(word).search(code), \
+            f"the panel's code names «{word}»"
+
+
+def test_LA_GUARDIA_DELLAUTORIALITA_MORDE_ANCORA():
+    """Prova 1 di 2: il caso vero — un nome che decide, in un id o in una
+    variabile."""
+    for finto in ('<div id="share-authors"></div>',
+                  "const authors = roster.members.map(m => m.orcid);",
+                  '<label>Autore principale</label>',
+                  "// chi firma: byline",
+                  "const credit = 'direzione scientifica';"):
+        morde = [w for w in ("author", "autore", "byline", "credit",
+                             "contributor")
+                 if sorgenti.parola(w).search(finto)]
+        assert morde, f"non morde su: {finto}"
+
+
+def test_LA_GUARDIA_DELLAUTORIALITA_NON_MORDE_PIU_UNA_PAROLA_DENTRO_UNALTRA():
+    """Prova 2 di 2: il falso positivo, ed è nel file vero a tre righe dal
+    recinto."""
+    onesti = ("headers: { Authorization: `Bearer ${token}` }",
+              "authConfig.authorization_endpoint",
+              "const chi = 'utente accreditato';",
+              "await oidc.authorize(cfg);")
+    for finto in onesti:
+        morde = [w for w in ("author", "autore", "byline", "credit",
+                             "contributor")
+                 if sorgenti.parola(w).search(finto)]
+        assert not morde, f"morde ancora su: {finto} → {morde}"
 
 
 def test_the_panel_does_not_read_the_ACL_TO_SUGGEST_ANYTHING_BUT_ACCESS():
