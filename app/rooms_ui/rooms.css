@@ -303,3 +303,38 @@
 .share-verb:hover { border-color: var(--sg-muted); }
 .share-open { color: var(--sg-info-ink); text-decoration: none; font-size: .86em; }
 .share-open:hover { text-decoration: underline; }
+
+/* ── IL CRUSCOTTO DELLA STANZA ────────────────────────────────────────────────
+   «Un numero senza il suo buco accanto invita a guardare il numero», quindi il
+   buco sta NELLA STESSA RIGA e con un colore che lo distingue — `--sg-warn`, il
+   ruolo che il tema dichiara per «serve una persona». Non un rosso: un buco non
+   è un errore, è un lavoro da fare.
+
+   E NESSUN GRAFICO. Il controesempio è misurato: dieci tessere di cui otto a
+   zero, una torta divisa a metà fra due regioni, un istogramma di due barre alte
+   1. Con n=2 un grafico è arredamento, e queste stanze hanno spesso n=2.
+
+   OGNI COLORE È UN RUOLO del tema. Non c'è un esadecimale qui e non ce ne deve
+   essere: se manca un ruolo, si riporta. */
+.pair { align-items: baseline; }
+.pair-hole { color: var(--sg-warn); font-size: .86em; }
+/* Chi non c'è più: la riga resta leggibile e smette di chiedere attenzione.
+   Toglierla sarebbe perdere l'unica differenza fra «ha chiuso» e «è caduta la
+   rete», che è il fatto su cui qualcuno decide se aspettare. */
+.share-row.gone { opacity: .72; }
+/* IL DEBITO DI SPECIE PEGGIORE — un'affermazione che può smettere di esistere,
+   non una che aspetta una firma. Un bordo e non un fondo pieno: deve saltare
+   all'occhio in una tenda con il sole, non gridare in una stanza al chiuso. */
+.share-row.risk { border-left: 3px solid var(--sg-warn); }
+
+/* IL TELEFONO. La superficie si adatta, il substrato no: sotto i 40rem una riga
+   che era orizzontale diventa un blocco, perché il pollice legge in colonna e
+   un numero mandato a capo a metà non si legge affatto. Nessuna riga sparisce —
+   nascondere un buco su uno schermo piccolo sarebbe esattamente il difetto che
+   questo cruscotto esiste per non avere. */
+@media (max-width: 40rem) {
+  .share-row { flex-direction: column; align-items: flex-start; gap: .15rem; }
+  .share-verb { margin-left: 0; }
+  #board-since-row { flex-direction: column; align-items: stretch; }
+  #board-since { width: 100%; }
+}

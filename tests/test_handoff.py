@@ -313,10 +313,50 @@ def test_both_faces_are_served_and_there_is_ONE_pkce_module():
         "a second copy of the PKCE module is a second thing to keep right"
 
 
+def _without_prose(source: str) -> str:
+    """Il codice senza commenti — OTTAVA volta che serve in questo ecosistema.
+
+    Il cancello qui sotto è scattato il 3 ottobre **sul commento che spiega
+    perché il cruscotto NON usa `localStorage`**. È la stessa forma di `anno`
+    dentro «cannot», `white` dentro `--sg-off-white`, `area` in una frase
+    italiana, `gc_watermark` e `compact_section` in due docstring, `d{1,5}` in
+    un commento, `open(` dentro `urlopen(`: **un cancello che guarda il testo
+    invece del codice morde chi lo documenta.**
+
+    E il commento vale più della scorciatoia di riscriverlo: dice perché quella
+    comodità non è stata comprata, che è precisamente l'informazione che una
+    modifica futura ha bisogno di leggere prima di comprarla.
+
+    Grezzo di proposito — `//` e `/* */`, niente parser. Il caso che
+    sbaglierebbe (uno `//` dentro una stringa) non contiene mai un deposito.
+    """
+    import re
+
+    senza = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
+    return "\n".join(riga.split("//")[0] for riga in senza.split("\n"))
+
+
 def test_the_room_browser_never_writes_a_token_to_disk():
     page = (_REPO / "app" / "rooms_ui" / "rooms.js").read_text(encoding="utf-8")
+    codice = _without_prose(page)
+    # E `sessionStorage` NON È IN QUESTO ELENCO, di proposito. Ci è entrato per
+    # un momento il 3 ottobre e il cancello è scattato su codice che è giusto:
+    # `sg.silenttry:` tiene un «1» che impedisce un giro infinito di firma
+    # silenziosa, muore con la scheda, e ha il suo argomento scritto accanto.
+    # Stringere una guardia finché non morde qualcosa di corretto la rende una
+    # guardia che qualcuno spegnerà.
     for sink in ("localStorage", "document.cookie", "indexedDB"):
-        assert sink not in page, f"{sink} in the room browser"
+        assert sink not in codice, f"{sink} in the room browser"
+
+
+def test_that_storage_gate_still_bites():
+    """Una guardia addolcita che non morde dà lo stesso verde di una che
+    funziona. Questa è la prova che morde ancora dopo il 3 ottobre."""
+    finto = ("// il cruscotto NON usa localStorage, e questo commento lo dice\n"
+             "const x = localStorage.getItem('t');")
+    assert "localStorage" in _without_prose(finto), "il codice resta"
+    solo_prosa = "// niente localStorage qui\nconst x = 1;"
+    assert "localStorage" not in _without_prose(solo_prosa), "la prosa si toglie"
 
 
 def test_the_two_refusal_codes_are_for_two_PROTOCOLS():

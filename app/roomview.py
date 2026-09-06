@@ -11,12 +11,18 @@ Le domande vere sono quattro, e questo modulo le risponde:
 * **com'è fatto quello che abbiamo** — `statistics`
 * **chi ha scritto qui** — `operators`
 
-La quinta, «cosa è cambiato da quando non guardavo», **non è qui**, e la ragione
-è misurata in `tests/test_il_registro_della_stanza.py`: il registro delle
-operazioni della stanza vive solo in memoria, un'operazione arrivata dal socket
-non viene nemmeno persistita, e una stanza dimenticata e ricostruita — cioè un
-riavvio — perde entrambi. Costruire quella risposta su questo registro
-significherebbe promettere una memoria che non c'è.
+* **cosa è cambiato da quando non guardavo** — `changes_since`
+
+La quinta è arrivata il 3 ottobre, e per tre settimane **non era qui** con una
+ragione che vale la pena tenere scritta: il registro delle operazioni viveva
+solo in memoria, tagliato a 512, e una stanza dimenticata e ricostruita — cioè
+un riavvio — lo perdeva. Costruire quella risposta su quel registro avrebbe
+promesso una memoria che non c'era.
+
+Dal 28 settembre il registro **dura** (`app/oplog.py`, diecimila operazioni per
+stanza, su disco accanto allo snapshot) e la domanda si può fare. Con il suo
+confine detto: `readable_from` è fin dove la stanza sa guardare indietro, e una
+risposta che non ci arriva **lo dichiara** invece di sembrare completa.
 
 ════════════════════════════════════════════════════════════════════════════════
 ## COSA QUESTO MODULO NON FA
@@ -447,7 +453,7 @@ def statistics(document: Dict[str, Any]) -> Dict[str, Any]:
                      for eid, members in sorted(in_epoch.items())],
         "by_author": dict(authors.most_common()),
         "validation": _validation(all_nodes),
-        "holes": _holes(units, connected, dated, bool(epochs)),
+        "holes": _holes(all_nodes, units, connected, dated, bool(epochs)),
     }
 
 
@@ -467,15 +473,26 @@ def _validation(all_nodes: List[Dict[str, Any]]) -> Dict[str, Any]:
             "ai_waiting": counts["ai_waiting"]}
 
 
-def _holes(units: List[Dict[str, Any]], connected: set, dated: set,
-           any_epoch: bool) -> Dict[str, Any]:
+def _holes(all_nodes: List[Dict[str, Any]], units: List[Dict[str, Any]],
+           connected: set, dated: set, any_epoch: bool) -> Dict[str, Any]:
     """I lavori da fare. Ogni buco porta **gli id**, non solo il numero: un
     conteggio senza i nomi è una colpa senza un'azione."""
     alone = [str(n.get("id")) for n in units
              if str(n.get("id")) not in connected]
     undated = [str(n.get("id")) for n in units
                if str(n.get("id")) not in dated]
+    # IL BUCO DI `by_author`, e sta QUI e non nella pagina che lo mostra. La
+    # legge di questa risposta è che il numero e il suo buco viaggiano insieme;
+    # un cruscotto che calcolasse «nodi meno la somma degli autori» starebbe
+    # inventando un numero che nessuno può ricondurre a un conteggio sul grafo.
+    #
+    # Contato su TUTTI i nodi e non solo sulle unità, perché è la stessa base su
+    # cui è contato `by_author`: due numeri che si guardano devono guardare la
+    # stessa cosa, sennò la sottrazione a mano non torna.
+    unsigned = [str(n.get("id")) for n in all_nodes
+                if not _data(n).get("created_by")]
     return {
+        "nodes_without_author": {"count": len(unsigned), "ids": unsigned[:50]},
         "units_without_relations": {"count": len(alone), "ids": alone[:50]},
         # Se la stanza non ha NESSUNA epoca, «tutte le unità sono senza epoca»
         # è vero e inutile: il lavoro da fare è periodizzare, e si dice così.
@@ -557,3 +574,177 @@ def operators(document: Dict[str, Any]) -> Dict[str, Any]:
         listing.append(dict(entry, tools=tools))
     listing.sort(key=lambda e: (-(e["created"] + e["modified"]), e["author"]))
     return {"operators": listing, "counts": {"people": len(listing)}}
+
+
+# ── §2.6 · cosa è cambiato da quando non guardavo ───────────────────────────
+
+#: I verbi che il registro può contenere, con la parola che una persona legge.
+#: Dichiarati invece che dedotti dal nome: `update_field` letto così com'è dice
+#: a un programmatore cosa è successo e a chi scava non dice niente.
+VERBS = {
+    "add_node": "creata",
+    "update_field": "corretta",
+    "add_edge": "collegata",
+    "remove_edge": "scollegata",
+    "remove_node": "rimossa",
+}
+
+
+def _touched(op: Dict[str, Any]) -> Optional[str]:
+    """Su quale nodo ha agito questa operazione.
+
+    Tre grafie perché tre sono i verbi: `add_node` porta `id`, `update_field`
+    porta `node_id`, un arco porta `source` e `target` e quello che conta per
+    chi legge è **da dove parte** — «la 12 è stata collegata» è la frase che
+    qualcuno rilegge, non «esiste un arco 12→7».
+    """
+    for key in ("node_id", "id", "source"):
+        value = op.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def changes_since(room: Any, since: Optional[str], *,
+                  limit: int = 200) -> Dict[str, Any]:
+    """Cosa è successo in questa stanza dopo `since`, **letto e non rigiocato**.
+
+    ════════════════════════════════════════════════════════════════════════════
+    ## LA DOMANDA CHE FINO A TRE NOTTI FA NON SI POTEVA FARE
+
+    La testa di questo modulo diceva che questa quinta domanda non stava qui, e
+    la ragione era giusta: il registro viveva in memoria, tagliato a 512, e si
+    azzerava a ogni riavvio. Costruirci sopra un cursore avrebbe promesso una
+    memoria che non c'era.
+
+    Dal 28 settembre il registro **dura** (`app/oplog.py`): diecimila operazioni
+    per stanza, su disco, accanto allo snapshot. Quindi la domanda si può fare —
+    e si fa **sul registro** e non sul documento, che è l'altra metà della
+    ragione: il documento dice com'è adesso, non cosa è successo.
+
+    ## E IL LIMITE SI MOSTRA, NON SI NASCONDE
+
+    `readable_from` è il `ts` più vecchio che il registro tiene ancora. Un
+    cursore più vecchio di quello **non si può servire per intero**, e la
+    risposta lo dice invece di dare un elenco corto che sembra completo:
+
+        complete: false      →  «oltre questo punto non so più»
+
+    Una dashboard che mostrasse «tre unità nuove» senza dire che oltre quel
+    punto non sa più starebbe dichiarando una memoria che non ha, e sarebbe la
+    stessa famiglia di difetti di `ws.py:387`.
+
+    ## OGNI NUMERO SI PUÒ RIFARE A MANO
+
+    `operations` è `len(read_since(since))`; `by_author` e `by_verb` sono due
+    `Counter` sulle stesse righe; `units` raggruppa per nodo toccato. Chi vuole
+    controllare apre il registro della stanza e conta le righe con `ts > since`
+    — non c'è nessun indice, nessuna cache e nessun numero che venga da
+    un'altra parte.
+    """
+    reaches = room.replay_reaches()
+    compacted = getattr(room, "compacted_upto", None)
+    replayable = reaches
+    if compacted and (not replayable or compacted > replayable):
+        replayable = compacted
+
+    fuori: Dict[str, Any] = {
+        "since": since or None,
+        # LE DUE PAROLE, le stesse del filo: una si può applicare, l'altra si
+        # può solo raccontare, e questa funzione racconta.
+        "readable_from": reaches,
+        "replayable_from": replayable,
+        "durable": room.journal is not None,
+        "operations": 0,
+        "by_author": {},
+        "by_verb": {},
+        "units": [],
+        "oldest": None,
+        "newest": None,
+        "complete": True,
+        #: PERCHÉ non è completa: `pruned` (buttate) o `began` (mai avute).
+        "horizon": None,
+        "truncated": False,
+    }
+    if not since:
+        # Nessun cursore: non è una domanda malformata, è la prima volta che
+        # qualcuno guarda. Si risponde con i confini, che è l'unica cosa vera —
+        # «tutto» sarebbe il documento, e il documento non è una notizia.
+        fuori["complete"] = False
+        return fuori
+
+    # IL CONFINE, PRIMA DI CONTARE. Se il cursore è più vecchio di quel che il
+    # registro tiene, quello che si conta è un pezzo — e dirlo dopo aver dato i
+    # numeri sarebbe darli e poi ritirarli.
+    #
+    # E **due ragioni diverse**, perché sono due frasi diverse per chi legge:
+    #
+    #   `pruned`  il registro è al suo tetto: righe più vecchie ci sono state e
+    #             sono state buttate. «Non te lo posso più dire.»
+    #   `began`   il registro comincia lì ed è sotto il tetto: non ha buttato
+    #             niente. Prima di quel punto questo server **non sa** se sia
+    #             successo qualcosa — la stanza può essere più vecchia del suo
+    #             registro (i registri esistono dal 28 settembre).
+    #
+    # Appiattirle in un «incompleto» direbbe «ho dimenticato» anche quando la
+    # verità è «non ho mai saputo», e sono due cose che si riparano in modi
+    # diversi.
+    if reaches and since < reaches:
+        fuori["complete"] = False
+        pieno = (room.journal is not None
+                 and len(room.journal) >= room.journal.keep)
+        fuori["horizon"] = "pruned" if pieno else "began"
+
+    righe = room.read_since(since)
+    autori = collections.Counter()
+    verbi = collections.Counter()
+    per_nodo: Dict[str, Dict[str, Any]] = {}
+    for op in righe:
+        ts = str(op.get("ts") or "")
+        if ts:
+            if fuori["oldest"] is None or ts < fuori["oldest"]:
+                fuori["oldest"] = ts
+            if fuori["newest"] is None or ts > fuori["newest"]:
+                fuori["newest"] = ts
+        chi = str(op.get("author") or "")
+        if chi:
+            autori[chi] += 1
+        verbo = str(op.get("op") or "?")
+        verbi[verbo] += 1
+        nodo = _touched(op)
+        if not nodo:
+            continue
+        riga = per_nodo.setdefault(nodo, {
+            "id": nodo, "operations": 0, "verbs": collections.Counter(),
+            "authors": set(), "first_at": ts or None, "last_at": ts or None})
+        riga["operations"] += 1
+        riga["verbs"][verbo] += 1
+        if chi:
+            riga["authors"].add(chi)
+        if ts:
+            if not riga["first_at"] or ts < riga["first_at"]:
+                riga["first_at"] = ts
+            if not riga["last_at"] or ts > riga["last_at"]:
+                riga["last_at"] = ts
+
+    fuori["operations"] = len(righe)
+    fuori["by_author"] = dict(autori.most_common())
+    fuori["by_verb"] = dict(verbi.most_common())
+
+    unita = sorted(per_nodo.values(), key=lambda r: r["last_at"] or "",
+                   reverse=True)
+    fuori["truncated"] = len(unita) > limit
+    fuori["units"] = [{
+        "id": riga["id"],
+        "operations": riga["operations"],
+        # LE PAROLE E NON I VERBI DEL PROTOCOLLO: «creata, corretta ×3» è quello
+        # che qualcuno rilegge; `add_node, update_field` è quello che qualcuno
+        # deve tradurre. Un verbo che questo elenco non conosce passa com'è —
+        # inventargli un nome sarebbe peggio del gergo.
+        "what": [{"verb": v, "said": VERBS.get(v, v), "times": n}
+                 for v, n in riga["verbs"].most_common()],
+        "authors": sorted(riga["authors"]),
+        "first_at": riga["first_at"],
+        "last_at": riga["last_at"],
+    } for riga in unita[:limit]]
+    return fuori

@@ -426,6 +426,307 @@ function renderDestinations() {
   host.replaceChildren(...doors.map(destinationCard));
 }
 
+// ── IL CRUSCOTTO DELLA STANZA ────────────────────────────────────────────────
+//
+// La legge, che non è di stile: «le statistiche di una stanza sono un elenco di
+// lavori da fare travestito da numeri» (`roomview.py:392`). Ogni numero qui ha
+// il suo buco NELLA STESSA RIGA.
+//
+// E la regola che tiene questa superficie onesta: **la pagina compone, non
+// calcola.** Ogni conteggio arriva da una rotta che lo ha contato sul grafo o
+// sul registro (`/statistics`, `/waiting`, `/who`, `/operators`, `/changes`).
+// Un numero nato qui sarebbe un numero che nessuno può rifare a mano — e
+// «un conteggio che nessuno può rifare a mano è un'opinione con un carattere
+// monospaziato».
+
+/** Da quando guardare — e la prima finestra è **il mio ultimo intervento**.
+ *
+ *  ══════════════════════════════════════════════════════════════════════════
+ *  PERCHÉ NON «DALL'ULTIMA VOLTA CHE HO GUARDATO»
+ *
+ *  Sarebbe la finestra più naturale, e vorrebbe una memoria per dispositivo —
+ *  cioè `localStorage`. Questa pagina non ne ha, e non per svista:
+ *  `test_the_room_browser_never_writes_a_token_to_disk` vieta ogni deposito
+ *  **senza distinguere cosa ci si mette**, e quella durezza è il suo valore.
+ *  Un cancello che dicesse «niente token, ma un cursore sì» sarebbe un
+ *  giudizio, e un giudizio in un cancello è la cosa che una modifica futura
+ *  interpreta a modo suo. Allargarlo per comprare una comodità è un cattivo
+ *  scambio, e questo commento è il prezzo dichiarato.
+ *
+ *  E la sostituzione è **migliore**, non un ripiego: «da quando ho scritto
+ *  l'ultima volta qui» è un fatto che il server già sa (`/operators`, il mio
+ *  `last_at`) — verificato, condiviso fra i miei dispositivi, e più vicino
+ *  alla domanda vera, che è «cosa è successo da quando ho lasciato».
+ *
+ *  Il costo, detto: chi non ha mai scritto in questa stanza non ha quella
+ *  finestra, e legge le tre a tempo.
+ */
+function sinceChoices(mineAt) {
+  const now = Date.now();
+  const iso = (ms) => new Date(now - ms).toISOString().replace(/\.\d+Z$/, "Z");
+  const out = [];
+  if (mineAt) out.push({ value: mineAt, label: t("board.since.mine") });
+  out.push({ value: iso(3600e3), label: t("board.since.hour") });
+  out.push({ value: iso(86400e3), label: t("board.since.day") });
+  out.push({ value: iso(7 * 86400e3), label: t("board.since.week") });
+  return out;
+}
+
+function boardRow(label, notes = [], extra = "") {
+  const row = el("div", "share-row" + (extra ? " " + extra : ""));
+  row.append(el("span", "share-label", label));
+  for (const n of notes) if (n) row.append(el("span", "share-note", n));
+  return row;
+}
+
+/** UN NUMERO E IL SUO BUCO, in una riga.
+ *
+ *  `hole` a `null` non è una dimenticanza ed è il caso che questa firma rende
+ *  esplicito: alcuni numeri non hanno un buco, e la riga lo DICE invece di
+ *  lasciare uno spazio bianco che sembra uno zero. */
+function pairRow(label, count, hole) {
+  const row = el("div", "share-row pair");
+  row.append(el("span", "share-label", `${count} · ${label}`));
+  if (hole && hole.count > 0) {
+    const said = el("span", "pair-hole", hole.said);
+    row.append(said);
+    if (hole.ids && hole.ids.length) {
+      row.append(el("span", "share-note", hole.ids.slice(0, 6).join(" ")
+        + (hole.count > hole.ids.slice(0, 6).length ? " …" : "")));
+    }
+  } else if (hole) {
+    row.append(el("span", "share-note", t("board.hole.none")));
+  } else {
+    // IL PERCHÉ, e non il silenzio: un numero senza buco con una riga vuota
+    // accanto si legge come un buco a zero.
+    row.append(el("span", "share-note", t("board.hole.na")));
+  }
+  return row;
+}
+
+// ── chi c'è ──────────────────────────────────────────────────────────────────
+
+function renderBoardWho(host, who) {
+  const rows = [];
+  for (const m of who.seated || []) {
+    const notes = [];
+    // I TRE STATI, e il secondo con il suo tempo: «tace da tre minuti» è un
+    // fatto su cui si agisce, un pallino verde no.
+    // «SILENZIOSO DA 00:00» NON SI LEGGE. `silent_for` è `HH:MM` — la grafia
+    // giusta per i minuti, e sotto il minuto dice «zero», che sullo schermo si
+    // legge «non è silenzioso». Il secondo campo c'è apposta: `silent_for_seconds`.
+    notes.push(m.state === "quiet"
+      ? t("board.who.quiet", {
+          for: (m.silent_for_seconds || 0) < 60
+            ? t("board.who.justQuiet") : (m.silent_for || "?") })
+      : t("board.who.in"));
+    notes.push(m.can_write ? t("board.who.writes") : t("board.who.reads"));
+    if (m.role) notes.push(m.role);
+    rows.push(boardRow(m.author || m.display || m.id, notes));
+  }
+  for (const m of who.left || []) {
+    rows.push(boardRow(m.author || m.display || "?", [
+      // «HA CHIUSO» E «LA RETE HA CEDUTO» SONO DUE USCITE. Il registro dei tre
+      // stati le distingue con `was_quiet`, e appiattirle qui butterebbe via
+      // la sola cosa che quel campo esiste per dire.
+      m.was_quiet ? t("board.who.lost") : t("board.who.left"),
+      m.left_at || ""], "gone"));
+  }
+  if (!rows.length) rows.push(el("p", "note", t("board.who.nobody")));
+  host.replaceChildren(...rows);
+}
+
+// ── cosa aspetta me ──────────────────────────────────────────────────────────
+
+function renderBoardWaiting(host, waiting) {
+  const rows = [];
+  const unsaved = waiting.unsaved || {};
+  // IL DEBITO DI SPECIE PEGGIORE, PER PRIMO. Un campo non validato è
+  // un'affermazione di cui nessuno risponde ancora; un documento non salvato è
+  // un'affermazione che può smettere di esistere.
+  if (unsaved.operations) {
+    rows.push(boardRow(t("board.unsaved", { n: unsaved.operations }),
+                       [unsaved.since || ""], "risk"));
+  }
+  for (const unit of waiting.units || []) {
+    const fields = (unit.fields || []).map((f) => f.field || f).join(", ");
+    rows.push(boardRow(unit.id || "?", [
+      t("board.waiting.fields", { n: (unit.fields || []).length }),
+      fields, unit.oldest || ""]));
+  }
+  if (!rows.length) rows.push(el("p", "note", t("board.waiting.none")));
+  host.replaceChildren(...rows);
+}
+
+// ── cosa è cambiato ──────────────────────────────────────────────────────────
+
+//: Quante unità toccate si disegnano. Duecento righe sono una parete, e una
+//: parete non è un elenco di lavori da fare: è la stessa forma del cruscotto
+//: che non si guarda. Le altre si contano e si dicono — il numero resta vero,
+//: quello che si taglia è lo scorrimento.
+const CHANGES_SHOWN = 20;
+
+function renderBoardChanges(host, changes) {
+  const rows = [];
+  const tutte = changes.units || [];
+  for (const unit of tutte.slice(0, CHANGES_SHOWN)) {
+    const what = (unit.what || [])
+      .map((w) => w.times > 1 ? `${w.said} ×${w.times}` : w.said).join(", ");
+    rows.push(boardRow(unit.id, [what, (unit.authors || []).join(" "),
+                                 unit.last_at || ""]));
+  }
+  if (!rows.length) {
+    rows.push(el("p", "note", changes.since
+      ? t("board.changes.none") : t("board.changes.never")));
+  }
+  const oltre = tutte.length - Math.min(tutte.length, CHANGES_SHOWN);
+  if (oltre > 0 || changes.truncated) {
+    rows.push(el("p", "note", t("board.changes.more",
+                                { n: oltre + (changes.truncated ? "+" : "") })));
+  }
+  host.replaceChildren(...rows);
+}
+
+/** FIN DOVE LA STANZA SA GUARDARE INDIETRO, in cima e non in fondo.
+ *
+ *  Una dashboard che mostra «tre unità nuove» senza dire che oltre quel punto
+ *  non sa più sta dichiarando una memoria che non ha. */
+function horizonLine(changes) {
+  if (!changes.durable) return t("board.horizon.none");
+  const parts = [t("board.horizon.reads", { from: changes.readable_from || "?" })];
+  if (changes.replayable_from && changes.replayable_from !== changes.readable_from) {
+    parts.push(t("board.horizon.replays", { from: changes.replayable_from }));
+  }
+  if (!changes.complete && changes.since) {
+    parts.push(t("board.horizon.short", { from: changes.readable_from || "?" }));
+  }
+  return parts.join(" ");
+}
+
+// ── chi ha scavato cosa ──────────────────────────────────────────────────────
+
+function renderBoardPeople(host, people) {
+  const rows = [];
+  for (const p of people.operators || []) {
+    const tools = Object.keys(p.tools || {});
+    rows.push(boardRow(p.author, [
+      t("board.people.made", { n: p.created }),
+      t("board.people.fields", { n: p.fields }),
+      tools.length ? tools.join(", ")
+                   : (p.tools_unknown ? t("board.people.noTool") : ""),
+      p.last_at || ""]));
+  }
+  if (!rows.length) rows.push(el("p", "note", t("board.people.none")));
+  // DA DOVE VIENE, detto: «the author of every operation is the token's
+  // identity». Non è una tabella di utenti che qualcuno compila — è una vista
+  // sull'autorialità, e la differenza è tutto il valore della riga.
+  rows.push(el("p", "note", t("board.people.whence")));
+  host.replaceChildren(...rows);
+}
+
+// ── i numeri, e i loro buchi ─────────────────────────────────────────────────
+
+function renderBoardNumbers(host, stats) {
+  const holes = stats.holes || {};
+  const rows = [];
+  const hole = (h, key) => h && h.count !== undefined
+    ? { count: h.count, ids: h.ids, said: t(key, { n: h.count }) } : null;
+
+  rows.push(pairRow(t("board.n.units"), stats.units,
+                    hole(holes.units_without_epoch, "board.h.epoch")));
+  rows.push(pairRow(t("board.n.units"), stats.units,
+                    hole(holes.units_without_relations, "board.h.alone")));
+  rows.push(pairRow(t("board.n.nodes"), stats.nodes,
+                    hole(holes.nodes_without_author, "board.h.author")));
+  const v = stats.validation || {};
+  rows.push(pairRow(t("board.n.fields"), v.fields_declaring_an_author || 0,
+                    v.ai_waiting
+                      ? { count: v.ai_waiting,
+                          said: t("board.h.waiting", { n: v.ai_waiting }) }
+                      : { count: 0 }));
+  // …E I DUE CHE UN BUCO NON CE L'HANNO, con il perché scritto invece che con
+  // una casella vuota accanto.
+  rows.push(pairRow(t("board.n.edges"), stats.edges, null));
+  host.replaceChildren(...rows);
+
+  const cannot = (holes.cannot_count || []);
+  const nota = $("board-cannot");
+  if (nota) {
+    nota.textContent = cannot.length
+      ? t("board.cannot") + " " + cannot.join(" — ") : "";
+  }
+}
+
+// ── il quadro intero ─────────────────────────────────────────────────────────
+
+async function loadBoard(roomId) {
+  const zone = $("zone-board");
+  if (!zone) return;
+  const q = encodeURIComponent(roomId);
+  let who, waiting, stats, people;
+  try {
+    [who, waiting, stats, people] = await Promise.all([
+      request("GET", `/rooms/${q}/who`),
+      request("GET", `/rooms/${q}/waiting?subject=me`),
+      request("GET", `/rooms/${q}/statistics`),
+      request("GET", `/rooms/${q}/operators`),
+    ]);
+  } catch (error) {
+    // NON UNA PAGINA VUOTA. «Non c'è niente» e «non so chi sei» sono due cose
+    // diverse, ed è la stessa regola che il listato delle stanze applica già.
+    zone.hidden = false;
+    note($("board-horizon"), error.message, true);
+    return;
+  }
+  zone.hidden = false;
+  renderBoardWho($("board-who"), who);
+  renderBoardWaiting($("board-waiting"), waiting);
+  renderBoardPeople($("board-people"), people);
+  renderBoardNumbers($("board-numbers"), stats);
+
+  const picker = $("board-since");
+  if (picker && !picker.dataset.wired) {
+    picker.dataset.wired = "1";
+    picker.addEventListener("change", () => void loadChanges(roomId));
+  }
+  if (picker) {
+    // IL MIO ULTIMO INTERVENTO, dal server e non da questa pagina: `/operators`
+    // conta sull'autore timbrato dal token, quindi è lo stesso fatto su ogni
+    // dispositivo con cui firmo.
+    const mineAt = ((people.operators || []).find(
+      (p) => p.author === ((me && me.orcid) || "")) || {}).last_at || "";
+    const choices = sinceChoices(mineAt);
+    picker.replaceChildren(...choices.map((c) => {
+      const option = el("option", "", c.label);
+      option.value = c.value;
+      return option;
+    }));
+  }
+  await loadChanges(roomId);
+}
+
+async function loadChanges(roomId) {
+  const picker = $("board-since");
+  const since = picker ? picker.value : "";
+  let changes;
+  try {
+    changes = await request("GET", `/rooms/${encodeURIComponent(roomId)}/changes`
+                            + (since ? `?since=${encodeURIComponent(since)}` : ""));
+  } catch (error) { note($("board-horizon"), error.message, true); return; }
+  note($("board-horizon"), horizonLine(changes));
+  renderBoardChanges($("board-changes"), changes);
+  const detto = $("board-since-note");
+  if (detto) {
+    // QUANTE, E DA QUANDO — perché il numero da solo non si può controllare:
+    // chi vuole rifarlo apre il registro della stanza e conta le righe con un
+    // `ts` maggiore di questo.
+    detto.textContent = t("board.since.note",
+                          { n: changes.operations, from: since || "—" });
+  }
+
+}
+
+
 // ── CONDIVIDI · un luogo solo, e un link da ogni app ─────────────────────────
 //
 // Design note `EM_design_condividi-e-firma.md`. The panel covers LAYERS 1 AND 2
@@ -991,6 +1292,16 @@ function paintStrings() {
   set("btn-share-add", t("share.add"));
   set("btn-share-group", t("share.addTeam"));
   set("btn-share-invite", t("share.makeLink"));
+  // …e il cruscotto, che è chrome come il resto: le intestazioni statiche
+  // dell'HTML sono un ripiego per chi arriva prima del modulo, e restare in
+  // inglese sotto un corpo italiano è la cosa che si nota per prima.
+  set("board-title", t("board.title"));
+  set("board-sub", t("board.sub"));
+  set("board-who-head", t("board.who.head"));
+  set("board-waiting-head", t("board.waiting.head"));
+  set("board-changes-head", t("board.changes.head"));
+  set("board-people-head", t("board.people.head"));
+  set("board-numbers-head", t("board.numbers.head"));
   set("go-title", t("go.title"));
   set("go-sub", t("go.sub"));
   set("back-door", t("go.back"));
@@ -1311,7 +1622,13 @@ async function enter(rooms) {
   // the page would be a dead end with a back button.
   renderRooms(rooms);
   const asked = askedRoom();
-  if (asked) await loadShare(asked);
+  if (asked) {
+    // IL CRUSCOTTO PRIMA DEL PANNELLO, e non è un ordine casuale: chi arriva su
+    // una stanza vuole sapere com'è messa, non chi può scrivere. «Condividi» è
+    // il verbo di chi governa; questo è il verbo di chi lavora.
+    await loadBoard(asked);
+    await loadShare(asked);
+  }
   // …and the operator's map, asked for only now: `enter` is reached when the
   // listing answered, i.e. when there IS a session to ask with.
   await loadNodeMap();

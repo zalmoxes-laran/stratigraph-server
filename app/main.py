@@ -2763,6 +2763,40 @@ class RoomOperators(BaseModel):
     counts: Dict[str, int] = Field(default_factory=dict)
 
 
+class RoomChanges(BaseModel):
+    """Cosa è cambiato dopo un istante — **letto** dal registro, mai rigiocato.
+
+    I due confini viaggiano sempre, anche quando la risposta è completa: chi
+    guarda deve poter sapere fin dove questa stanza sa guardare indietro senza
+    doverlo dedurre da un elenco corto.
+    """
+
+    since: Optional[str] = None
+    #: fin dove il registro arriva a LEGGERE. `None` = questa stanza non ha un
+    #: registro durevole, e allora non sa guardare indietro oltre il processo.
+    readable_from: Optional[str] = None
+    #: …e fin dove si potrebbe RIGIOCARE, che è più vicino: oltre la
+    #: compattazione le operazioni si raccontano e non si riapplicano.
+    replayable_from: Optional[str] = None
+    durable: bool = False
+    operations: int = 0
+    by_author: Dict[str, int] = Field(default_factory=dict)
+    by_verb: Dict[str, int] = Field(default_factory=dict)
+    units: List[Dict[str, Any]] = Field(default_factory=list)
+    oldest: Optional[str] = None
+    newest: Optional[str] = None
+    #: FALSO quando il cursore è più vecchio di `readable_from`, o quando non
+    #: c'è cursore. Un elenco corto che sembra completo è la bugia peggiore che
+    #: questa rotta potrebbe dire.
+    complete: bool = True
+    #: PERCHÉ non è completa, e sono due frasi diverse: `pruned` = c'erano e
+    #: sono state buttate; `began` = il registro comincia lì e non ha buttato
+    #: niente, quindi prima di quel punto questo server non SA. «Ho dimenticato»
+    #: e «non ho mai saputo» si riparano in modi diversi.
+    horizon: Optional[str] = None
+    truncated: bool = False
+
+
 async def _reader(room_id: str, request: Request):
     """La porta di queste quattro: **essere della stanza**, e basta.
 
@@ -2859,6 +2893,33 @@ async def room_operators(room_id: str, request: Request) -> RoomOperators:
     """
     room, _who = await _reader(room_id, request)
     return RoomOperators(**roomview.operators(room.document))
+
+
+@v1.get("/rooms/{room_id}/changes", response_model=RoomChanges, tags=["rooms"])
+async def room_changes(room_id: str, request: Request,
+                       since: str = Query(
+                           default="",
+                           description="ISO instant. Empty means «I have "
+                                       "never looked»: the answer is the "
+                                       "boundaries, not everything.")
+                       ) -> RoomChanges:
+    """Cosa è cambiato in questa stanza da quando non guardavi.
+
+    **Letto dal registro, mai rigiocato**, e la differenza non è lessicale: la
+    parte di registro più vecchia della compattazione non si può riapplicare
+    — riapplicarla resusciterebbe un arco il cui tombstone è stato buttato — e
+    si può leggere benissimo. Questa rotta legge.
+
+    Il confine viaggia con la risposta: `readable_from` dice fin dove la stanza
+    sa guardare indietro, e `complete: false` dice che il cursore è più vecchio
+    di quel punto. Un elenco corto che sembra completo sarebbe la stessa
+    famiglia di difetti di `ws.py:387`.
+
+    Nessun indice: si legge il registro e si contano le righe con `ts > since`.
+    Chi vuole controllare un numero apre lo stesso file.
+    """
+    room, _who = await _reader(room_id, request)
+    return RoomChanges(**roomview.changes_since(room, since or None))
 
 
 # ── THE REST DOOR FOR OPERATIONS ─────────────────────────────────────────────

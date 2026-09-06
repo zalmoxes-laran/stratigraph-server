@@ -229,18 +229,38 @@ def test_chi_manda_ack_e_UNO_SOLO_in_tutto_lecosistema():
     import pathlib
 
     vicini = pathlib.Path(__file__).resolve().parents[2]
+    # PIÙ DI UN POSTO PER REPO, e non è tolleranza: è che **il ramo di un
+    # vicino non è affare di questo test**.
+    #
+    # Scoperto il 3 ottobre, con questo cancello rosso e nessuna riga cambiata
+    # da nessuna parte: `EM-blender-tools` è passato al ramo `EM-tools_v1.5.0`,
+    # dove `sync_manager/` sta sotto `build/`. Il test cercava un PERCORSO e
+    # credeva di cercare un FATTO, quindi ha annunciato «nessuno manda più ack»
+    # per un `git switch` in una cartella accanto.
+    #
+    # Il fatto che vuole misurare è «chi manda `ack` in questo ecosistema», e
+    # quello non cambia con il ramo su cui è appoggiato un fratello.
     parlanti = {
-        "EM-blender-tools": vicini / "EM-blender-tools" / "sync_manager",
-        "EMStudio": vicini / "EMStudio" / "frontend" / "src",
-        "stratigraph-chatbot": vicini / "stratigraph-chatbot" / "app",
+        "EM-blender-tools": [vicini / "EM-blender-tools" / "sync_manager",
+                             vicini / "EM-blender-tools" / "build" / "sync_manager"],
+        "EMStudio": [vicini / "EMStudio" / "frontend" / "src"],
+        "stratigraph-chatbot": [vicini / "stratigraph-chatbot" / "app"],
     }
-    mancanti = [n for n, p in parlanti.items() if not p.is_dir()]
+    mancanti = [n for n, dove in parlanti.items()
+                if not any(p.is_dir() for p in dove)]
     if mancanti:
         pytest.skip(f"non accanto: {mancanti}")
 
     manda = set()
-    for nome, radice in parlanti.items():
-        for py in list(radice.rglob("*.py")) + list(radice.rglob("*.ts")):
+    for nome, dove in parlanti.items():
+        radici = [p for p in dove if p.is_dir()]
+        sorgenti = [f for radice in radici
+                    for f in list(radice.rglob("*.py")) + list(radice.rglob("*.ts"))
+                    # `__pycache__` non è sorgente, e un `.pyc` accanto a un
+                    # sorgente sparito farebbe contare due volte una cosa che
+                    # non c'è più
+                    if "__pycache__" not in f.parts]
+        for py in sorgenti:
             testo = py.read_text(encoding="utf-8", errors="replace")
             codice = "\n".join(l for l in testo.splitlines()
                                if not l.lstrip().startswith(("#", "//", "*")))

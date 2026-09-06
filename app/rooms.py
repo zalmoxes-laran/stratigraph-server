@@ -129,6 +129,18 @@ class Member:
         entry = {"id": self.connection_id, "author": self.author,
                  "display": self.display, "selection": list(self.selection),
                  "role": getattr(self.role, "value", self.role),
+                 # …E LA RISPOSTA, non solo il nome del ruolo. Il commento qui
+                 # sopra dichiarava che «chi c'è e chi può scrivere sono una
+                 # domanda sola», e il roster rispondeva a metà: misurato il
+                 # 3 ottobre, la riga di una revocata diceva `role: null` e
+                 # niente altro, che è indistinguibile da «il ruolo non lo so».
+                 #
+                 # Il resto lo faceva chi legge, tenendosi in casa la tabella
+                 # dei ruoli — cioè una copia di `Role.can_write` che si allinea
+                 # oggi e diverge il giorno che ne arriva un quinto. Il server
+                 # la sa: la dice.
+                 "can_write": bool(self.role is not None
+                                   and getattr(self.role, "can_write", False)),
                  "joined_at": self.joined_at,
                  "state": state,
                  "last_seen": self.last_seen}
@@ -316,6 +328,8 @@ class Room:
             "author": member.author,
             "display": member.display,
             "role": getattr(member.role, "value", member.role),
+            "can_write": bool(member.role is not None
+                              and getattr(member.role, "can_write", False)),
             "left_at": now_iso(),
             # SE SE N'È ANDATO PARLANDO O TACENDO. Sono due uscite diverse: la
             # prima è una persona che ha chiuso, la seconda è una rete che ha
@@ -389,6 +403,34 @@ class Room:
             # il cursore cade dentro la finestra: il disco direbbe la stessa cosa
             return in_memoria
         return self.journal.since(since)
+
+    def read_since(self, since: Optional[str]) -> List[Dict[str, Any]]:
+        """Le operazioni dopo `since`, **da leggere e non da rigiocare**.
+
+        ════════════════════════════════════════════════════════════════════════
+        ## PERCHÉ NON È `replay_since`
+
+        Sono due usi dello stesso file e il confine è quello che `_two_memories`
+        nomina: la parte di registro più vecchia di `compacted_upto` **non si
+        rigioca** — rigiocarla è precisamente ciò che resusciterebbe un arco il
+        cui tombstone è stato buttato — ma **si legge benissimo**. Chi ha fatto
+        cosa, quando, in che ordine.
+
+        `replay_since` serve al filo e si ferma dove il rifiuto del server si
+        ferma. Questa serve al cruscotto, e arriva fin dove il registro arriva:
+        `replay_reaches()`. Chiamarle allo stesso modo sarebbe l'invito a
+        rigiocare la seconda.
+
+        **Legge dal registro quando c'è**, e non dalla finestra in memoria: la
+        finestra è 512 operazioni e si azzera a ogni riavvio, mentre la domanda
+        «cosa è cambiato da quando non guardavo» è per definizione una domanda
+        su un intervallo che il processo può non aver vissuto.
+        """
+        if not since:
+            return []
+        if self.journal is not None:
+            return self.journal.since(since)
+        return [op for op in self.oplog if str(op.get("ts") or "") > since]
 
     def replay_reaches(self) -> Optional[str]:
         """Fin dove indietro questa stanza sa guardare. `None` = non si sa.

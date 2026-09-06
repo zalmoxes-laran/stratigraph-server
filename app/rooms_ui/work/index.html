@@ -53,6 +53,51 @@
 
     <p class="note"><a class="more" href="../rooms/" id="back-door">← this node</a></p>
 
+    <!-- ── LA STANZA · il cruscotto, e la sua legge ─────────────────────────
+         «Le statistiche di una stanza sono un elenco di lavori da fare
+         travestito da numeri» (`roomview.py:392`). Quindi qui ogni numero ha il
+         suo buco ACCANTO, nella stessa riga, e non in una sezione più in basso:
+         un numero senza il suo buco accanto invita a guardare il numero.
+
+         IL CONTROESEMPIO, misurato il 5 settembre su pyarchinit-mini: dieci
+         tessere colorate di cui otto a zero, una torta divisa a metà fra due
+         regioni (n=2), un istogramma di due barre alte 1. Con n=2 un grafico è
+         arredamento. Qui non ci sono grafici: ci sono righe che si leggono.
+
+         E OGNI NUMERO SI PUÒ RIFARE A MANO. Questa è la prima superficie del
+         server che AFFERMA invece di riportare, e la regola che la tiene è che
+         nessun conteggio nasce qui: arrivano tutti da `/statistics`,
+         `/waiting`, `/who`, `/operators` e `/changes`, che li contano sul grafo
+         e sul registro. La pagina compone e non calcola.
+
+         IL LIMITE SI MOSTRA: `readable_from` dice fin dove la stanza sa
+         guardare indietro, e sta in cima — prima dei numeri, non in una nota a
+         piè di pagina — perché è la condizione di tutto quello che segue. -->
+    <section id="zone-board" class="zone" hidden>
+      <h2 class="zone-title"><span id="board-title">The room</span> <span class="zone-sub" id="board-sub">who is here, what is waiting, and what it still owes</span></h2>
+      <p class="note" id="board-horizon"></p>
+
+      <h3 class="map-head" id="board-who-head">Who is here</h3>
+      <div id="board-who" class="share-rows"></div>
+
+      <h3 class="map-head" id="board-waiting-head">Waiting for you</h3>
+      <div id="board-waiting" class="share-rows"></div>
+
+      <h3 class="map-head" id="board-changes-head">Since you last looked</h3>
+      <div class="toolbar" id="board-since-row">
+        <select id="board-since"></select>
+        <span id="board-since-note" class="note"></span>
+      </div>
+      <div id="board-changes" class="share-rows"></div>
+
+      <h3 class="map-head" id="board-people-head">Who dug what</h3>
+      <div id="board-people" class="share-rows"></div>
+
+      <h3 class="map-head" id="board-numbers-head">The numbers, and their holes</h3>
+      <div id="board-numbers" class="share-rows"></div>
+      <p class="note" id="board-cannot"></p>
+    </section>
+
     <!-- ── CONDIVIDI · one place, and a link from every app ──────────────────
          Design note `EM_design_condividi-e-firma.md`, Regola IV: the panel lives
          on the node that hosts the room — that is where the ACL and the owner
