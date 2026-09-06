@@ -20,6 +20,8 @@ import pathlib
 import re
 
 import pytest
+
+import sorgenti
 from fastapi.testclient import TestClient
 
 _REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -128,10 +130,48 @@ def test_the_page_writes_down_NO_neighbour_address():
     which is the opposite of writing a neighbour's address down. The distinction
     is kept by the assertions below: every neighbour still has to arrive as data.
     """
-    for stranger in ("/catalog", "/chat", "/iiif", "localhost"):
-        assert stranger not in CODE, f"{stranger!r} is written into the page"
+    #: Asked of the ADDRESSES the page requests (`sorgenti.chiede`), not of its
+    #: text. The substring version fired on 5 October for the wrong reason: a
+    #: room's conversation is read at `/rooms/{id}/chat`, which is THIS node's
+    #: route, and `"/chat" in CODE` cannot tell it from the chatbot next door.
+    #: A neighbour is an address that BEGINS there; `/chat` at the end of one of
+    #: our own paths is not one. Same distinction `/admin/health` needed.
+    chiesti = sorgenti.chiede(CODE)
+    for stranger in ("/catalog", "/chat", "/iiif"):
+        addosso = [a for a in chiesti if a.startswith(stranger)]
+        assert not addosso, f"{stranger!r} is written into the page: {addosso}"
+    hosts = [a for a in chiesti if "localhost" in a]
+    assert not hosts, f"a host is written into the page: {hosts}"
     assert 'o.name === "stratigraph-catalog"' in CODE, \
         "the catalogue's address must come from /v1/node"
+
+
+def test_E_UN_VICINO_SCRITTO_DAVVERO_lo_prende_ancora():
+    """La prima delle due prove: la guardia riparata morde ancora sul caso vero.
+
+    L'indirizzo del chatbot è `/chat/...` — comincia lì — e questo è esattamente
+    ciò che la regola vieta.
+    """
+    finta = 'const r = await fetch("/chat/v1/say", {method: "POST"});'
+    chiesti = sorgenti.chiede(finta)
+    assert [a for a in chiesti if a.startswith("/chat")] == ["/chat/v1/say"]
+    finta_host = 'const base = "http://localhost:8000/v1";'
+    assert [a for a in sorgenti.chiede(finta_host) if "localhost" in a]
+
+
+def test_E_UNA_ROTTA_DI_CASA_CHE_FINISCE_IN_chat_NO():
+    """La seconda: non morde più sulla riga onesta che l'ha fatta scattare.
+
+    `/rooms/{id}/chat` è una rotta di questo nodo. La versione a sottostringa
+    diceva che la pagina scrive l'indirizzo di un vicino, il 5 ottobre, per la
+    conversazione di una stanza — che è la cosa più di casa che ci sia.
+    """
+    onesta = 'const c = await request("GET", `/rooms/${q}/chat`);'
+    chiesti = sorgenti.chiede(onesta)
+    assert chiesti == ["/rooms/"], chiesti
+    assert not [a for a in chiesti if a.startswith("/chat")]
+    #: e la pagina vera, che è il motivo per cui la prova esiste
+    assert not [a for a in sorgenti.chiede(CODE) if a.startswith("/chat")]
 
 
 def test_the_node_map_owns_no_address_either():

@@ -1,5 +1,16 @@
 """Come si guarda un sorgente, quando una guardia deve guardarlo.
 
+IL GEMELLO: `EMStudio/frontend/scripts/sorgenti.mjs` (5 ottobre) è la stessa
+idea per il mondo JS/TS, dove il compilatore TypeScript sta già fra le
+dipendenze e può rispondere quello che qui risponde `ast`. Non si possono
+unificare — due linguaggi, due parser — e quello che le tiene insieme sta
+scritto in tutti e due i file e da nessun'altra parte: **lo stesso nome di
+file**, **le stesse tre forze nello stesso ordine**, **lo stesso corpus di falsi
+positivi** (le nove occorrenze di qui e le otto di là: una nuova va in tutte e
+due le liste), e **una tabella di corrispondenza fra le primitive**, che sta
+nella docstring di `sorgenti.mjs`. La divergenza silenziosa è l'unico esito che
+non vogliamo; una divergenza scritta sono solo due linguaggi.
+
 ════════════════════════════════════════════════════════════════════════════════
 ## NOVE VOLTE NON È SFORTUNA
 
@@ -200,6 +211,36 @@ def indirizzi(source: str) -> List[str]:
     fuori += re.findall(r"""(?:href|src)\s*=\s*["']([^"']+)["']""", source, re.I)
     fuori += re.findall(r"""@import\s+(?:url\()?\s*["']([^"']+)["']""", source, re.I)
     fuori += re.findall(r"""\burl\(\s*["']?([^"')]+)["']?\s*\)""", source, re.I)
+    return fuori
+
+
+def chiede(source: str) -> List[str]:
+    """Gli indirizzi che un PROGRAMMA chiede: il bersaglio di `fetch` / `request`
+    e ogni stringa che comincia come un percorso o come una URL.
+
+    Il gemello di :func:`indirizzi` per il codice invece che per il markup, e
+    serve alla stessa distinzione: **dove comincia** un indirizzo, non se una
+    parola compare da qualche parte dentro.
+
+    Nato il 5 ottobre da una guardia che è scattata giustamente per la ragione
+    sbagliata. `test_the_node_front_door` vieta alla pagina di scrivere
+    l'indirizzo di un VICINO — `/catalog`, `/chat`, `/iiif` — e la conversazione
+    di una stanza si legge a `/rooms/{id}/chat`, che è una rotta di QUESTO nodo.
+    `"/chat" in codice` non sa distinguerle. Un indirizzo che comincia con
+    `/chat` è il vicino; `/chat` in fondo a un percorso di casa non lo è.
+
+    Il pezzo FISSO di un template conta, e non è un dettaglio: in questa pagina
+    ogni chiamata è ``request("GET", `/rooms/${q}/chat`)`` e un lettore che
+    guarda solo le stringhe intere non vedrebbe nessun indirizzo.
+    """
+    fuori: List[str] = []
+    #: stringhe e template, presi per il pezzo che comincia la stringa
+    for testo in re.findall(r"""["'`]([^"'`\n]*)["'`]""", source):
+        candidato = testo.split("${")[0]
+        if candidato.startswith(("/", "http://", "https://", "ws://", "wss://")):
+            fuori.append(candidato)
+        elif candidato.startswith("localhost") or "://localhost" in testo:
+            fuori.append(candidato)
     return fuori
 
 

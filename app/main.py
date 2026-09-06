@@ -70,6 +70,7 @@ from .blend_backups import (BLEND_MEDIA_TYPE, BlendBackups,
 from .node_health import node_health, node_services
 from . import oplog as oplog_module
 from . import reach as reach_module
+from . import conversation as chat
 from . import roomview
 from .rooms import RoomDescriptor, RoomGraphTaken
 from .store import describe as snapshot_describe
@@ -335,6 +336,15 @@ class Health(BaseModel):
     #: leggere il deployment. Un registro in memoria non è un guasto — è una
     #: funzione spenta — e si dice così.
     oplog: Dict[str, Any] = Field(default_factory=dict)
+    #: CHE COSA CI SIAMO DETTI, dove. Una conversazione che dura è un'altra cosa
+    #: che la stanza tiene, quindi si vede dove si vedono le altre — accanto a
+    #: `keeping` e a `oplog`, non in un pannello suo.
+    #:
+    #: E porta il proprio confine: `in_documents` è quanti messaggi
+    #: attraverserebbero la pubblicazione, ed è **zero per costruzione** finché
+    #: nessuno costruisce la promozione a paradato. Un numero a zero che si
+    #: guarda è meglio di una garanzia scritta in un commento.
+    conversations: Dict[str, Any] = Field(default_factory=dict)
     #: LE STANZE CHE STANNO ACCUMULANDO LAVORO NON TENUTO. Un fatto sulla salute
     #: del nodo, non una curiosità: il 25 settembre questo numero sarebbe stato
     #: alto per ore e nessuno aveva un posto dove leggerlo.
@@ -632,7 +642,35 @@ def health() -> Health:
         reachability=REACHABILITY.as_dict(),
         keeping=_keeping_health(),
         oplog=_oplog_health(),
+        conversations=_conversations_health(),
     )
+
+
+def _conversations_health() -> Dict[str, Any]:
+    """Quante stanze vive hanno una conversazione, e quanto è lunga.
+
+    Contato sulle stanze VIVE come `keeping` e `oplog`: una stanza che nessuno
+    ha aperto in questo processo non ha un documento in memoria da contare, e
+    aprirle tutte per rispondere a `/health` sarebbe un carico che un
+    HEALTHCHECK ogni pochi secondi farebbe diventare un problema.
+
+    `in_documents` è il confine della pubblicazione, guardato invece che
+    promesso: conta i messaggi che hanno perso il marcatore di volatilità, cioè
+    quelli che un salvataggio scriverebbe nell'em.json. Oggi è zero per
+    costruzione, e il giorno che non lo fosse si vede qui.
+    """
+    live = [_ws.ROOMS.peek(room_id) for room_id in _ws.ROOMS.rooms()]
+    reports = [(room.room_id, chat.summary(room.document))
+               for room in live if room]
+    parlanti = [(rid, rep) for rid, rep in reports if rep["messages"]]
+    return {
+        "rooms_live": len(reports),
+        "rooms_with_a_conversation": len(parlanti),
+        "messages": sum(rep["messages"] for _rid, rep in parlanti),
+        "retracted": sum(rep["retracted"] for _rid, rep in parlanti),
+        # il confine, guardato
+        "in_documents": sum(rep["in_the_document"] for _rid, rep in reports),
+    }
 
 
 def _oplog_health() -> Dict[str, Any]:
@@ -2920,6 +2958,52 @@ async def room_changes(room_id: str, request: Request,
     """
     room, _who = await _reader(room_id, request)
     return RoomChanges(**roomview.changes_since(room, since or None))
+
+
+class RoomChat(BaseModel):
+    """Cosa ci siamo detti in questa stanza, in ordine.
+
+    **Non attraversa il confine della pubblicazione**, e non per una politica di
+    questa rotta: i messaggi portano il marcatore di volatilità del contratto
+    s3Dgraphy, quindi `document_view` — cioè l'em.json che un salvataggio scrive
+    — non li contiene, e nemmeno gli archi che li toccano. Chi legge qui sta
+    dentro la stanza; chi legge un documento pubblicato non vede niente di
+    questo.
+    """
+
+    messages: List[Dict[str, Any]] = Field(default_factory=list)
+    #: quanti in tutto e quanti ritrattati — un messaggio ritrattato RESTA
+    #: nell'elenco, senza il testo: sparire senza dirlo lascia un buco che
+    #: sembra un errore di lettura
+    total: int = 0
+    retracted: int = 0
+    voices: List[str] = Field(default_factory=list)
+    first: Optional[str] = None
+    last: Optional[str] = None
+
+
+@v1.get("/rooms/{room_id}/chat", response_model=RoomChat, tags=["rooms"])
+async def room_chat(room_id: str, request: Request) -> RoomChat:
+    """La conversazione della stanza — letta dagli orologi, non dal registro.
+
+    L'ordine sta in `data.created_at`, che lo snapshot porta con sé: quindi
+    sopravvive a un riavvio, e sopravvive alla finestra del registro. Il
+    registro ha diecimila operazioni per stanza; una conversazione non ha una
+    finestra, e costruirle l'ordine sul registro avrebbe promesso una memoria
+    che a un certo punto smette.
+
+    **Non c'è la rotta gemella che scrive**, ed è deliberato: `test_write_paths`
+    tiene le vie di scrittura a due, e un messaggio è un'operazione `add_node`
+    sul socket che c'è già — dove l'autore lo mette il token e la data la mette
+    il relay.
+    """
+    room, _who = await _reader(room_id, request)
+    detti = chat.conversation(room.document)
+    riassunto = chat.summary(room.document)
+    return RoomChat(messages=detti, total=riassunto["messages"],
+                    retracted=riassunto["retracted"],
+                    voices=riassunto["voices"],
+                    first=riassunto["first"], last=riassunto["last"])
 
 
 # ── THE REST DOOR FOR OPERATIONS ─────────────────────────────────────────────

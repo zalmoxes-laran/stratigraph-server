@@ -603,6 +603,40 @@ function horizonLine(changes) {
   return parts.join(" ");
 }
 
+// ── cosa ci siamo detti ──────────────────────────────────────────────────────
+//
+// Sta qui e non in un pannello suo perché una conversazione che dura è
+// un'altra cosa che la stanza tiene, come il registro e come il lavoro non
+// salvato. E porta con sé la frase che dice dove NON va: nessun messaggio entra
+// in un documento pubblicato, e chi legge questa pagina deve saperlo senza
+// dover leggere il contratto.
+
+const CHAT_SHOWN = 30;
+
+function renderBoardChat(host, chat) {
+  const detti = chat.messages || [];
+  const rows = [];
+  //  gli ULTIMI, non i primi: una conversazione si legge dal fondo
+  for (const m of detti.slice(-CHAT_SHOWN)) {
+    rows.push(boardRow(m.by || t("board.chat.nobody"), [
+      m.retracted ? t("board.chat.retracted") : m.said,
+      m.at || ""]));
+  }
+  if (!rows.length) rows.push(el("p", "note", t("board.chat.none")));
+  const oltre = detti.length - Math.min(detti.length, CHAT_SHOWN);
+  if (oltre > 0) rows.push(el("p", "note", t("board.chat.more", { n: oltre })));
+  host.replaceChildren(...rows);
+
+  const nota = $("board-chat-note");
+  if (!nota) return;
+  const parti = [t("board.chat.boundary")];
+  if (chat.retracted) parti.push(t("board.chat.retractedN", { n: chat.retracted }));
+  if ((chat.voices || []).length) {
+    parti.push(t("board.chat.voices", { n: chat.voices.length }));
+  }
+  nota.textContent = parti.join(" ");
+}
+
 // ── chi ha scavato cosa ──────────────────────────────────────────────────────
 
 function renderBoardPeople(host, people) {
@@ -663,13 +697,14 @@ async function loadBoard(roomId) {
   const zone = $("zone-board");
   if (!zone) return;
   const q = encodeURIComponent(roomId);
-  let who, waiting, stats, people;
+  let who, waiting, stats, people, chat;
   try {
-    [who, waiting, stats, people] = await Promise.all([
+    [who, waiting, stats, people, chat] = await Promise.all([
       request("GET", `/rooms/${q}/who`),
       request("GET", `/rooms/${q}/waiting?subject=me`),
       request("GET", `/rooms/${q}/statistics`),
       request("GET", `/rooms/${q}/operators`),
+      request("GET", `/rooms/${q}/chat`),
     ]);
   } catch (error) {
     // NON UNA PAGINA VUOTA. «Non c'è niente» e «non so chi sei» sono due cose
@@ -681,6 +716,7 @@ async function loadBoard(roomId) {
   zone.hidden = false;
   renderBoardWho($("board-who"), who);
   renderBoardWaiting($("board-waiting"), waiting);
+  renderBoardChat($("board-chat"), chat);
   renderBoardPeople($("board-people"), people);
   renderBoardNumbers($("board-numbers"), stats);
 
@@ -1300,6 +1336,7 @@ function paintStrings() {
   set("board-who-head", t("board.who.head"));
   set("board-waiting-head", t("board.waiting.head"));
   set("board-changes-head", t("board.changes.head"));
+  set("board-chat-head", t("board.chat.head"));
   set("board-people-head", t("board.people.head"));
   set("board-numbers-head", t("board.numbers.head"));
   set("go-title", t("go.title"));
