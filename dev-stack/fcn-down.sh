@@ -18,7 +18,12 @@ cd "$(dirname "$0")"                     # stratigraph-server/dev-stack
 # `--profile engine` here and NOT in fcn-up: the engine is opt-in to start
 # (2.62 GB, see the compose) but "down" has to mean down — otherwise an
 # engine somebody turned on by hand outlives the stack and keeps its volume.
-COMPOSE=(docker-compose -f docker-compose.dev.yml --profile https --profile engine)
+# QUALE compose — vedi `sg_compose` in platform.sh: `docker compose` (plugin)
+# prima, `docker-compose` (autonomo) come ripiego, e una frase se non c'è
+# nessuno dei due. Era il secondo scritto a mano, che su una macchina nuova non
+# esiste.
+sg_compose_array || exit 1
+COMPOSE+=(-f docker-compose.dev.yml --profile https --profile engine)
 MODE="down"; STOP_COLIMA="no"
 for a in "$@"; do
   case "$a" in

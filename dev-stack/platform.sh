@@ -119,3 +119,67 @@ sg_ensure_docker() {
       ;;
   esac
 }
+
+#: Quale compose c'è su QUESTA macchina — stampato in una riga, per riempire un
+#: array. `docker compose` (il plugin) prima, `docker-compose` (il binario
+#: autonomo) come ripiego. Ritorna 1 quando non c'è nessuno dei due.
+#:
+#: ## PERCHÉ LA SONDA È `docker compose version` E NON `command -v docker`
+#:
+#: Misurato sul Mac di E.D. il 9 ottobre 2026:
+#:
+#:     docker compose version  → docker: unknown command: docker compose
+#:     docker-compose version  → Docker Compose version 5.3.0
+#:
+#: `docker` C'È e il sottocomando NO. Una sonda che guarda il binario `docker`
+#: direbbe «plugin presente» su questa macchina e costruirebbe un comando che
+#: non esiste. L'unica domanda che risponde è chiedere al sottocomando di
+#: presentarsi.
+#:
+#: ## E IL RIPIEGO NON È NECESSARIAMENTE IL LEGACY
+#:
+#: L'ordine resta `docker compose` prima, perché è quello che una macchina nuova
+#: installa. Ma il ripiego non si chiama «vecchio» in una frase all'utente: qui
+#: il `docker-compose` di Homebrew è **Compose 5.3.0**, un binario autonomo
+#: corrente, e sull'unica macchina su cui questa stack è mai salita è il ramo
+#: che FUNZIONA. Preferire l'altro è una scelta sul futuro, non un giudizio su
+#: quello che c'è.
+sg_compose() {
+  if docker compose version >/dev/null 2>&1; then
+    echo "docker compose"
+    return 0
+  fi
+  if command -v docker-compose >/dev/null 2>&1; then
+    echo "docker-compose"
+    return 0
+  fi
+  echo "✖ Nessun Docker Compose su questa macchina." >&2
+  echo "  Ho cercato, in quest'ordine:" >&2
+  echo "   · \`docker compose\` — il plugin, quello che installano Docker" >&2
+  echo "     Engine su Linux e Docker Desktop su Windows/macOS;" >&2
+  echo "   · \`docker-compose\` — il binario autonomo." >&2
+  echo "  Non c'è nessuno dei due. Se \`docker\` risponde ma il plugin manca," >&2
+  echo "  è il pacchetto \`docker-compose-plugin\` (o \`docker-compose-v2\`)." >&2
+  return 1
+}
+
+#: Riempie l'array `COMPOSE` col comando trovato. Esiste perché la parte
+#: sbagliata è facilissima da scrivere:
+#:
+#:     COMPOSE=("$(sg_compose)")       # UN elemento con uno spazio dentro →
+#:                                     # cerca un eseguibile chiamato
+#:                                     # "docker compose" e non lo trova
+#:
+#: e perché `mapfile`, che sarebbe la risposta ovvia, **non esiste** nella bash
+#: che gira questi script sul Mac di E.D.: misurato, GNU bash 3.2.57, dove
+#: `mapfile` è un comando sconosciuto. `read -r -a` c'è da sempre.
+#:
+#: Uso:  sg_compose_array || exit 1   →  poi "${COMPOSE[@]}"
+sg_compose_array() {
+  local trovato
+  trovato="$(sg_compose)" || return 1
+  #: IFS locale: splitta sullo spazio e su nient'altro, e non lo lascia
+  #: cambiato per il resto dello script.
+  local IFS=' '
+  read -r -a COMPOSE <<< "$trovato"
+}

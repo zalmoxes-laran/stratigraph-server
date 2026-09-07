@@ -1,0 +1,63 @@
+# .gitattributes — i ritorni a capo, decisi qui e non dal sistema di chi clona.
+#
+# ════════════════════════════════════════════════════════════════════════════
+# ## IL GUASTO CHE CHIUDE
+#
+# Su Windows `core.autocrlf` vale `true` di default: git converte LF in CRLF al
+# checkout. Uno script bash con CRLF muore in WSL o in Git Bash con
+#
+#     $'\r': command not found
+#
+# indicando una riga che a leggerla è perfetta. È un'ora persa da qualcuno che
+# ti stava prestando il suo tempo.
+#
+# ## PERCHÉ TUTTO IL TESTO E NON SOLO `*.sh`
+#
+# Perché uno `*.sh` da solo lascerebbe fuori proprio i file che fanno la cosa
+# peggiore. Uno script con CRLF si rompe RUMOROSAMENTE, alla prima riga, e chi
+# lo guarda lo scopre subito. Ma questi:
+#
+#     dev-stack/.env.dev.example      letto da docker compose e dai container
+#     dev-stack/Caddyfile.dev         letto da Caddy, dentro Linux
+#     dev-stack/keycloak/*.json       importato da Keycloak all'avvio
+#
+# sono letti DENTRO container Linux, e un `\r` in coda a un valore non fa
+# fallire niente: fa entrare nella configurazione una variabile il cui valore
+# finisce con un carattere invisibile. Un `EM_IIIF_PUBLIC` con un `\r` in fondo
+# costruisce URL che non risolvono, e l'errore arriva quattro servizi più in là.
+# Funziona quasi, che è il modo peggiore di essere rotto.
+#
+# Misurato il 9 ottobre 2026, prima di scrivere questo file: NESSUN file
+# tracciato in questo repository ha CRLF oggi. Quindi `text=auto` non
+# normalizza niente all'indietro — non c'è nessun diff nascosto in attesa del
+# prossimo checkout.
+#
+# ## E I BINARI SI DICHIARANO, NON SI INDOVINANO
+#
+# `text=auto` chiede a git di riconoscere i binari da sé, e ci riesce. Ma le
+# otto woff2 e le immagini si dichiarano comunque `-text`: un font in cui git
+# sbagliasse a indovinare è un font rotto, e la riga per escluderlo costa meno
+# della domanda.
+
+# ── il testo: LF nel repository E nel checkout, su ogni sistema ──────────────
+* text=auto eol=lf
+
+# ── i binari: mai toccati, per nome e non per intuizione ─────────────────────
+*.png    -text
+*.jpg    -text
+*.jpeg   -text
+*.gif    -text
+*.ico    -text
+*.pdf    -text
+*.woff   -text
+*.woff2  -text
+*.ttf    -text
+*.otf    -text
+*.eot    -text
+*.zip    -text
+*.gz     -text
+*.glb    -text
+*.gltf   -text
+*.db     -text
+*.sqlite -text
+*.sqlite3 -text

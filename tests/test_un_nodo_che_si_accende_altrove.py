@@ -49,18 +49,32 @@ UNAME = {"macos": "Darwin", "linux": "Linux", "wsl": "Linux",
          "windows": "MINGW64_NT-10.0-22631", "unknown": "Plan9"}
 
 
-def _finti(tmp_path, *, docker_ok: bool, nomi=()) -> pathlib.Path:
+def _finti(tmp_path, *, docker_ok: bool, nomi=(),
+           plugin: bool = True, autonomo: bool = False) -> pathlib.Path:
     """Una cartella di comandi finti, e il registro che scrivono.
 
     `docker info` decide: `docker_ok=False` è la macchina su cui docker non
     risponde, che è l'unico caso in cui un rimedio ha senso.
+
+    `plugin` e `autonomo` sono i due compose, e sono **indipendenti** di
+    proposito, perché le quattro combinazioni sono quattro macchine vere:
+
+        plugin=True  autonomo=False   una macchina nuova (Docker Engine, Desktop)
+        plugin=False autonomo=True    il Mac di E.D., misurato il 9 ottobre 2026
+        plugin=True  autonomo=True    una macchina con entrambi (l'ordine conta)
+        plugin=False autonomo=False   docker c'è, compose no → si deve fermare
+
+    E `plugin=False` NON si ottiene togliendo il finto `docker`: `docker` c'è e
+    risponde, ed è **il sottocomando** che manca. È la ragione per cui la sonda
+    non può guardare il binario.
     """
     bin_ = tmp_path / "bin"
     bin_.mkdir(exist_ok=True)
     log = tmp_path / "chiamati.txt"
+    extra = ("docker-compose",) if autonomo else ()
     for nome in ("docker", "colima", "sudo", "security", "scutil", "hostname",
                  "update-ca-certificates", "update-ca-trust", "certutil",
-                 "cmd.exe", "wslpath", *nomi):
+                 "cmd.exe", "wslpath", *extra, *nomi):
         script = ["#!/usr/bin/env bash",
                   f'echo "{nome} $*" >> "{log}"']
         if nome == "docker":
@@ -69,7 +83,15 @@ def _finti(tmp_path, *, docker_ok: bool, nomi=()) -> pathlib.Path:
             script += ['if [ "${1:-}" = "info" ]; then',
                        f'  exit {0 if docker_ok else 1}', 'fi',
                        'if [ "${1:-}" = "cp" ]; then',
-                       '  printf "finta CA\\n" > "${3:-/dev/null}"; exit 0', 'fi',
+                       '  printf "finta CA\\n" > "${3:-/dev/null}"; exit 0', 'fi']
+            #: IL SOTTOCOMANDO. `docker` esiste sempre; `docker compose` no —
+            #: sul Mac di E.D. risponde «unknown command», misurato. Il finto
+            #: riproduce quella macchina, non una in cui manca `docker`.
+            script += ['if [ "${1:-}" = "compose" ]; then',
+                       *([]  if plugin else
+                         ['  echo "docker: unknown command: docker compose" >&2',
+                          '  exit 1']),
+                       '  exit 0', 'fi',
                        'exit 0']
         elif nome == "sudo":
             #: `sudo` esegue il resto: così `security`/`cp` finiscono nel
@@ -98,9 +120,19 @@ def _uname(bin_: pathlib.Path, sistema: str) -> None:
     u.chmod(0o755)
 
 
-def _run(script: str, bin_: pathlib.Path, tmp_path, extra_env=None, args=()):
+#: Il PATH di una macchina appena installata: i finti, e i comandi di sistema.
+#: Serve per provare l'ASSENZA di qualcosa — un finto non può rendere invisibile
+#: un binario che esiste davvero, e su questo Mac `docker-compose` esiste in
+#: `/opt/homebrew/bin`. Dichiarato invece di aggirato: un test che dice «non c'è
+#: nessun compose» mentendo su un PATH che ne contiene uno non prova niente.
+PATH_MINIMO = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
+
+
+def _run(script: str, bin_: pathlib.Path, tmp_path, extra_env=None, args=(),
+         solo_finti: bool = False):
     env = dict(os.environ)
-    env["PATH"] = f"{bin_}{os.pathsep}{env['PATH']}"
+    resto = os.pathsep.join(PATH_MINIMO) if solo_finti else env["PATH"]
+    env["PATH"] = f"{bin_}{os.pathsep}{resto}"
     env["HOME"] = str(tmp_path)
     env.pop("WSL_DISTRO_NAME", None)
     if extra_env:
@@ -312,3 +344,264 @@ def test_FERMARE_COLIMA_dove_colima_non_c_e(tmp_path, sistema):
              **env})
     assert "niente Colima" in done.stdout
     assert "colima" not in _chiamati(tmp_path)
+
+
+# ═══ 5 · IL COMANDO CHE SU QUELLA MACCHINA NON ESISTE ════════════════════════
+#
+# `fcn-up.sh:75` e `fcn-down.sh:21` costruivano l'array con `docker-compose`
+# scritto a mano. È il binario autonomo, e una macchina nuova installa il
+# **plugin** — Docker Engine su Linux, Docker Desktop su Windows. Là la PRIMA
+# riga risponde `command not found`, e non c'è niente da leggere nei log perché
+# la stack non è mai partita.
+#
+# Misurato sul Mac di E.D. il 9 ottobre 2026, e il risultato è il contrario di
+# quello che si aspetterebbe:
+#
+#     docker compose version  → docker: unknown command: docker compose
+#     docker-compose version  → Docker Compose version 5.3.0
+#
+# Cioè: qui il plugin NON c'è, e il ripiego è un binario autonomo corrente.
+# `docker` risponde e il sottocomando no — per questo la sonda chiede al
+# sottocomando di presentarsi e non guarda il binario.
+
+def _sg(bin_, frammento: str, extra_env=None, solo_finti: bool = False):
+    """Esegue un frammento con `platform.sh` sourced e i finti davanti al PATH."""
+    resto = (os.pathsep.join(PATH_MINIMO) if solo_finti
+             else os.environ["PATH"])
+    env = {**os.environ, "PATH": f"{bin_}{os.pathsep}{resto}"}
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        ["bash", "-c", f'cd "{DEV}" && . ./platform.sh && {frammento}'],
+        capture_output=True, text=True, env=env)
+
+
+@needs_bash
+def test_COMPOSE_col_plugin_presente_usa_il_plugin(tmp_path):
+    """`docker compose` prima, perché è quello che una macchina nuova ha."""
+    bin_ = _finti(tmp_path, docker_ok=True, plugin=True, autonomo=False)
+    _uname(bin_, "linux")
+    done = _sg(bin_, "sg_compose")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "docker compose", done.stdout
+
+
+@needs_bash
+def test_COMPOSE_senza_plugin_ripiega_sull_autonomo(tmp_path):
+    """E viceversa: il Mac di E.D., misurato.
+
+    `docker` C'È — il finto risponde a `info` e a tutto il resto. Quello che
+    manca è il sottocomando. Una sonda che guardasse `command -v docker`
+    direbbe «plugin presente» e costruirebbe un comando inesistente.
+    """
+    bin_ = _finti(tmp_path, docker_ok=True, plugin=False, autonomo=True)
+    _uname(bin_, "macos")
+    done = _sg(bin_, "sg_compose")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "docker-compose", done.stdout
+
+
+@needs_bash
+def test_COMPOSE_con_entrambi_vince_il_plugin(tmp_path):
+    """L'ordine è una scelta, e va provata: il ripiego è il ripiego."""
+    bin_ = _finti(tmp_path, docker_ok=True, plugin=True, autonomo=True)
+    _uname(bin_, "linux")
+    done = _sg(bin_, "sg_compose")
+    assert done.stdout.strip() == "docker compose", (
+        "con entrambi presenti ha scelto il ripiego")
+
+
+@needs_bash
+def test_COMPOSE_CON_NESSUNO_DEI_DUE_si_ferma_dicendolo(tmp_path):
+    """Il cancello che il prompt chiede: non si prosegue al buio.
+
+    Un `up` lanciato senza compose non fallisce in un modo leggibile: fallisce
+    con `command not found` su una riga che nomina un file di configurazione, e
+    chi legge cerca il file.
+    """
+    bin_ = _finti(tmp_path, docker_ok=True, plugin=False, autonomo=False)
+    _uname(bin_, "linux")
+    #: `solo_finti`: il `docker-compose` di Homebrew è su questo Mac e un finto
+    #: non lo può nascondere. Vedi PATH_MINIMO.
+    done = _sg(bin_, "sg_compose", solo_finti=True)
+    assert done.returncode != 0, "nessun compose e ritorna 0"
+    assert not done.stdout.strip(), (
+        f"ha stampato un comando che non esiste: {done.stdout!r}")
+    #: …e NOMINA cosa manca, tutti e due, con il pacchetto da installare
+    assert "docker compose" in done.stderr
+    assert "docker-compose" in done.stderr
+    assert "docker-compose-plugin" in done.stderr, "non dice cosa installare"
+
+
+@needs_bash
+@pytest.mark.parametrize("plugin,autonomo,atteso", [
+    (True,  False, ["docker", "compose"]),
+    (False, True,  ["docker-compose"]),
+])
+def test_L_ARRAY_RESTA_UN_ARRAY(tmp_path, plugin, autonomo, atteso):
+    """La trappola che rende la sostituzione meno banale di quanto sembri.
+
+        COMPOSE=("$(sg_compose)")     # UN elemento con uno spazio dentro
+
+    cercherebbe un eseguibile chiamato `docker compose` e fallirebbe con un
+    messaggio che non aiuta nessuno. Qui si contano gli elementi e si guarda
+    ognuno: `docker` e `compose` separati, non `docker compose` insieme.
+    """
+    bin_ = _finti(tmp_path, docker_ok=True, plugin=plugin, autonomo=autonomo)
+    _uname(bin_, "linux")
+    done = _sg(bin_, 'sg_compose_array && '
+                     'echo "N=${#COMPOSE[@]}" && '
+                     'for e in "${COMPOSE[@]}"; do echo "E=$e"; done')
+    assert done.returncode == 0, done.stderr
+    assert f"N={len(atteso)}" in done.stdout, done.stdout
+    assert [l[2:] for l in done.stdout.splitlines()
+            if l.startswith("E=")] == atteso, done.stdout
+
+
+@needs_bash
+def test_L_ARRAY_E_ESEGUIBILE_non_solo_ben_contato(tmp_path):
+    """E la prova che conta più del conteggio: il comando **gira**.
+
+    Un array con un elemento sbagliato si conta bene e non si esegue. Qui si
+    esegue davvero, contro il finto, e si guarda il registro: `docker compose
+    up` — non un eseguibile con uno spazio nel nome.
+    """
+    bin_ = _finti(tmp_path, docker_ok=True, plugin=True, autonomo=False)
+    _uname(bin_, "linux")
+    done = _sg(bin_, 'sg_compose_array && COMPOSE+=(-f qualcosa.yml) && '
+                     '"${COMPOSE[@]}" up -d')
+    assert done.returncode == 0, done.stderr + done.stdout
+    assert "docker compose -f qualcosa.yml up -d" in _chiamati(tmp_path), (
+        _chiamati(tmp_path))
+
+
+@needs_bash
+def test_MAPFILE_NON_SI_USA_perche_su_questo_mac_non_esiste(tmp_path):
+    """Perché `read -r -a` e non `mapfile`, che sarebbe la risposta ovvia.
+
+    Misurato: la bash che gira questi script sul Mac di E.D. è GNU bash 3.2.57,
+    dove `mapfile` è un comando sconosciuto. Una correzione scritta con
+    `mapfile` funzionerebbe su Linux e romperebbe la macchina di chi l'ha
+    chiesta — che è il modo peggiore di chiudere una mina di portabilità.
+
+    Quindi la prova non è sul testo: si esegue `sg_compose_array` in una bash
+    a cui `mapfile` è stato TOLTO, e si guarda se riempie l'array comunque.
+    """
+    bin_ = _finti(tmp_path, docker_ok=True, plugin=True, autonomo=False)
+    _uname(bin_, "linux")
+    done = _sg(bin_, 'enable -n mapfile 2>/dev/null || true; '
+                     'unset -f mapfile 2>/dev/null || true; '
+                     'sg_compose_array && echo "N=${#COMPOSE[@]}"')
+    assert done.returncode == 0, done.stderr
+    assert "N=2" in done.stdout, done.stdout
+
+
+# ═══ 6 · E GLI SCRIPT LO USANO DAVVERO ═══════════════════════════════════════
+#
+# Le prove di sopra misurano `platform.sh`. Questa misura la cosa che rompeva:
+# quale comando lo SCRIPT chiama.
+
+@needs_bash
+@pytest.mark.parametrize("plugin,autonomo,atteso", [
+    (True,  False, "docker compose"),
+    (False, True,  "docker-compose"),
+])
+def test_FCN_DOWN_CHIAMA_il_compose_che_c_e(tmp_path, plugin, autonomo, atteso):
+    bin_ = _finti(tmp_path, docker_ok=True, plugin=plugin, autonomo=autonomo)
+    _uname(bin_, "linux")
+    done = _run("fcn-down.sh", bin_, tmp_path, args=("--stop",))
+    assert done.returncode == 0, done.stderr + done.stdout
+    chiamati = _chiamati(tmp_path)
+    assert f"{atteso} -f docker-compose.dev.yml" in chiamati, chiamati
+    #: …e NON l'altro
+    altro = "docker-compose" if atteso == "docker compose" else "docker compose"
+    assert f"{altro} -f" not in chiamati, f"ha chiamato anche {altro}"
+
+
+@needs_bash
+def test_FCN_DOWN_SENZA_COMPOSE_non_prova_a_spegnere(tmp_path):
+    """Si ferma prima, e dice cosa manca."""
+    bin_ = _finti(tmp_path, docker_ok=True, plugin=False, autonomo=False)
+    _uname(bin_, "linux")
+    done = _run("fcn-down.sh", bin_, tmp_path, args=("--stop",),
+                solo_finti=True)
+    assert done.returncode != 0
+    assert "Nessun Docker Compose" in done.stderr, done.stderr
+    #: e non ha detto «✔ FCN spento», che sarebbe una bugia
+    assert "FCN spento" not in done.stdout, done.stdout
+
+
+@needs_bash
+def test_IL_CONSIGLIO_STAMPATO_nomina_il_comando_che_esiste(tmp_path):
+    """Le righe che una persona COPIA E INCOLLA.
+
+    `fcn-up.sh` stampava due volte `docker-compose …` come suggerimento — nei
+    log da guardare quando il nodo non risponde, e nel restart dopo aver
+    editato s3Dgraphy. Su una macchina col solo plugin sono due consigli che
+    danno `command not found`, offerti proprio nel momento in cui qualcosa è
+    già andato storto.
+    """
+    bin_ = _finti(tmp_path, docker_ok=True, plugin=True, autonomo=False)
+    _uname(bin_, "linux")
+    done = _run("fcn-up.sh", bin_, tmp_path, args=("--local-s3d",))
+    assert done.returncode == 0, done.stderr + done.stdout
+    #: il consiglio del restart, quello di `--local-s3d`
+    assert "docker compose -f docker-compose.dev.yml -f" in done.stdout, done.stdout
+    #: …e da nessuna parte il comando che su questa macchina non c'è
+    for riga in done.stdout.splitlines():
+        assert "docker-compose -f" not in riga, riga
+
+
+# ═══ 7 · LA QUARTA MINA · IL FILE CHE CHI CLONA NON HA ═══════════════════════
+#
+# Non è una delle tre del prompt: trovata cercando cos'altro rompe il primo
+# avvio. `.env.dev` è in `.gitignore` (porta i valori riempiti) e
+# `.env.dev.example` è committato, ma `fcn-up.sh` passava `--env-file .env.dev`
+# senza controllarlo. Su un clone fresco, misurato:
+#
+#     couldn't find env file: …/dev-stack/.env.dev
+#
+# Cioè: lo script moriva PRIMA di arrivare alla rilevazione del compose, e
+# nessuna delle tre riparazioni di questa notte sarebbe mai stata raggiunta.
+
+@needs_bash
+def test_SENZA_ENV_DEV_dice_la_riga_da_incollare(tmp_path, monkeypatch):
+    """E lo dice invece di copiarlo.
+
+    `.env.dev` porta credenziali — senza valore, ma credenziali — e crearlo è
+    l'atto di una persona: la stessa ragione per cui `fcn-trust-ca.sh` stampa
+    il comando `sudo` invece di eseguirlo.
+
+    Il file vero È in `dev-stack/` su questa macchina, quindi la prova gira su
+    una COPIA della cartella in cui non c'è: spostare quello vero sarebbe
+    misurare rompendo il posto in cui si misura.
+    """
+    finto_dev = tmp_path / "dev-stack"
+    shutil.copytree(DEV, finto_dev,
+                    ignore=shutil.ignore_patterns(".env.dev", "__pycache__"))
+    assert not (finto_dev / ".env.dev").exists()
+    assert (finto_dev / ".env.dev.example").exists(), "il modello deve restare"
+
+    bin_ = _finti(tmp_path, docker_ok=True, plugin=True, autonomo=False)
+    _uname(bin_, "linux")
+    env = dict(os.environ)
+    env["PATH"] = f"{bin_}{os.pathsep}{env['PATH']}"
+    env["HOME"] = str(tmp_path)
+    done = subprocess.run(["bash", str(finto_dev / "fcn-up.sh")],
+                          capture_output=True, text=True, env=env,
+                          cwd=str(finto_dev))
+    assert done.returncode != 0, "manca .env.dev e prosegue"
+    assert "cp .env.dev.example .env.dev" in done.stderr, done.stderr
+    #: e si è fermato PRIMA di chiedere il compose o di provare un `up`
+    assert "up -d" not in _chiamati(tmp_path), _chiamati(tmp_path)
+
+
+@needs_bash
+def test_E_CON_ENV_DEV_non_dice_niente(tmp_path):
+    """L'altra metà: il controllo non parla quando non c'è nulla da dire."""
+    bin_ = _finti(tmp_path, docker_ok=True, plugin=True, autonomo=False)
+    _uname(bin_, "linux")
+    done = _run("fcn-up.sh", bin_, tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert ".env.dev.example" not in done.stderr
+    assert "up -d --build" in _chiamati(tmp_path)

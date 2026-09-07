@@ -88,6 +88,18 @@ cd /mnt/c/Users/<you>/…/stratigraph-server/dev-stack
 ./fcn-up.sh
 ```
 
+> **Line endings are handled — but only if your clone is recent.** On Windows
+> `core.autocrlf` defaults to `true`, so git converts LF to CRLF at checkout, and
+> a bash script with CRLF dies in WSL or Git Bash with `$'\r': command not
+> found`, pointing at a line that reads perfectly. The repository now carries a
+> `.gitattributes` that forces LF (`* text=auto eol=lf`), so a fresh clone is
+> already right. A clone made **before** it was added keeps whatever it got:
+>
+> ```bash
+> git rm --cached -r . && git reset --hard      # re-checkout with the new rules
+> file dev-stack/fcn-up.sh                      # want: "ASCII text", not "with CRLF"
+> ```
+
 > **Keep the checkout inside the WSL filesystem if you can** (`~/…` rather than
 > `/mnt/c/…`). The compose builds from the checkout, and a bind mount across the
 > Windows/Linux boundary is slow enough to be mistaken for a broken build.
@@ -119,21 +131,86 @@ the Windows store at startup). And note the consequence, because it is the hour
 people lose: `curl` **inside WSL** still refuses, because it reads the Linux
 store — run the Linux branch inside WSL too if you need both.
 
+**`em.localhost` — and this one is measured, per resolver.** Everything in this
+README sits behind `https://em.localhost:8443`, and that address appears
+everywhere as a fact and nowhere as a question. `*.localhost` is **not** resolved
+the same way on every machine. Measured 9 October 2026:
+
+| what does the resolving | `em.localhost` |
+|---|---|
+| macOS (`mDNSResponder`) — `ping`, `curl`, browser | ✅ `127.0.0.1` |
+| **glibc with `hosts: files dns`** — the factory default in the official `debian:bookworm-slim` **and** `ubuntu:24.04` images | ❌ **does not resolve** |
+| glibc with `nss-myhostname` in the `hosts:` line (most desktop installs) | ✅ `127.0.0.1` |
+| musl (Alpine) | ✅ `127.0.0.1` |
+
+So on macOS there is nothing to do: a name never seen before still answers, and
+that is not a cache — `mai-visto-prima-42.localhost` resolves and
+`mai-visto-prima-42.invalid` does not.
+
+On **Linux it depends on the NSS stack**, and the failing case is a real and
+common one: a minimal Debian/Ubuntu install whose `hosts:` line is still `files
+dns` — no `systemd-resolved`, no `nss-myhostname`. There the stack comes up
+perfectly and the page is not there, which is the most confusing way for this to
+fail: every container is healthy and every address is dead.
+
+**The repair is one line in `/etc/hosts`, and it fixes both resolvers at once:**
+
+```bash
+echo "127.0.0.1 em.localhost" | sudo tee -a /etc/hosts
+```
+
+Check it before blaming the stack — and check it with the command-line client,
+not the browser:
+
+```bash
+getent hosts em.localhost      # Linux: silence means it does not resolve
+```
+
+**Browser and `curl` are two different resolvers, and this is the part not
+measured.** Chromium and Firefox apply the RFC 6761 rule for the `localhost`
+name themselves, so a browser can well show the page on a machine where `curl`
+cannot reach it — and the smoke tests use `curl`. On **Windows** that split is
+the expected case (the DNS client does not synthesise `*.localhost`, the browser
+does), but it is **not measured here**: there is no Windows machine in this
+session, and the same is true of WSL, whose resolution is that of its own
+distribution and therefore that of the `hosts:` line in *its* `nsswitch.conf`.
+The `/etc/hosts` line above covers both without needing to know the answer,
+which is why it is the recommendation rather than a rule in the code.
+
 **Nothing else is platform-specific.** `fcn-up.sh` and `fcn-down.sh` were the
 other two Mac-only spots (`scutil --get LocalHostName`, `colima stop`) and both
 now ask `platform.sh`. What is **not** verified is a full run on Linux or on
 Windows: `tests/test_un_nodo_che_si_accende_altrove.py` executes the scripts
-with a faked `uname` and asserts which commands they call — 23 assertions,
-including that colima is *not* called where it does not exist — but nobody has
-yet brought the stack up on either. That is the next measurement, and it needs
-the machine rather than the test.
+with a faked `uname` and asserts which commands they call — **35 assertions**,
+including that colima is *not* called where it does not exist and that the right
+compose is chosen on a machine that has only one of the two — but nobody has yet
+brought the stack up on either. That is the next measurement, and it needs the
+machine rather than the test.
 
-> **`docker compose` or `docker-compose`?** Recent Docker ships compose as a
-> *plugin* (`docker compose`, two words). A Homebrew `docker` sometimes does not,
-> and then only the standalone binary exists (`docker-compose`, hyphen). Both
-> take the same arguments. This machine has the standalone one, so the commands
-> below are written with the hyphen; drop it if `docker compose version` answers
-> on yours.
+> **`docker compose` or `docker-compose`? The scripts no longer care.** Recent
+> Docker ships compose as a *plugin* (`docker compose`, two words); a Homebrew
+> `docker` sometimes does not, and then only the standalone binary exists
+> (`docker-compose`, hyphen). Both take the same arguments.
+>
+> `fcn-up.sh` and `fcn-down.sh` used to have the hyphenated one **written into
+> them**, and on a machine that has only the plugin the very first line answered
+> `command not found`. They now ask `sg_compose` (`platform.sh`), which prefers
+> the plugin and falls back to the standalone — and if there is neither, says so
+> and names the package instead of going on in the dark.
+>
+> The probe asks the **subcommand** to introduce itself (`docker compose
+> version`) and does not look at the `docker` binary, because measured on this
+> Mac, 9 October 2026:
+>
+> ```
+> docker compose version  → docker: unknown command: docker compose
+> docker-compose version  → Docker Compose version 5.3.0
+> ```
+>
+> `docker` is there and the subcommand is not. The hand-written commands
+> elsewhere in this README still use the hyphen, because that is what answers
+> here; use whichever `sg_compose` picks on yours (`. ./platform.sh &&
+> sg_compose`).
 
 ---
 

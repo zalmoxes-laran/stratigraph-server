@@ -72,7 +72,45 @@ export OIDC_PUBLIC_ORIGIN="https://${PRIMARY}:${HTTPS_PORT}"
 export EM_PUBLIC_BASE="https://${PRIMARY}:${HTTPS_PORT}/em"
 
 # ── 4 · su (con l'override s3Dgraphy-locale se richiesto) ─────────────────────
-COMPOSE=(docker-compose --env-file .env.dev -f docker-compose.dev.yml)
+# ── 4-zero · IL FILE CHE CHI CLONA NON HA ────────────────────────────────────
+#
+# `.env.dev` è in `.gitignore` (contiene i valori riempiti) e `.env.dev.example`
+# è committato. Ma questa riga lo USA con `--env-file` senza controllarlo, e su
+# un clone fresco `./fcn-up.sh` moriva prima di qualunque altra cosa con
+#
+#     couldn't find env file: …/dev-stack/.env.dev
+#
+# misurato il 9 ottobre 2026. È della stessa famiglia del `command not found`
+# del compose: un primo avvio che si ferma alla prima riga, su una macchina che
+# non è quella di chi ha scritto lo script.
+#
+# NON lo copio io: `.env.dev` porta credenziali (senza valore, ma credenziali) e
+# crearlo è un atto di una persona — la stessa ragione per cui `fcn-trust-ca.sh`
+# stampa il comando `sudo` invece di eseguirlo. Qui si stampa la riga da
+# incollare, che è una cosa sola.
+if [ ! -f .env.dev ]; then
+  echo "✖ Manca \`dev-stack/.env.dev\`, e \`--env-file\` lo vuole." >&2
+  if [ -f .env.dev.example ]; then
+    echo "  È in .gitignore di proposito: porta i valori riempiti. Il modello c'è," >&2
+    echo "  e per il dev-stack va bene così com'è:" >&2
+    echo >&2
+    echo "      cp .env.dev.example .env.dev" >&2
+    echo >&2
+    echo "  (dentro ci sono minioadmin/minioadmin e un realm em-dev: valori che" >&2
+    echo "   sarebbero una vulnerabilità su qualcosa di raggiungibile.)" >&2
+  else
+    echo "  E non trovo nemmeno \`.env.dev.example\`: questo checkout è incompleto." >&2
+  fi
+  exit 1
+fi
+
+# QUALE compose. Era `docker-compose` scritto a mano: è il binario autonomo, e
+# su una macchina nuova (Docker Engine su Linux, Docker Desktop su Windows) non
+# c'è — la PRIMA riga risponde `command not found`. `sg_compose_array` chiede
+# quale dei due esiste e riempie l'array; se non c'è nessuno dei due dice cosa
+# manca invece di proseguire al buio.
+sg_compose_array || exit 1
+COMPOSE+=(--env-file .env.dev -f docker-compose.dev.yml)
 if [ "$LOCAL_S3D" = "yes" ]; then
   COMPOSE+=(-f docker-compose.local-s3d.yml)
   echo "▶ modo s3Dgraphy LOCALE: StratiGraph Server/StratiGraph Catalog useranno ../../s3Dgraphy/src (edita e riavvia per testare)."
@@ -103,7 +141,7 @@ if [ "$DEMO" = "yes" ]; then
   done
   if [ "$ready" != "yes" ]; then
     echo "✗ il nodo non ha risposto entro 90s. NON popolo: guarda i log con"
-    echo "  docker-compose -f docker-compose.dev.yml logs --tail=40 stratigraph-server"
+    echo "  ${COMPOSE[0]}${COMPOSE[1]:+ ${COMPOSE[1]}} -f docker-compose.dev.yml logs --tail=40 stratigraph-server"
     exit 1
   fi
   echo "✔ nodo su. Popolo…"
@@ -149,6 +187,6 @@ $( # RILEVATO, mai eseguito: fcn-trust-ca.sh chiede una password di sistema, e u
   · altro computer: serve un HOSTNAME (mai IP nudo, rompe il TLS della CA interna) e che le
     due macchine si vedano in rete (hotspot che isola → travel-router · Internet-Sharing · Tailscale).
     Per usarlo come primario:  ./fcn-up.sh ${BONJOUR:-<mac>.local}
-$( [ "$LOCAL_S3D" = "yes" ] && echo "  · dopo aver editato s3Dgraphy:  docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart stratigraph-server stratigraph-catalog" )
+$( [ "$LOCAL_S3D" = "yes" ] && echo "  · dopo aver editato s3Dgraphy:  ${COMPOSE[0]}${COMPOSE[1]:+ ${COMPOSE[1]}} -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart stratigraph-server stratigraph-catalog" )
 Giù:  ./fcn-down.sh   (o --stop / --wipe / --colima)
 EOF
