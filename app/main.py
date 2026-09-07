@@ -3504,15 +3504,7 @@ async def node_storage(request: Request) -> StorageOut:
     """
     _require_operator(request)
     registry = rooms()
-    ids = set(registry.rooms_store.ids())
-    # `snapshot_store()`, never the imported name: binding it at import is the
-    # footgun this module documents twice (see `rooms()` and `snapshot_store()`),
-    # and I walked into it — a test that replaced the store saw an admin listing
-    # that had never heard of its rooms.
-    snapshots = getattr(snapshot_store(), "rooms", None)
-    if callable(snapshots):
-        ids |= set(snapshots())
-    ids |= set(registry.rooms())
+    ids = _room_ids()
 
     seen: set = set()
     out_rooms: List[StorageRoom] = []
@@ -3561,6 +3553,142 @@ async def node_storage(request: Request) -> StorageOut:
         rooms=out_rooms)
 
 
+class AssetForgotten(BaseModel):
+    """What the node did with those bytes, and what it knew when it did it."""
+
+    ref: str
+    #: True = they were there and are gone. False = there was nothing to remove,
+    #: which is not an error and is a different report.
+    removed: bool
+    #: what the node checked before touching anything — kept in the answer so
+    #: the operator's record says «nobody was using it» and not only «done»
+    rooms: List[str] = Field(default_factory=list)
+    corpus: bool = False
+
+
+@v1.delete("/admin/assets/{ref}", response_model=AssetForgotten, tags=["node"])
+async def forget_asset(ref: str, request: Request) -> AssetForgotten:
+    """**Forget these bytes** — the fourth verb, and the only one that removes.
+
+    ════════════════════════════════════════════════════════════════════════════
+    ## THE ASYMMETRY THIS CLOSES
+
+    Until 8 October 2026 this node could put an asset, serve it, and describe
+    it. Taking one out meant going into MinIO by hand, which is the one place
+    where it should not be done — and the cost was not tidiness: it was having
+    to tell somebody whose photograph should never have been uploaded that the
+    node cannot forget.
+
+    ## WHAT IT REFUSES, AND WHY THAT IS THE POINT
+
+    An asset is addressed by its CONTENT: the same digest can be referenced by
+    several rooms and by the resident corpus. Removing it because ONE record no
+    longer wants it would take it from everybody else, silently — the worst
+    thing this verb could do. So it asks `_who_mentions` first and **refuses
+    with the list**, which is also the remedy: detach it there, then ask again.
+
+    Detaching is a different act and it is not here. It is a change to a graph —
+    reversible, and it does not touch the bytes — and the graph is written
+    through the socket, by the people working in that room. A node that could
+    reach into a room's document to make its own cleanup possible would be
+    deciding for them.
+
+    ## AND WHAT IT IS NOT
+
+    **Not a sweep.** One digest, named by a person, one call. There is no timer
+    and no automatic collection: counting orphans is the node's business,
+    removing them is somebody's — the same reason `api.compact` is only ever
+    asked (`gc=asked`).
+
+    **Not a room deletion.** `POST /rooms/{id}/archive` still says «Not a
+    deletion, and there is no deletion», and that stands.
+
+    **Nothing MinIO-specific.** It calls `AssetStore.delete`, which three
+    implementations answer and a fourth will.
+    """
+    _require_operator(request)
+    if not asset_ref_valid(ref):
+        raise HTTPException(status_code=400,
+                            detail=f"not an asset reference: {ref!r} "
+                                   f"(expected 'sha256:<hex>')")
+    who = _who_mentions(ref)
+    if who["rooms"] or who["corpus"]:
+        where = ", ".join(who["rooms"]) or "—"
+        raise HTTPException(
+            status_code=409,
+            detail=(f"these bytes are still referenced and will not be removed. "
+                    f"Rooms: {where}"
+                    + (". And the resident corpus documents them"
+                       if who["corpus"] else "")
+                    + ". An asset is addressed by its content, so removing it "
+                      "here would take it from every record that points at it. "
+                      "Detach it where it is used — that is a change to a graph, "
+                      "reversible, and it does not touch the bytes — and ask "
+                      "again."))
+    done = ASSET_STORE.delete(ref)
+    return AssetForgotten(ref=ref, removed=bool(done.get("removed")),
+                          rooms=[], corpus=False)
+
+
+def _room_ids() -> set:
+    """Every room this node knows about, from the three places that know.
+
+    Extracted 2026-10-08 because a second caller arrived (`_who_mentions`), and
+    two walks over «which rooms exist» would be two answers the day one of them
+    forgets the snapshot store.
+
+    `snapshot_store()`, never the imported name: binding it at import is the
+    footgun this module documents twice (see `rooms()` and `snapshot_store()`),
+    and I walked into it — a test that replaced the store saw an admin listing
+    that had never heard of its rooms.
+    """
+    registry = rooms()
+    ids = set(registry.rooms_store.ids())
+    snapshots = getattr(snapshot_store(), "rooms", None)
+    if callable(snapshots):
+        ids |= set(snapshots())
+    ids |= set(registry.rooms())
+    return ids
+
+
+def _who_mentions(ref: str) -> Dict[str, Any]:
+    """WHO still points at these bytes — every room, and the resident corpus.
+
+    ════════════════════════════════════════════════════════════════════════════
+    THE QUESTION THE WHOLE DELETION HANGS ON
+
+    An asset is addressed by its CONTENT. The same digest can be referenced by
+    several nodes, several rooms, several studies — that is the property that
+    makes dedup free, and it is also the one that makes a careless deletion take
+    a photograph away from everybody who was using it, in silence.
+
+    So the operator's verb asks this first and refuses when the answer is not
+    empty. Read from the documents at the moment of asking, never from an index:
+    an index that has drifted would answer «nobody» about a picture three rooms
+    are showing.
+
+    **AND THE CORPUS COUNTS.** It was the hole to close: the resident DTC
+    register is content-addressed and speaks about the BYTES rather than about a
+    room — `_corpus_gate` already relies on that — so a digest documented there
+    and cited by no room is NOT an orphan. Asking only the rooms would have made
+    the refusal look complete and leave exactly one way through it.
+    """
+    citing = []
+    for room_id in sorted(_room_ids()):
+        descriptor = rooms().descriptor(room_id)
+        document = snapshot_store().get(descriptor.primary_ref)
+        if ref in _digests_in(document):
+            citing.append(room_id)
+    in_corpus = False
+    try:
+        in_corpus = ref in _digests_in(RESIDENT.read())
+    except Exception:      # noqa: BLE001 — a corpus that will not read
+        # FAIL CLOSED, like every other reader of this register: «I cannot read
+        # the documentation» must not be allowed to answer «nobody is using it».
+        in_corpus = True
+    return {"rooms": citing, "corpus": in_corpus}
+
+
 def _digests_in(document: Optional[Dict[str, Any]]) -> set:
     """Every asset reference a container's nodes point at."""
     found: set = set()
@@ -3587,6 +3715,14 @@ def _stored_digests() -> set:
     an expensive question to answer on a page load, and an orphan report that is
     silently partial is worse than one that says so. When the store cannot
     enumerate, `orphan_assets` is empty and the console says why.
+
+    **AND UNTIL 8 OCTOBER 2026 NOBODY ANSWERED.** Measured: none of the three
+    implementations had `refs`, `digests`, `keys` or `_data`, so this returned an
+    empty set on EVERY backend and `orphan_assets` had never in its life
+    contained anything. The console's sentence blamed MinIO, which was true and
+    incomplete — it was true of the directory store on somebody's laptop too.
+    The two local stores answer now (`InMemoryAssetStore.refs`,
+    `DirectoryAssetStore.refs`); MinIO still does not, on purpose.
     """
     for name in ("refs", "digests", "keys"):
         lister = getattr(ASSET_STORE, name, None)

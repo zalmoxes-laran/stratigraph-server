@@ -11,7 +11,8 @@
  * route uses. No bucket listing, no presigned URL, nothing that would make the
  * client a second door to the bytes.
  */
-import { api, confirmNamed, escapeHtml, register, say, show } from "../console.js";
+import { api, confirmNamed, confirmTyped, escapeHtml, register, say, show }
+  from "../console.js";
 
 async function render(root) {
   const report = await api.get("/admin/storage");
@@ -60,21 +61,92 @@ async function render(root) {
   const orphans = document.createElement("section");
   orphans.className = "card";
   if (report.orphan_assets.length) {
+    // ── COUNTED, AND NOW REMOVABLE — one at a time, by a person ─────────────
+    //
+    // Until 8 October 2026 this list said «Named, not deleted», and that half
+    // was right: no sweep, no timer. But counting a thing nobody can touch is
+    // the surest way to teach people not to look at the number — and there was
+    // nowhere else to touch it except inside MinIO, by hand.
+    //
+    // So each digest gets its own button, and it asks the node rather than the
+    // store: `DELETE /v1/admin/assets/{ref}` re-checks who references those
+    // bytes AT THE MOMENT OF ASKING and refuses with the list. This report may
+    // be a minute old; the refusal is not.
+    //
+    // `storage.js`'s rule stands: MinIO is not addressed from here. No bucket
+    // listing, no presigned URL, no second door to the bytes.
     orphans.innerHTML = `<h2>Orphan assets
         <span class="tag warn">${report.orphan_assets.length}</span></h2>
       <p class="muted">Digests the store holds that no room's document mentions.
-        <b>Named, not deleted</b> — bytes nobody references may still be the
-        upload somebody is about to point at, and a sweep that removed them would
-        be a policy nobody wrote down.</p>
-      <div class="mono small scroll">${report.orphan_assets
-        .map((d) => escapeHtml(d)).join("<br>")}</div>`;
+        <b>No sweep and no timer</b> — one at a time, named by a person: bytes
+        nobody references may still be the upload somebody is about to point at.
+        The node re-checks who references them when you ask, and refuses if
+        anybody does.</p>
+      <div class="orphan-rows"></div>`;
+    const rows = orphans.querySelector(".orphan-rows");
+    for (const digest of report.orphan_assets) {
+      rows.appendChild(orphanRow(digest));
+    }
   } else {
+    // «NONE» AND «CANNOT SAY» ARE TWO DIFFERENT ANSWERS, and until 8 October
+    // 2026 this branch collapsed them: NO implementation could enumerate, so
+    // the list was always empty and the sentence blamed MinIO — true, and
+    // incomplete. The two local stores answer now; MinIO still does not, and
+    // that is a decision (a bucket listing on a page load is an expensive
+    // question, and `storage.js`'s rule stands either way).
+    const muto = /minio|s3/i.test(String(report.asset_store || ""));
     orphans.innerHTML = `<h2>Orphan assets</h2>
-      <p class="muted">None reported. Note that a store which cannot enumerate
-        (MinIO, on purpose — listing a shared bucket on a page load is an
-        expensive question) reports none rather than a partial list.</p>`;
+      <p class="muted">${muto
+        ? `This store does not enumerate (<b>${escapeHtml(report.asset_store)}</b>,
+           on purpose — listing a shared bucket on a page load is an expensive
+           question), so it reports <b>none rather than a partial list</b>. An
+           orphan here can still be forgotten: name its digest to the node.`
+        : `<b>None.</b> Every digest
+           <b>${escapeHtml(report.asset_store)}</b> holds is mentioned by a
+           room's document.`}</p>`;
   }
   root.appendChild(orphans);
+}
+
+/** One orphan, and the verb that removes it.
+ *
+ *  `confirmTyped` and NOT `confirmNamed`: the second is a `window.confirm` and
+ *  is right for its three reversible uses — revoke, archive, restore — and
+ *  wrong here. These bytes do not come back, so the digest has to be TYPED. A
+ *  dialog dismissed by reflex protects nothing, and typing 64 hex characters is
+ *  the one gesture that cannot be done by reflex. (Decided 2026-10-07; there is
+ *  no third confirmation.)
+ */
+function orphanRow(digest) {
+  const row = document.createElement("div");
+  row.className = "orphan-row";
+  const name = document.createElement("span");
+  name.className = "mono small";
+  name.textContent = digest;
+  const drop = document.createElement("button");
+  drop.className = "ghost";
+  drop.textContent = "forget";
+  drop.title = "Remove these bytes from the store. This cannot be undone, and "
+    + "the node refuses if any room or the resident corpus still references them.";
+  drop.addEventListener("click", async () => {
+    if (!confirmTyped("Forget these bytes? They do not come back.", digest)) return;
+    try {
+      const done = await api.del(`/admin/assets/${encodeURIComponent(digest)}`);
+      // THE NODE'S OWN TWO ANSWERS, kept apart. «removed» and «there was
+      // nothing to remove» are two different reports for an operator, and
+      // collapsing them into "done" would throw away the useful one.
+      say(done.removed ? `forgotten: ${digest}`
+                       : `nothing to remove: the store did not have ${digest}`,
+          done.removed ? "good" : "warn");
+      show(MODULE);
+    } catch (error) {
+      // …and a REFUSAL is the node's sentence, which names the rooms. Rewriting
+      // it as "failed" would throw away the remedy.
+      say(error.message, "bad");
+    }
+  });
+  row.append(name, drop);
+  return row;
 }
 
 function lifecycleButton(room) {

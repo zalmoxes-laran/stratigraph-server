@@ -301,3 +301,31 @@ details.small button { margin-top: .4rem; }
 .node-bar .bar-offer { border: 1px solid var(--line); }
 .node-bar .bar-offer[data-state] { color: var(--ink-soft); opacity: 0.65; }
 .node-bar .bar-quiet { color: var(--ink-soft); font-style: italic; }
+
+/* ── UN ORFANO, E IL VERBO CHE LO TOGLIE ────────────────────────────────────
+ *
+ * Una riga per digest, dall'8 ottobre 2026: prima erano sessantaquattro
+ * caratteri per riga in un `<div>` che si poteva solo leggere. Contare una cosa
+ * che non si può toccare è il modo più sicuro per insegnare a non guardare quel
+ * numero.
+ *
+ * Il digest non si tronca: è quello che va SCRITTO nella conferma, e una riga
+ * che ne mostra metà sarebbe una conferma impossibile. Scorre invece di
+ * accorciarsi. */
+.orphan-rows { display: flex; flex-direction: column; gap: var(--sg-space-1); }
+.orphan-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sg-space-2);
+  padding: var(--sg-space-1) 0;
+  border-bottom: 1px solid var(--line);
+}
+.orphan-row:last-child { border-bottom: 0; }
+.orphan-row .mono {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  color: var(--ink-soft);
+}
+.orphan-row button { flex: none; }

@@ -286,7 +286,31 @@ def test_the_openapi_schema_is_served():
                       # snapshot, and there is deliberately NO delete (retention
                       # of backups is a policy nobody has written yet, and a
                       # sweep that ran without one would eat the safety copies).
-                      ("PUT", "/v1/rooms/{room_id}/blend-backup")}, \
+                      ("PUT", "/v1/rooms/{room_id}/blend-backup"),
+                      # ── AND THE ONE DELETE THAT REMOVES BYTES ─────────────
+                      #
+                      # Added 2026-10-08, and this inventory is exactly where it
+                      # had to be argued. Until then this service could put an
+                      # asset, serve it and describe it; the only way to take one
+                      # out was inside MinIO, by hand. That is not an untidiness
+                      # — it is having to tell somebody whose photograph should
+                      # not have been uploaded that the node cannot forget.
+                      #
+                      # It does NOT make this a mutable document store, and
+                      # three properties keep that true:
+                      #
+                      #  · it names BYTES, never a study. A container is not
+                      #    reachable by it, and `POST /rooms/{id}/archive` still
+                      #    says «Not a deletion, and there is no deletion»;
+                      #  · it REFUSES anything still referenced — by any room or
+                      #    by the resident corpus — and says by whom. An asset is
+                      #    content-addressed, so removing a referenced digest
+                      #    would take it from every record pointing at it,
+                      #    silently;
+                      #  · one digest, one call, named by a person: no sweep and
+                      #    no timer, and `test_il_verbo_che_manca` asserts that
+                      #    no route removes more than one.
+                      ("DELETE", "/v1/admin/assets/{ref}")}, \
         f"unexpected write endpoints: {sorted(writes)}"
     assert not [p for p in paths if p.endswith("/study") or p.endswith("/graph")], \
         "no route may take a study away: the deletions are tombstones"

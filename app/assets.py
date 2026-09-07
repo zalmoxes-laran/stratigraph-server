@@ -31,7 +31,7 @@ import hashlib
 import os
 import pathlib
 import threading
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 
 #: What a room's assets are addressed by. The prefix is not decoration: it is
@@ -45,8 +45,15 @@ def content_id(data: bytes) -> str:
     return f"{DIGEST_PREFIX}:{hashlib.sha256(data).hexdigest()}"
 
 
+#: `runtime_checkable` so a TEST can ask «who implements this?» instead of
+#: keeping a list of the backends beside the backends. Added 2026-10-08 with
+#: `delete`: it is what lets `tests/test_il_verbo_che_manca.py` discover the
+#: implementations FROM the protocol, so a store PSNC has not written yet is
+#: under the gate before it exists. It checks method PRESENCE and nothing else,
+#: which is exactly what «implements this interface» means here.
+@runtime_checkable
 class AssetStore(Protocol):
-    """Put bytes, get bytes, ask about bytes. Nothing else lives here."""
+    """Put bytes, get bytes, ask about bytes, take bytes out. Nothing else."""
 
     def put(self, data: bytes, media_type: str) -> Dict[str, Any]:
         """Store `data`; return `{ref, sha256, media_type, size, created}`.
@@ -60,6 +67,40 @@ class AssetStore(Protocol):
 
     def head(self, ref: str) -> Optional[Dict[str, Any]]:
         """`{ref, sha256, media_type, size}` without moving the bytes."""
+
+    def delete(self, ref: str) -> Dict[str, Any]:
+        """Remove the bytes behind `ref`. `{ref, removed}` — never `None`.
+
+        ════════════════════════════════════════════════════════════════════════
+        THE FOURTH VERB, added 2026-10-08, and it goes HERE and not in a bucket.
+
+        Until now this interface could put, get and ask. The only way to take
+        something out was inside MinIO, by hand — an asymmetry whose cost is
+        paid by whoever has to explain, to somebody whose photograph should not
+        have been uploaded, that the node cannot forget.
+
+        **It is in the protocol rather than in a backend on purpose.** MinIO may
+        stop being supported for the community and PSNC may propose a store of
+        their own; a deletion written against MinIO would be a debt paid twice.
+        Three implementations already exercise these three methods, which is the
+        evidence that a fourth will fit — and `tests/test_il_verbo_che_manca.py`
+        discovers the implementations FROM THIS PROTOCOL rather than listing
+        them, so a store nobody has written yet is already under the gate.
+
+        Two properties, and they are properties rather than preferences:
+
+        * **IDEMPOTENT.** Deleting twice is not an error. The second call says
+          «it was not there» and does not raise: a cleanup that fails on the
+          already-clean is a cleanup nobody runs a second time.
+        * **IT SAYS WHAT IT DID.** `removed: True` means it was there and is
+          gone; `removed: False` means there was nothing to remove. Two
+          different reports for an operator, and `None` would be neither.
+
+        What this method does NOT decide is WHETHER the bytes may go. Nothing
+        here knows how many rooms point at a digest — that is
+        `POST /v1/admin/assets/forget`'s question, and answering it in two
+        places would be two answers.
+        """
 
 
 class InMemoryAssetStore:
@@ -94,6 +135,36 @@ class InMemoryAssetStore:
         with self._lock:
             meta = self._meta.get(ref)
         return dict(meta) if meta else None
+
+    def delete(self, ref: str) -> Dict[str, Any]:
+        with self._lock:
+            existed = ref in self._blobs
+            self._blobs.pop(ref, None)
+            self._meta.pop(ref, None)
+        return {"ref": ref, "removed": existed}
+
+    def refs(self) -> List[str]:
+        """Every reference this store holds.
+
+        ════════════════════════════════════════════════════════════════════════
+        WHY THIS EXISTS, AND WHY IT DID NOT (measured 2026-10-08)
+
+        `main._stored_digests()` asks a store for `refs`, `digests` or `keys` and
+        falls back to a `_data` dict. **No implementation had any of the four**,
+        so `orphan_assets` in `/v1/admin/storage` has been `[]` since the report
+        was written — on every backend, not only on MinIO. The console said
+        «None reported. Note that a store which cannot enumerate (MinIO, on
+        purpose…)», and the parenthetical made a general emptiness look like one
+        store's policy.
+
+        So the two LOCAL stores answer now, and MinIO deliberately still does
+        not: listing a shared bucket on a page load is an expensive question,
+        and `storage.js`'s rule — the browser never addresses the store — is
+        untouched either way. A report that is silently partial is worse than
+        one that says so; a report that is silently EMPTY is worse than both.
+        """
+        with self._lock:
+            return sorted(self._blobs)
 
     def count(self) -> int:
         """How many distinct objects — the number a dedup test measures."""
@@ -142,6 +213,55 @@ class DirectoryAssetStore:
             else "application/octet-stream"
         return {"ref": ref, "sha256": ref.split(":", 1)[1], "media_type": media,
                 "size": path.stat().st_size}
+
+    def delete(self, ref: str) -> Dict[str, Any]:
+        """The blob and its `.type` sidecar, and the fan-out directories that
+        are left empty.
+
+        The sidecar matters: `put` writes two files and a `delete` that removed
+        one would leave a store where `head` says nothing and a stray
+        `<digest>.type` stays for ever. Measured by writing the test first —
+        the first version left it behind.
+
+        The empty directories are swept because the fan-out exists to keep a
+        directory listable, and two levels of empty folders per forgotten
+        object is the same problem arriving from the other side. `rmdir` and
+        not `rmtree`: it refuses when something is still in there, which is
+        exactly the check we want and not a risk to take.
+        """
+        path = self._path(ref)
+        existed = path.is_file()
+        path.unlink(missing_ok=True)
+        path.with_suffix(".type").unlink(missing_ok=True)
+        for parent in (path.parent, path.parent.parent):
+            try:
+                if parent != self.root:
+                    parent.rmdir()
+            except OSError:
+                break              # not empty: somebody else's digest lives here
+        return {"ref": ref, "removed": existed}
+
+    def refs(self) -> List[str]:
+        """Every reference on disk — walked, not indexed.
+
+        See `InMemoryAssetStore.refs` for why this was missing and what it
+        costs. Cheap here for the reason the fan-out exists: two levels of
+        directories, so this is a walk over a tree and never a listing of one
+        enormous folder.
+
+        The `.type` sidecars are skipped by NAME LENGTH and not by suffix: a
+        digest is 64 hex characters, and `<digest>.type` is not. Checking the
+        shape is what keeps a stray file in the tree from being reported as an
+        asset the store holds.
+        """
+        found = []
+        for path in self.root.rglob("*"):
+            if not path.is_file():
+                continue
+            name = path.name
+            if len(name) == 64 and all(c in _HEX for c in name.lower()):
+                found.append(f"{DIGEST_PREFIX}:{name}")
+        return sorted(found)
 
 
 class MinioAssetStore:
@@ -270,6 +390,44 @@ class MinioAssetStore:
         return {"ref": ref, "sha256": self._key(ref),
                 "media_type": stat.content_type or "application/octet-stream",
                 "size": stat.size}
+
+    #: NO `refs()` HERE, and it is a decision rather than an omission. The
+    #: client can list a bucket; this class does not offer it, so
+    #: `main._stored_digests()` gets nothing and the orphan report says it
+    #: cannot enumerate instead of returning a partial list. Listing a shared
+    #: bucket on a page load is an expensive question, and the two local stores
+    #: answer it for the runs where it is cheap. Read `InMemoryAssetStore.refs`
+    #: for the measurement that put those two there.
+
+    def delete(self, ref: str) -> Dict[str, Any]:
+        """`remove_object`, and the `stat` before it is what makes the answer
+        honest.
+
+        S3 deletion is idempotent by design: removing a key that is not there
+        succeeds. That is the right behaviour and the wrong REPORT — an operator
+        told «removed» about an object that was never in the bucket learns
+        nothing. So it asks first, and the two answers stay distinguishable.
+
+        The race is named and accepted: between the `stat` and the `remove`
+        somebody could upload the same bytes, and then `removed: True` would be
+        about an object that came back. It is a content-addressed store, so what
+        came back IS the same bytes — the report is imprecise about the instant
+        and correct about the state, which is the trade a lock across a network
+        would not improve.
+        """
+        from minio.error import S3Error  # type: ignore
+
+        key = self._key(ref)
+        existed = True
+        try:
+            self._client.stat_object(self.bucket, key)
+        except S3Error as exc:
+            if exc.code not in ("NoSuchKey", "NoSuchObject", "NotFound"):
+                raise
+            existed = False
+        if existed:
+            self._client.remove_object(self.bucket, key)
+        return {"ref": ref, "removed": existed}
 
 
 #: The MinIO settings, in the two spellings that exist in the wild: the client's
