@@ -30,6 +30,7 @@
  */
 
 import * as oidc from "../admin/auth.js";
+import { mountBar } from "../admin/bar.js";
 // Six languages, English the source — the SAME dictionary the operator console
 // uses, imported the same way `auth.js` is (`../admin/…`, relative so the `/em`
 // prefix a proxy adds comes along). Two faces of one server, one dictionary:
@@ -392,32 +393,70 @@ function destinationCard({ label, sub, href, primary }) {
   return box;
 }
 
+/** Il prefisso sotto cui questo deployment ci serve — `""` alla radice.
+ *
+ *  La stessa aritmetica di `bar.js`: la vestibolo sta su `/rooms/`, quindi la
+ *  propria URL meno `/rooms/` è il prefisso, e prefisso + `/work/` è dove sta
+ *  quella porta QUI. Niente è configurato e niente è indovinato. */
+/** Quello che il dizionario dice, o il ripiego. `t()` torna la CHIAVE quando
+ *  non traduce, quindi `t(k) || fallback` non ricade mai. */
+function said(key, fallback) {
+  const text = t(key);
+  return text && text !== key ? text : fallback;
+}
+
+/** Ridisegna la barra. Assegnata al montaggio: prima di allora non c'è niente
+ *  da ridisegnare, e una funzione che non fa niente sarebbe una bugia comoda. */
+let redrawBar = async () => {};
+
+function nodePrefix() {
+  const here = window.location.pathname;
+  const at = here.lastIndexOf("/rooms/");
+  return at >= 0 ? here.slice(0, at) : here.replace(/\/[^/]*$/, "");
+}
+
 function renderDestinations() {
   const host = $("destinations");
   if (!host) return;                      // not the vestibule: nothing to draw
   const catalog = catalogBase();
   const signed = Boolean(token);
 
+  // ── LE FACCE VENGONO DAL NODO, non da questo file ─────────────────────────
+  //
+  // Fino al 7 ottobre 2026 qui c'erano `"../work/"`, `"../tools/"` e
+  // `"../admin/"` scritti a mano — su una pagina la cui docstring dice «IT OWNS
+  // NOTHING. Not a list, not a state, not a configuration saying where things
+  // live». Erano relativi, quindi funzionavano, ed erano la quarta copia di
+  // «dove stanno le facce del nodo»: la copia che `ENTRANCES` e
+  // `test_node_map.py` esistono per impedire, seduta accanto a loro.
+  //
+  // Adesso arrivano da `/v1/node` (`faces`), e `barPlan` le trasforma in
+  // qualcosa che questa pagina può seguire. `needs: "operator"` decide da sé
+  // chi vede la console: era un `operator ? … : null` scritto qui, cioè la
+  // stessa regola in due posti.
+  const faces = (node && node.faces) || [];
   const doors = [
-    // LAVORARE — first when there is somebody to work as
-    { key: "work", href: "../work/", primary: signed,
-      label: t("go.work"), sub: t("go.work.sub") },
-    // CONSULTARE — first when there is not: the published is what a visitor has
+    ...faces
+      .filter((face) => face.page && face.path !== "/rooms/"
+                        && (face.needs !== "operator" || operator))
+      .map((face) => ({
+        key: face.key,
+        href: `${nodePrefix()}${face.path}`,
+        primary: face.key === "work" && signed,
+        //: il dizionario quando ce l'ha, la frase del NODO altrimenti — e il
+        //: confronto con la chiave è l'unico modo di saperlo (vedi `bar.js`)
+        label: said(`go.${face.key}`, face.label),
+        sub: said(`go.${face.key}.sub`, face.what),
+      })),
+    // CONSULTARE — il vicino, e primo quando non c'è nessuno per cui lavorare:
+    // il pubblicato è quello che un visitatore può avere.
+    //
+    // NOT A DEAD CARD. A node with no catalogue has nothing published to
+    // consult, and drawing the door anyway would send somebody to a 404 in the
+    // name of symmetry.
     catalog
       ? { key: "consult", href: `${catalog}/ui/`, primary: !signed,
           label: t("go.consult"), sub: t("go.consult.sub") }
-      // NOT A DEAD CARD. A node with no catalogue has nothing published to
-      // consult, and drawing the door anyway would send somebody to a 404 in the
-      // name of symmetry.
-      : null,
-    { key: "tools", href: "../tools/", primary: false,
-      label: t("go.tools"), sub: t("go.tools.sub") },
-    // AMMINISTRARE — only for whoever the node has told us is an operator. The
-    // map below is gated the same way and by the same answer, so the two cannot
-    // disagree about who is one.
-    operator
-      ? { key: "admin", href: "../admin/", primary: false,
-          label: t("go.admin"), sub: t("go.admin.sub") }
       : null,
   ].filter(Boolean);
 
@@ -1152,7 +1191,11 @@ async function loadNodeMap() {
     if (!$("destinations")) return;
     try {
       const who = await request("GET", "/admin/whoami");
-      if (who && who.operator === true) { operator = true; renderDestinations(); }
+      if (who && who.operator === true) {
+        operator = true;
+        renderDestinations();
+        void redrawBar(true);     // …e la console compare anche nella barra
+      }
     } catch { /* not an operator, or no session: neither is a fault */ }
     return;
   }
@@ -1163,6 +1206,7 @@ async function loadNodeMap() {
   if (!who || who.operator !== true) return;
   operator = true;
   renderDestinations();       // …and now the door for it exists, from this answer
+  void redrawBar(true);       // …e nella barra, dalla stessa risposta
 
   let report;
   try { report = await request("GET", "/admin/health"); }
@@ -1532,6 +1576,13 @@ async function boot() {
     await oidc.signIn(authConfig, { silent: true });
     return;                     // navigating; the page comes back either way
   }
+
+  // LA BARRA, per prima e per chiunque: dove sei su questo nodo e dove altro
+  // puoi andare. Non dipende da una sessione — un visitatore ne vede meno voci,
+  // non una barra rotta — e viene ridisegnata quando si scopre chi guarda.
+  redrawBar = await mountBar($("node-bar"), {
+    read: (path) => request("GET", path), operator, t,
+  });
 
   // WHERE TO GO, before anybody knows who you are: the vestibule's whole job.
   // The destinations do not depend on a session — an unsigned visitor is sent to

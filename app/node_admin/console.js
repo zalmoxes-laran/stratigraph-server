@@ -49,6 +49,9 @@ export function register(module) {
  *  `/em/admin/index.html` the first version of this produced
  *  `/em/admin/index.html/v1` and every call 404'd — with nothing on screen but
  *  "Loading…". */
+import { mountBar } from "./bar.js";
+import { makeConfirm } from "./confirm.js";
+
 const BASE = window.location.pathname.replace(/\/admin(\/.*)?$/, "") + "/v1";
 
 let token = "";
@@ -58,6 +61,11 @@ let authConfig = null;
 //: token: a refresh token in web storage is a credential that outlives the tab.
 let refreshToken = "";
 let refreshTimer = 0;
+//: LA VIA D'USCITA. Misurato il 7 ottobre chiedendo al DOCUMENTO e non al
+//: testo: questa pagina aveva ZERO ancore. Era l'isola più isolata delle
+//: cinque — chi amministra un nodo ci arriva scrivendo un indirizzo e ne esce
+//: allo stesso modo.
+let redrawBar = async () => {};
 
 export const api = {
   base: BASE,
@@ -138,9 +146,12 @@ export function say(message, kind = "info") {
 }
 
 /** A deliberate action asks first, and asks with the NAME in it. */
-export function confirmNamed(what, name) {
-  return window.confirm(t("console.confirm", { what, name }));
-}
+//: LE DUE CONFERME, da un posto solo e senza dizionario dentro
+//: (`confirm.js`). Ri-esportate qui perché è da qui che i moduli importano —
+//: la dipendenza punta in un verso, e spostarle non lo gira.
+const _confirm = makeConfirm(t);
+export const confirmNamed = _confirm.confirmNamed;
+export const confirmTyped = _confirm.confirmTyped;
 
 function drawNav() {
   nav.innerHTML = "";
@@ -215,6 +226,14 @@ function adoptSession(result) {
 }
 
 async function boot() {
+  // LA BARRA PER PRIMA, prima della firma e prima di sapere chi sei: chi arriva
+  // qui per sbaglio deve poter uscire, e un visitatore ne vede meno voci — non
+  // una barra rotta. `read` passa dal `request` del guscio, così il token (che
+  // qui non c'è ancora) resta l'affare di una sola funzione.
+  redrawBar = await mountBar(document.getElementById("node-bar"), {
+    read: (path) => request("GET", path), operator: false, t,
+  });
+
   authConfig = await oidc.loadConfig(BASE).catch(() => null);
 
   // Coming BACK from the IdP is the first thing to check: the page is loading
@@ -248,6 +267,9 @@ async function boot() {
  * console you could talk out of it with a devtools console.
  */
 async function enter(me) {
+  //: la barra segue la RISPOSTA del nodo, non la firma: «console» compare a chi
+  //: la può aprire, e chi non può vede meno voci invece di una barra rotta
+  void redrawBar(me.operator === true);
   whoEl.textContent = me.operator
     ? `operator${me.orcid ? " · " + me.orcid : " · dev mode"}`
     : (me.orcid || "signed in");
@@ -344,6 +366,7 @@ function paintStrings() {
   document.documentElement.lang = LOCALE;
   document.title = t("console.title");
   set("app-sub", t("console.sub"));
+  set("back-door", t("go.back"));
   set("token-title", t("console.token.title"));
   set("token-why", t("console.token.why"));
   set("token-ok", t("console.token.use"));

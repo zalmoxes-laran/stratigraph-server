@@ -13,7 +13,7 @@
 #   docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml --profile https up -d --build
 #
 # Dopo aver editato s3Dgraphy, per raccogliere le modifiche:
-#   docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart stratigraph-server stratigraph-catalog pyarchinit-mini
+#   docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart stratigraph-server stratigraph-catalog
 services:
   stratigraph-server:
     volumes:
@@ -25,13 +25,6 @@ services:
       - ../../s3Dgraphy/src:/s3dgraphy-src:ro
     environment:
       PYTHONPATH: /s3dgraphy-src
-  # pyarchinit-mini: stesso meccanismo. Il suo CMD ANTEPONE il PYTHONPATH
-  # ereditato al proprio (`${PYTHONPATH:+$PYTHONPATH:}/srv/pyarchinit-mini`),
-  # quindi il checkout vince sul wheel installato — se un giorno quel CMD
-  # tornasse ad ASSEGNARE PYTHONPATH, questo mount diventerebbe muto e le
-  # modifiche a s3Dgraphy semplicemente non comparirebbero.
-  pyarchinit-mini:
-    volumes:
-      - ../../s3Dgraphy/src:/s3dgraphy-src:ro
-    environment:
-      PYTHONPATH: /s3dgraphy-src
+  # pyarchinit-mini stava qui e e' USCITO il 2026-10-07: una sovrascrittura per
+  # un servizio che non esiste piu' fa fallire `docker-compose config`, quindi
+  # non e' una riga che si poteva lasciare per gentilezza.

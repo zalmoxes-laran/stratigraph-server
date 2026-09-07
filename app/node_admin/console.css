@@ -62,8 +62,19 @@
 
 * { box-sizing: border-box; }
 
+/* UNA COLONNA, e non un numero magico.
+ *
+ * `.shell` aveva `min-height: calc(100vh - 49px)`, dove 49 era l'altezza
+ * dell'intestazione — misurata una volta e vera finché la cromatura non è
+ * cambiata. Il 7 ottobre ne sono arrivate due righe (la barra del nodo e
+ * l'ancora statica sotto) e la pagina si è spinta fuori dallo schermo:
+ * misurato nel browser, non dedotto. Con una colonna flex il conto lo fa il
+ * layout, e la prossima riga non rompe niente. */
 body {
   margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
   background: var(--paper);
   color: var(--ink);
   font: var(--sg-weight-body) 14px/1.5 var(--sg-font-sans);
@@ -95,15 +106,20 @@ body {
 .spacer { flex: 1; }
 .who { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 
-.shell { display: flex; align-items: flex-start; min-height: calc(100vh - 49px); }
+.shell { display: flex; align-items: stretch; flex: 1; }
 
-nav {
+/* `.shell > nav` E NON `nav`.
+ *
+ * Il selettore nudo prendeva OGNI `<nav>` della pagina, e il 7 ottobre ne è
+ * comparso un secondo — la barra del nodo — che si è preso 13rem di larghezza,
+ * il fondo della colonna e un `min-height` di uno schermo intero. Trovato
+ * guardando la pagina, che è l'unico modo di trovare una cosa così. */
+.shell > nav {
   width: 13rem;
   flex: 0 0 13rem;
   padding: .8rem .5rem;
   background: var(--nav);
   border-right: 1px solid var(--line);
-  min-height: calc(100vh - 49px);
 }
 
 .nav-item {
@@ -234,3 +250,54 @@ details.small button { margin-top: .4rem; }
 .lang { font: inherit; font-size: .82em; padding: .2rem .4rem;
         border-radius: 6px; border: 1px solid var(--line);
         background: var(--card); color: var(--ink); }
+
+/* IL LINK DISCRETO — `.more`. Viveva in `rooms.css` e sta qui dal 7 ottobre,
+ * perché la console ha ora il suo `#back-door` e questo è il foglio che ogni
+ * faccia importa. Il colore è un token e non una scelta: `test_brand_ui`
+ * verifica che nessun elemento interattivo erediti il blu del browser, ed è
+ * scattato appena l'ancora è comparsa nella console senza una regola che la
+ * raggiungesse. */
+.more { font-family: var(--sg-font-mono); font-size: .8em;
+        color: var(--sg-info-ink); text-decoration: none; margin-right: .8rem; }
+.more:hover { text-decoration: underline; }
+
+/* ── LA BARRA DEL NODO ──────────────────────────────────────────────────────
+ *
+ * Una sola, condivisa da tutte le facce di questo server (`bar.js`). Nasce il
+ * 7 ottobre 2026 da una misura: chiesto al DOCUMENTO e non al testo, la console
+ * e il catalogo avevano zero ancore, e le altre due pagine ne avevano una —
+ * `../rooms/`, relativa, che è la forma giusta e non bastava.
+ *
+ * Nessun colore letterale: solo i token del tema, dai nomi locali qui sopra. */
+.node-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sg-space-1);
+  padding: var(--sg-space-1) var(--sg-space-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--nav);
+  font-size: var(--sg-text-sm);
+}
+.node-bar:empty { display: none; }
+.node-bar .bar-face {
+  padding: var(--sg-space-1) var(--sg-space-2);
+  border-radius: var(--sg-radius-sm);
+  color: var(--ink-soft);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.node-bar .bar-face:hover { background: var(--card); color: var(--ink); }
+/* DOVE SEI, e non con un colore soltanto: una barra che distingue la pagina
+ * attiva col solo colore non la distingue per chi non lo vede. */
+.node-bar .bar-face.on {
+  color: var(--ink);
+  background: var(--card);
+  box-shadow: inset 0 -2px 0 var(--accent);
+  font-weight: 600;
+}
+/* I VICINI, separati dalle facce di questo server: sono un'altra origine, e una
+ * barra che li mescolasse direbbe che stai restando dove sei. */
+.node-bar .bar-offer { border: 1px solid var(--line); }
+.node-bar .bar-offer[data-state] { color: var(--ink-soft); opacity: 0.65; }
+.node-bar .bar-quiet { color: var(--ink-soft); font-style: italic; }

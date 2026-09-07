@@ -90,10 +90,8 @@
         "https://localhost:8443/em/read/*",
         "http://localhost:5173/*",
         "http://127.0.0.1:5173/*",
-        "http://localhost:8090/*",
-        "http://127.0.0.1:8090/*",
-        "https://em.localhost:8443/pyarchinit/*",
-        "https://localhost:8443/pyarchinit/*"
+        "https://em.localhost:8443/catalog/ui/*",
+        "https://localhost:8443/catalog/ui/*"
       ],
       "webOrigins": [
         "+"

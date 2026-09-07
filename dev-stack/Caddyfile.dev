@@ -25,8 +25,9 @@
 	#
 	# Measured on 2026-09-18, and it was SEVEN OUT OF SEVEN: every prefix this
 	# site routes answered 404 without its trailing slash, while answering with
-	# it (`/chat/` 200, `/iiif/` 301, `/assets/` 403, `/pyarchinit/` 302,
-	# `/auth/` 302). So it was never a defect of one route — it is a property of
+	# it (`/chat/` 200, `/iiif/` 301, `/assets/` 403, `/auth/` 302; a fifth,
+	# `/pyarchinit/` 302, was measured then and that route left on 2026-10-07).
+	# So it was never a defect of one route — it is a property of
 	# this file, and it is cured with ONE RULE rather than seven patches.
 	#
 	# The reason a bare prefix misses everything: every `handle` here matches
@@ -74,11 +75,11 @@
 	# One documented exception is not seven patches: the rule stands, and the
 	# one upstream that disagrees about slashes is named here with its answers.
 	@bare_prefix_with_query {
-		path /em /catalog /assets /pyarchinit /chat /auth
+		path /em /catalog /assets /chat /auth
 		expression {query} != ""
 	}
 	@bare_prefix {
-		path /em /catalog /assets /pyarchinit /chat /auth
+		path /em /catalog /assets /chat /auth
 		expression {query} == ""
 	}
 	redir @bare_prefix_with_query {path}/?{query} 308
@@ -182,53 +183,17 @@
 		reverse_proxy stratigraph-catalog:8000
 	}
 
-	# StratiGraph · pyarchinit-mini — THE EXCAVATION'S OWN RECORDS, on the
-	# node's front door instead of on a port number.
+	# StratiGraph · pyarchinit-mini — USCITO il 2026-10-07.
 	#
-	# It ran beside Keycloak, MinIO, the room server and the catalogue from
-	# 2026-09-11, and it was the only one of them reached as
-	# `http://localhost:8090` — which is a process on the same machine rather
-	# than a part of the node. This closes that.
+	# Decisione presa: non lo useremo. Era una web app (fork di
+	# `enzococca/pyarchinit-mini`, GPL-2.0) montata qui dall'11 settembre; il
+	# pyarchinit DESKTOP resta e non c'entra.
 	#
-	# `handle_path` — which STRIPS — and the reason is the distinction this file
-	# keeps drawing. pyarchinit-mini is a Flask application serving at its own
-	# ROOT: `/auth/login`, `/static/…`, `/us/…`. It knows nothing about
-	# `/pyarchinit`, so the prefix has to come off — the same side as the field
-	# assistant above, and the opposite side from the Catalog and IIIF, whose
-	# prefix IS part of their endpoints.
-	#
-	# BUT stripping alone would break every link. Flask builds them with
-	# `url_for`, from the ROOT it thinks it is at, so a stripped prefix means
-	# `/auth/login` in every href and every form `action` — outside the prefix,
-	# and a 404. So the prefix is HANDED BACK in a header:
-	#
-	#   `X-Forwarded-Prefix` → Werkzeug's `ProxyFix` → WSGI `SCRIPT_NAME`
-	#
-	# and from there Flask prepends it by itself. No template is touched, which
-	# is the test of whether this is done right: if a template needs editing,
-	# `SCRIPT_NAME` is not arriving.
-	#
-	# `header_up` and not a page-side convention, because the page cannot know:
-	# unlike the field assistant, which derives its API base from its own
-	# document URL, a server-rendered application has already written its links
-	# by the time a browser sees them.
-	#
-	# AND THE APPLICATION DOES NOT BELIEVE THIS HEADER UNLESS IT IS TOLD TO.
-	# `ProxyFix` is off in pyarchinit-mini unless `PYARCHINIT_BEHIND_PROXY` is
-	# set — the compose sets it for this service and nothing else does. Without
-	# that, a header like this one is caller-supplied, and a caller that can
-	# declare its own prefix and host can steer the links the application
-	# writes. Most people who run pyarchinit-mini expose it directly.
-	handle_path /pyarchinit/* {
-		reverse_proxy pyarchinit-mini:8080 {
-			# INSIDE the `reverse_proxy` block, and that is not a formatting
-			# preference: `header_up` is one of its subdirectives, and Caddy
-			# refuses it as a child of `handle_path` («unrecognized directive:
-			# header_up»). Measured with `caddy validate` before this file was
-			# ever loaded, which is what that command is for.
-			header_up X-Forwarded-Prefix /pyarchinit
-		}
-	}
+	# Con questo blocco sono usciti i due elenchi di `@bare_prefix` qui sopra e la
+	# promessa `/pyarchinit/ 302` nel commento in testa al file. Il volume dei
+	# suoi dati resta dichiarato in `docker-compose.dev.yml` e non montato: dentro
+	# ci sono dati di scavo, non derivati.
+
 
 	# The IIIF Image API. `handle` and NOT `handle_path`: the API version lives
 	# in the path (`/iiif/3/...`), so stripping the prefix would take the

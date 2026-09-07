@@ -46,6 +46,22 @@
     <button id="reload" class="ghost">↻</button>
   </header>
 
+  <!-- ── LA BARRA · dove sei su questo nodo, e dove altro puoi andare ──────
+       Una sola, condivisa da tutte le facce (`../admin/bar.js`), e **nessun
+       indirizzo qui dentro**: le facce arrivano da `/v1/node` e questa pagina
+       le trasforma in qualcosa da seguire sottraendo la propria faccia dalla
+       propria URL. `Caddyfile.dev:295` ha il caso vero: su un nodo che porta
+       anche Heriverse la radice è di Heriverse, e un «home» scritto qui
+       sarebbe falso lì. -->
+  <nav class="node-bar" id="node-bar" aria-label="This node"></nav>
+  <!-- IL PAVIMENTO, sotto la barra e senza JavaScript: la barra è COMPOSTA da
+       `/v1/node`, e una barra composta può tacere — un nodo che non risponde
+       lascerebbe questa pagina senza uscita, ed è la pagina in cui una persona
+       finisce quando qualcosa non va. Un'ancora relativa in HTML statico non
+       dipende da niente. È la stessa che `../work/` e `../tools/` hanno da
+       settembre, e questa console era l'unica a non averla. -->
+  <p class="note"><a class="more" href="../rooms/" id="back-door">← this node</a></p>
+
   <div class="shell">
     <!-- the module registry renders itself here: one entry per module -->
     <nav id="nav" aria-label="modules"></nav>

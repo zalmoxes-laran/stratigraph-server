@@ -21,6 +21,9 @@ fi
 set -euo pipefail
 cd "$(dirname "$0")"                     # stratigraph-server/dev-stack
 
+# CHE MACCHINA È QUESTA. `platform.sh` non assume: chiede.
+. ./platform.sh
+
 HTTPS_PORT="${HTTPS_PORT:-8443}"
 DEV_REALM="${DEV_REALM:-em-dev}"
 
@@ -35,16 +38,20 @@ for a in "$@"; do
   esac
 done
 
-# ── 1 · Colima su ────────────────────────────────────────────────────────────
-if ! colima status >/dev/null 2>&1; then
-  echo "▶ avvio Colima…"
-  colima start --cpu 4 --memory 8 --network-address
-fi
-docker context use colima >/dev/null 2>&1 || true
+# ── 1 · Docker che risponde ──────────────────────────────────────────────────
+#
+# Era `colima status` SEMPRE, e Colima è di macOS: su Linux il demone è di
+# sistema, su Windows non esiste. La domanda vera non è «che sistema è questo»
+# ma **«docker risponde?»** — e colima è il rimedio su macOS quando la risposta
+# è no, non un passo prima di averla chiesta.
+sg_ensure_docker || exit 1
 
 # ── 2 · host primario (browser) + gli indirizzi che Caddy serve ──────────────
 PRIMARY="${ARG_HOST:-em.localhost}"                 # dove punta il browser (URL pubblici)
-BONJOUR="$(scutil --get LocalHostName 2>/dev/null || true)"; [ -n "$BONJOUR" ] && BONJOUR="${BONJOUR}.local"
+# Il nome con cui l'altro computer può raggiungere questo (mai un IP: la CA
+# interna di Caddy non fa certificati per un IP nudo). `scutil` su macOS,
+# `hostname -s` altrove — la differenza sta in `platform.sh`, non qui.
+BONJOUR="$(sg_local_hostname)"; [ -n "$BONJOUR" ] && BONJOUR="${BONJOUR}.local"
 # Caddy serve em.localhost SEMPRE, + il primario e il nome Bonjour se diversi (hostname, mai IP)
 addrs="https://em.localhost"
 [ "$PRIMARY" != "em.localhost" ] && addrs="$addrs, https://$PRIMARY"
@@ -142,6 +149,6 @@ $( # RILEVATO, mai eseguito: fcn-trust-ca.sh chiede una password di sistema, e u
   · altro computer: serve un HOSTNAME (mai IP nudo, rompe il TLS della CA interna) e che le
     due macchine si vedano in rete (hotspot che isola → travel-router · Internet-Sharing · Tailscale).
     Per usarlo come primario:  ./fcn-up.sh ${BONJOUR:-<mac>.local}
-$( [ "$LOCAL_S3D" = "yes" ] && echo "  · dopo aver editato s3Dgraphy:  docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart stratigraph-server stratigraph-catalog pyarchinit-mini" )
+$( [ "$LOCAL_S3D" = "yes" ] && echo "  · dopo aver editato s3Dgraphy:  docker-compose -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart stratigraph-server stratigraph-catalog" )
 Giù:  ./fcn-down.sh   (o --stop / --wipe / --colima)
 EOF

@@ -93,6 +93,68 @@ def test_every_entrance_actually_answers(face):
     )
 
 
+def test_EVERY_MOUNTED_PAGE_IS_ON_THE_MAP():
+    """THE DRIFT THE OTHER DIRECTION, which nothing caught until 7 October 2026.
+
+    The tests above prove every LISTED path is routed. They cannot prove the
+    reverse, and the reverse is what had gone wrong: `/work/` and `/tools/` were
+    mounted eight lines above `ENTRANCES` — with a comment on that mount saying
+    the faces are enumerated «three lines under the `mount` calls» — and neither
+    was in the list. Meanwhile `rooms_ui/rooms.js` carried `"../work/"` and
+    `"../tools/"` in its own source, so the list that exists to prevent a fourth
+    copy of «where the node's faces are» had one sitting next to it.
+
+    Asked of the app's own MOUNT TABLE, so there is no source read as text here
+    and no false positive to construct: `/brand` is excluded because it is
+    assets and not a face — the one exemption, named.
+    """
+    mounted = {route.path.rstrip("/") + "/" for route in main.app.routes
+               if isinstance(route, Mount) and route.path != "/brand"}
+    listed = {face["path"] for face in ENTRANCES}
+    missing = sorted(m for m in mounted if m not in listed)
+    assert missing == [], (
+        f"{missing} is mounted and is NOT on the node map. A page nobody lists "
+        f"is a page every other page has to know the address of — which is how "
+        f"`../work/` ended up written inside `rooms.js`."
+    )
+
+
+def test_A_FACE_SAYS_WHAT_IT_NEEDS_structurally():
+    """`needs` is a field and not a sentence, because a bar has to DECIDE.
+
+    `/admin/`'s prose already said «Operator capability required» and a bar that
+    read it would have been a bar that greps English.
+    """
+    needs = {face["path"]: face["needs"] for face in ENTRANCES}
+    assert needs["/admin/"] == "operator"
+    assert all(v in ("", "operator") for v in needs.values()), needs
+    #: …and the four faces a PERSON opens are marked apart from the four a
+    #: machine calls: a bar drawn from all eight would offer «OpenAPI» beside
+    #: «Work», which is a menu that does not know who is reading it
+    pages = {f["path"] for f in ENTRANCES if f["page"]}
+    assert pages == {"/rooms/", "/work/", "/tools/", "/admin/"}, pages
+
+
+def test_THE_FACES_TRAVEL_ON_THE_PUBLIC_ROUTE_TOO():
+    """A bar shared by four pages needs them, and a visitor has no operator
+    capability — so the source cannot be `/v1/admin/health`.
+
+    What this publishes was already discoverable: `/docs` lists every route of
+    this build, `/admin/` among them. Publishing the path of a locked door is
+    not unlocking it.
+    """
+    with TestClient(main.app) as client:
+        answer = client.get("/v1/node")
+    assert answer.status_code == 200
+    faces = answer.json()["faces"]
+    assert {f["path"] for f in faces} == {f["path"] for f in ENTRANCES}
+    #: e la stessa lista, non una seconda: ogni campo viene da `ENTRANCES`
+    for face in faces:
+        original = next(f for f in ENTRANCES if f["path"] == face["path"])
+        for field in ("label", "what", "key", "needs", "page"):
+            assert face[field] == original[field], (face["path"], field)
+
+
 def test_the_addresses_are_composed_and_never_guessed():
     """A node with no public name shows the path and NO link.
 

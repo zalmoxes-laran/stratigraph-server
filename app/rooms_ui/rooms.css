@@ -143,9 +143,10 @@
    guidebook gives mono, "coded fragments, technical modules". */
 .needs { font-family: var(--sg-font-mono); font-size: .78em; }
 
-.more { font-family: var(--sg-font-mono); font-size: .8em;
-        color: var(--sg-info-ink); text-decoration: none; margin-right: .8rem; }
-.more:hover { text-decoration: underline; }
+/* `.more` STA IN `../admin/console.css`, il foglio che tutte le facce
+   importano: dal 7 ottobre ce l'ha anche la console (il suo `#back-door`), e
+   due copie di un colore sono due colori il giorno che qualcuno ne tocca uno.
+   Spostato là dal cancello di `test_brand_ui`, che è scattato subito. */
 
 /* The studies under a monument: the SAME card, indented, so the nesting is the
    only thing that differs — a monument is its studies over time. */

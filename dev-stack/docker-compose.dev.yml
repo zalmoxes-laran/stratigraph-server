@@ -867,171 +867,35 @@ services:
     restart: unless-stopped
 
   # =======================================================================
-  # pyarchinit-mini — lo scavo che entra dalla porta dei dati
+  # pyarchinit-mini — USCITO dalla stack il 2026-10-07
   # =======================================================================
   #
-  # Fork `StratiGraph-ECCCH/pyarchinit-mini` (upstream `enzococca/pyarchinit-mini`,
-  # GPL-2.0), branch `stratigraph/01-container`. Costruito dal CHECKOUT, come
-  # stratigraph-server e stratigraph-catalog: in produzione l'Ansible tira
-  # un'immagine dal registry di 3DR, qui non esiste ancora un'immagine da tirare.
+  # Decisione presa: **non lo useremo.** Era la web app
+  # `StratiGraph-ECCCH/pyarchinit-mini` (fork di `enzococca/pyarchinit-mini`,
+  # GPL-2.0), innestata qui il 4 settembre perche' la si potesse guardare girare
+  # accanto agli altri. Le tre cose che le mancavano — identita' OIDC+ORCID,
+  # adapter em.json, client-stanza — non sono state costruite, e non lo saranno.
   #
-  # PRIMO INNESTO, e va detto cosa NON fa ancora: non conosce le stanze, non
-  # valida un token di Keycloak, non parla s3Dgraphy con nessuno. Autentica con
-  # la sua tabella utenti Flask-Login e scrive nelle sue tabelle. Sta nella stack
-  # perche' lo si possa guardare girare accanto agli altri, non perche' sia gia'
-  # seduto al tavolo. Le tre cose che gli mancano hanno gia' un ordine:
-  # identita' OIDC+ORCID, adapter em.json, client-stanza come modulo.
-  pyarchinit-mini:
-    build:
-      context: ../../pyarchinit-mini
-      dockerfile: Dockerfile
-      args:
-        # Come per gli altri: gli extra sono affare del servizio, la VERSIONE no.
-        # Viene dall'ancora in testa a questo file, e il build RIFIUTA senza.
-        S3DGRAPHY_VERSION: *s3dgraphy_version
-    image: pyarchinit-mini:dev
-    container_name: em-dev-pyarchinit
-    environment:
-      # La chiave Fernet con cui cifra le impostazioni. Valore da laptop: sarebbe
-      # una vulnerabilita' su qualsiasi cosa raggiungibile, come tutto in .env.dev.
-      PYARCHINIT_SECRET_KEY: "${PYARCHINIT_SECRET_KEY:-dev-not-a-secret-change-me}"
-      # DATABASE_URL NON impostata di proposito: l'app cade sul suo default
-      # sqlite dentro PYARCHINIT_HOME, cioe' dentro il volume qui sotto. Il ramo
-      # Postgres esiste e funziona (database/connection.py), e si accende
-      # scrivendo questa variabile — mai per caso.
-      # DATABASE_URL: "postgresql://…"
-      #
-      # --- identita': lo STESSO realm degli altri, ma NON le stesse variabili --
-      # Le tre insieme o nessuna: `create_app()` chiama
-      # `oidc_routes.configuration_error()` prima di aprire un database e
-      # RIFIUTA di partire se una manca, invece di servire pagine con
-      # l'autenticazione a meta'. Nessuna variabile = pyarchinit-mini come e'
-      # sempre stato, che e' il modo in cui gira su Railway.
-      #
-      # L'issuer PUBBLICO — cio' che dice `iss` e il posto dove il BROWSER viene
-      # mandato. Stessa riga di stratigraph-catalog, per lo stesso motivo: due
-      # grafie del realm sono due `iss`, e una delle due viene rifiutata.
-      OIDC_ISSUER: "${OIDC_ISSUER:-https://em.localhost:${HTTPS_PORT:-8443}/auth/realms/${DEV_REALM}}"
-      # …e l'indirizzo INTERNO da cui si prendono le chiavi. Diverso di proposito:
-      # `iss` e' un NOME che il token porta, il JWKS e' una macchina che si
-      # chiama. Far passare la lettura delle chiavi da Caddy legherebbe la
-      # capacita' di VALIDARE al proprio stesso proxy.
-      #
-      # Qui questa variabile fa DUE cose in piu' che negli altri servizi, e vanno
-      # dette: pyarchinit-mini non valida soltanto, SCAMBIA il codice e poi
-      # interroga /userinfo. `OidcSettings` deriva da QUESTA base sia il token
-      # endpoint sia quello di userinfo, non dall'issuer, perche' sono le altre
-      # due chiamate server-a-server dello stesso giro.
-      OIDC_JWKS_URI: "http://keycloak:8080/auth/realms/${DEV_REALM}/protocol/openid-connect/certs"
-      # Il client con cui il BROWSER fa il giro. Questa e' l'unica variabile che
-      # gli altri servizi non hanno: loro validano un token che qualcun altro ha
-      # ottenuto, questo lo ottiene, quindi deve dire chi e'. `em-console` — il
-      # client pubblico che le altre pagine usano gia', a cui il 2026-09-12 sono
-      # stati aggiunti i due redirect URI di 8090 (e non i due dietro Caddy, che
-      # sarebbero una porta che nessuno ha costruito: vedi il README del realm).
-      OIDC_CLIENT_ID: "em-console"
-      #
-      # --- e la porta di casa: c'e' un proxy davanti -------------------------
-      # Caddy serve questo servizio sotto `/pyarchinit/` con `handle_path`, che
-      # SPOGLIA il prefisso, e lo restituisce in `X-Forwarded-Prefix`. Questa
-      # variabile e' cio' che autorizza l'applicazione a CREDERGLI: senza,
-      # `ProxyFix` resta spento e quelle intestazioni sono cio' che dice il
-      # chiamante, non cio' che dice il proxy — e chi espone pyarchinit-mini
-      # direttamente (cioe' quasi tutti) non deve regalare a un client la
-      # facolta' di dichiarare il proprio host e il proprio prefisso.
-      #
-      # Accesa QUI e in nessun altro posto. Sulla porta diretta 8090 non passa
-      # da Caddy, ma il prefisso semplicemente non arriva e l'app serve alla
-      # radice: le due vie convivono, ed e' misurato.
-      PYARCHINIT_BEHIND_PROXY: "1"
-      #
-      # E `OIDC_AUDIENCE` NON C'E', a differenza di ogni altro servizio qui:
-      # nessuno la legge. Il primo accesso vero ha rifiutato un token
-      # perfettamente buono con «Invalid audience», e la misura nel realm dice
-      # perche': il mapper `audience` scrive `em-server` nell'ACCESS token con
-      # `id.token.claim = false`. E non e' una mancanza del realm — l'`aud` di
-      # un id_token E' il client che l'ha chiesto (OpenID Connect Core), mentre
-      # `em-server` e' l'audience dell'access token che un resource server
-      # valida. stratigraph-server e' quel resource server e ha ragione a
-      # pretendere `em-server`; questo qui e' un CLIENT che legge il proprio
-      # id_token, quindi l'audience su cui insiste e' il suo `client_id`.
-      # Tornera', con un lettore vero, quando pyarchinit-mini entrera' in una
-      # stanza e terra' un access token.
-      #
-      # AGGIORNAMENTO 2026-09-04, capitolo 6: pyarchinit-mini ORA entra in una
-      # stanza e tiene un access token — e `OIDC_AUDIENCE` NON e' tornata lo
-      # stesso. La riga sopra prevedeva «un lettore vero», e non ce n'e' uno:
-      # il token non viene letto, viene INOLTRATO al servizio a cui e'
-      # indirizzato. La scadenza si prende da `expires_in`, che e' un numero
-      # che il token endpoint ha dato a noi, non un claim dentro un token
-      # indirizzato a qualcun altro. Un client che ISPEZIONA un token altrui ha
-      # smesso di essere un client; un client che lo CONSEGNA al suo
-      # destinatario sta facendo cio' per cui il token e' stato emesso.
-      #
-      # --- e la stanza a cui consegnare -------------------------------------
-      # Le due insieme o nessuna, per la terza volta in questo servizio:
-      # assenti, il blueprint non viene nemmeno registrato (le due URL sono
-      # 404 e la voce di menu non compare); mezze, `create_app` rifiuta
-      # nominando quella che manca.
-      #
-      # L'indirizzo e' INTERNO e per nome di servizio: `stratigraph-server` e'
-      # un alias di rete reale del container `em-dev-server` sulla rete
-      # `em-dev_default`, misurato da dentro questo container
-      # (`http://stratigraph-server:8000/health` → 200). NON
-      # `https://em.localhost:8443`, che metterebbe il nostro stesso proxy nel
-      # percorso di una chiamata server-a-server e pretenderebbe la CA interna
-      # dentro il container per niente. Stessa regola gia' scritta nella
-      # docstring di `OidcSettings.token_endpoint`.
-      #
-      # `8000` e' pubblicata solo su `127.0.0.1` del VM dal 2026-09-19: da
-      # fuori non si raggiunge, e va bene, perche' chi chiama e' dentro.
-      STRATIGRAPH_SERVER_URL: "http://stratigraph-server:8000"
-      # `scavo` — «Scavo (in corso)», la stanza che `seed_rooms.py` semina gia'
-      # (`ROOMS`, riga 134). E' il default giusto perche' esiste ed e' cio' che
-      # significa: uno scavo in corso e' esattamente cio' che pyarchinit-mini
-      # consegna. In un nodo vero questa e' la stanza di quello scavo, e
-      # cambiarla e' una decisione di chi scava, non un default.
-      #
-      # Il giro di misura del capitolo 6 NON ha usato questa: ha usato una
-      # stanza sonda dedicata, passata con `STRATIGRAPH_ROOM_ID=` esplicito e
-      # archiviata alla fine, per non scrivere 112 operazioni dentro una
-      # fixture seminata.
-      STRATIGRAPH_ROOM_ID: "${STRATIGRAPH_ROOM_ID:-scavo}"
-    ports:
-      # 8080 e' occupata su questa macchina (Moodle, e un tunnel ssh), 8085 e'
-      # Keycloak: l'host prende 8090, il container resta sulla sua 8080.
-      #
-      # `127.0.0.1:` DAVANTI, e non e' pignoleria. Senza, Docker pubblica su
-      # `0.0.0.0` — misurato il 2026-09-18: da `192.168.1.234:8090` l'app
-      # rispondeva 302, e con `X-Forwarded-Prefix: /pwned` rispondeva
-      # `Location: /pwned/auth/login?next=%2Fpwned%2F`, cioe' credeva al
-      # chiamante. Il residuo era gia' dichiarato nell'end-of della porta di
-      # casa («la variabile protegge chi non ha un proxy, non chi ha un proxy E
-      # una porta pubblicata») e valutato accettabile «su un portatile».
-      #
-      # IL CONTESTO VERO NON E' UN PORTATILE. Il Field Computing Node, per
-      # progetto, FA DA HOTSPOT ai tablet del cantiere: e' il deployment in cui
-      # «siamo tutti sulla stessa rete» non e' un incidente ma la specifica.
-      # Una porta su `0.0.0.0` con ProxyFix che si fida delle intestazioni, li',
-      # e' raggiungibile da ogni dispositivo attaccato — e chi la raggiunge
-      # decide il prefisso e l'host con cui l'applicazione costruisce i propri
-      # link.
-      #
-      # Legata al loopback la seconda porta RESTA, quindi regge ancora
-      # l'argomento che ha deciso la forma del `redirect_uri` di OIDC: due
-      # porte, due indirizzi giusti, e nessuna base pubblica dichiarata che
-      # possa essere giusta per una sola.
-      #
-      # A chi fra sei mesi volesse riaprirla «per comodita'»: la comodita' e'
-      # `ssh -L 8090:127.0.0.1:8090`, che costa una riga e non mette una porta
-      # di scrittura sull'hotspot di un cantiere.
-      - "127.0.0.1:${PYARCHINIT_PORT:-8090}:8080"
-    volumes:
-      # TUTTO lo stato dell'app: sqlite, secret.key, media, backup, coda di sync.
-      # La directory e' creata NELL'IMMAGINE con l'owner giusto — senza, il volume
-      # nasce root-owned e il processo non-root non scrive il primo file.
-      - pyarchinit_data:/srv/pyarchinit-data
-    restart: unless-stopped
+  # **Il pyarchinit DESKTOP resta e non si tocca**: e' un'altra cosa, e questa
+  # riga esiste perche' nessuno confonda le due leggendo un `git log`.
+  #
+  # IL VOLUME `pyarchinit_data` RESTA DICHIARATO, in fondo a questo file, e non
+  # e' una dimenticanza: dentro ci sono dati di scavo (sqlite, media, backup),
+  # non derivati. Si e' smesso di MONTARLO; cancellarlo e' un secondo atto e lo
+  # decide E.D. — `docker volume rm dev-stack_pyarchinit_data`, quando lo dira'.
+  #
+  # Quello che e' uscito con il servizio, misurato con `grep -rn pyarchinit`:
+  #   · questo blocco (167 righe) e il suo `ports:` su PYARCHINIT_PORT
+  #   · `Caddyfile.dev`  il `handle_path /pyarchinit/*`, i due elenchi di path
+  #                      (`:77` e `:81`) e la promessa `/pyarchinit/ 302` nel
+  #                      commento in testa
+  #   · `docker-compose.local-s3d.yml`  il servizio-sovrascrittura
+  #   · `fcn-up.sh`      il suggerimento di riavvio
+  #   · IL QUINTO, che nessuno aveva nominato: `keycloak/realm-em-dev.json`
+  #                      concedeva due redirect URI `.../pyarchinit/*` a
+  #                      `em-console`. Un redirect concesso verso un percorso
+  #                      che non risponde piu' e' una superficie che resta
+  #                      aperta per un'app che non c'e'.
 
   # The DEPLOY index, for the runs that want to exercise it. Off by default:
   # the dev index is SQLite and needs nothing, and a CouchDB nobody asked for

@@ -37,6 +37,16 @@
     <button id="btn-signout" class="ghost" hidden>Sign out</button>
   </header>
 
+  <!-- ── LA BARRA · dove sei su questo nodo, e dove altro puoi andare ──────
+       Una sola, condivisa da tutte le facce (`../admin/bar.js`), e **nessun
+       indirizzo qui dentro**: le facce arrivano da `/v1/node` e questa pagina
+       le trasforma in qualcosa da seguire sottraendo la propria faccia dalla
+       propria URL. `Caddyfile.dev:295` ha il caso vero: su un nodo che porta
+       anche Heriverse la radice è di Heriverse, e un «home» scritto qui
+       sarebbe falso lì. -->
+  <nav class="node-bar" id="node-bar" aria-label="This node"></nav>
+
+
   <main id="main">
     <section class="head">
       <p id="node-line" class="node-line">…</p>

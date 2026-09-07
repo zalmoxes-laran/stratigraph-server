@@ -52,10 +52,10 @@ keeps a flag set is a door that closes one day without warning.
 
 Four spellings, and they arrived in two goes for a reason worth keeping:
 
-    http://localhost:8090/*                    (2026-09-12)
-    http://127.0.0.1:8090/*                    (2026-09-12)
-    https://em.localhost:8443/pyarchinit/*     (2026-09-17)
-    https://localhost:8443/pyarchinit/*        (2026-09-17)
+    http://localhost:8090/*                    (2026-09-12)  ← WITHDRAWN 10-07
+    http://127.0.0.1:8090/*                    (2026-09-12)  ← WITHDRAWN 10-07
+    https://em.localhost:8443/pyarchinit/*     (2026-09-17)  ← WITHDRAWN 10-07
+    https://localhost:8443/pyarchinit/*        (2026-09-17)  ← WITHDRAWN 10-07
 
 On 12 September the last two were **considered and refused**, because
 `Caddyfile.dev` had no `/pyarchinit/*` route: granting them would have made
@@ -63,9 +63,32 @@ Keycloak answer «accepted» for an address that could not be reached, which is
 worse than a refusal because it looks like it works.
 
 On 17 September the route was built, so the reason lapsed and they were added.
-The two on **8090 stay**: the direct port is still how the service is reached in
-development, and this is an addition rather than a replacement — measured as
-such, both flows work.
+
+**And on 7 October 2026 all four were withdrawn**, because pyarchinit-mini left
+the stack: the decision is that we will not use it (the DESKTOP pyarchinit is
+another thing and stays). The reason of 12 September came back exactly as it was
+written — a redirect granted towards a path that answers nothing is a surface
+left open for an app that is not there — so the grants went with the route.
+
+Two of the four do not contain the word «pyarchinit». `grep -rn pyarchinit` on
+`dev-stack/` finds the last two and misses the first two: what names them is the
+PORT, `PYARCHINIT_PORT:-8090`, which the compose no longer publishes. Worth
+writing down, because that is how a grant survives the thing it was granted for.
+
+## `em-console`'s redirect URIs · the catalogue, added 2026-10-07
+
+    https://em.localhost:8443/catalog/ui/*     (2026-10-07)
+    https://localhost:8443/catalog/ui/*        (2026-10-07)
+
+The catalogue's page held no token until then, «and that is deliberate»: a
+catalogue exists to be found, and an anonymous caller must be answered. Reading
+stays anonymous. What changed is that `DELETE /catalog/study/{id}` — written,
+tested and running from the start — was callable by nobody with a browser,
+because the only surface that shows a study had no way to be anybody.
+
+The SAME client (`em-console`) and the same reasoning as pyarchinit-mini's in
+September: it needs nothing that client does not already have, and a client per
+page would be four places to add a mapper to.
 
 What made the route possible was not a Caddy line but the thing that Caddy line
 needs on the other side: pyarchinit-mini serves at its own root, so

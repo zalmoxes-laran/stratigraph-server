@@ -85,6 +85,11 @@ const STRINGS = {
     // «HDT» is a TERM and is not translated — the dictionary's own rule, and
     // «Monumenti» was the translation of one. Putting it back closes an
     // incoherence instead of opening one.
+    "face.door": "This node",
+    "face.work": "Work",
+    "face.tools": "Tools",
+    "face.admin": "Console",
+    "bar.silent": "this node did not answer",
     "go.back": "← this node",
     "go.title": "Where to go",
     "go.sub": "This node, and what you came for.",
@@ -249,6 +254,7 @@ const STRINGS = {
     "console.unreachable": "Cannot reach this node's API at {base} — {error}",
     "console.session.notRefreshed": "Your session could not be refreshed ({error}). Sign in again.",
     "console.confirm": "{what}\n\n{name}\n\nThis is somebody's workspace. Continue?",
+    "console.confirm.typed": "{what}\n\nThis CANNOT be undone: the container and its card both go, and nothing here remembers.\n\nType the name to confirm:\n{name}",
   },
   it: {
     "app.title": "Questo nodo",
@@ -285,6 +291,11 @@ const STRINGS = {
     "rooms.created": "Creata — ne sei il proprietario.",
     "rooms.missingRefs": "container non nello store: {refs}",
     "rooms.verb": "entra",
+    "face.door": "Questo nodo",
+    "face.work": "Lavorare",
+    "face.tools": "Attrezzarsi",
+    "face.admin": "Console",
+    "bar.silent": "questo nodo non ha risposto",
     "go.back": "← questo nodo",
     "go.title": "Dove andare",
     "go.sub": "Questo nodo, e quello per cui sei venuto.",
@@ -436,6 +447,7 @@ const STRINGS = {
     "console.unreachable": "Non raggiungo l'API di questo nodo a {base} — {error}",
     "console.session.notRefreshed": "La sessione non si è potuta rinnovare ({error}). Rifirma.",
     "console.confirm": "{what}\n\n{name}\n\nQuesto è lo spazio di lavoro di qualcuno. Continuo?",
+    "console.confirm.typed": "{what}\n\nQuesto NON si torna indietro: il contenitore e la sua scheda vanno via tutti e due, e qui niente li ricorda.\n\nScrivi il nome per confermare:\n{name}",
   },
   // ── the partners' slots: same keys, empty values, falling back to `en` ──────
   // The four other project locales hold the SAME KEYS with empty values, which

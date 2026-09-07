@@ -1,4 +1,6 @@
-# The dev stack — MinIO + Keycloak + StratiGraph Server on a laptop (Colima)
+# The dev stack — MinIO + Keycloak + StratiGraph Server on a laptop
+
+*macOS (Colima or Docker Desktop) · Linux (native) · Windows (WSL 2)*
 
 **What this is.** A local stack for *our* development, not a second deployment
 path. The real server — and a local FCN and an institutional node are the same
@@ -15,25 +17,116 @@ path. `.env.dev.example` holds `minioadmin`/`minioadmin` and a realm called
 
 ---
 
-## Prerequisites (once)
+## Prerequisites — WHAT IS ACTUALLY NEEDED, PER PLATFORM
+
+**Two things on the host: Docker, and a shell.** Everything else is inside the
+containers, and that is not a slogan — it is the reason this stack can be
+brought up on a laptop somebody else administers.
+
+**No package manager is required and none is installed by these scripts.** Not
+brew, not chocolatey: they ask for administrator rights on an institutional
+laptop, and that is the point where an IT department says no.
+
+The one thing all three platforms share:
 
 ```bash
-brew install colima docker docker-compose
+docker info      # if this answers, everything below will work
 ```
 
-**Colima** is the alternative to Docker Desktop: it runs a small Linux VM and
-exposes a Docker socket. `docker` is only the client — without Colima (or Docker
-Desktop) there is no daemon for it to talk to.
+That is the question `fcn-up.sh` asks (`platform.sh`, `sg_docker_ready`). It
+used to run `colima status` unconditionally — which is macOS-only — and that is
+what made this directory a Mac-only directory.
+
+### macOS
 
 ```bash
+brew install colima docker docker-compose     # …or install Docker Desktop
 colima start --cpu 4 --memory 8 --disk 30
-docker context use colima   # point the `docker` client at Colima's socket
-docker ps                   # if this answers, everything below will work
+docker context use colima
 ```
+
+**Colima** is the alternative to Docker Desktop: a small Linux VM exposing a
+Docker socket. `docker` is only the client — without one of the two there is no
+daemon for it to talk to. `fcn-up.sh` starts Colima **only if `docker info` does
+not answer**, so a Mac already running Docker Desktop is left alone.
 
 The `docker context` line is the part people miss: it is what makes `docker` and
 `docker compose` speak to the VM instead of looking for a socket that is not
 there. Check it any time with `docker context ls` — the active one has a `*`.
+
+### Linux
+
+Docker runs natively; **there is no VM and colima is not involved.**
+
+```bash
+sudo apt install docker.io docker-compose-plugin   # Debian/Ubuntu
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"                    # then re-open the session
+docker info
+```
+
+One extra package is worth having before you trust the CA:
+`sudo apt install libnss3-tools`. Without it `certutil` is missing and
+`./fcn-trust-ca.sh` can convince `curl` but not the browser — see below.
+
+### Windows
+
+The scripts are bash: they run in **WSL 2** or in **Git Bash**. WSL 2 is the one
+to use — Git Bash has no Docker daemon of its own and would need Docker Desktop
+anyway.
+
+```powershell
+wsl --install                       # once, from an Administrator PowerShell
+```
+
+Then install **Docker Desktop** and turn on *Settings → Resources → WSL
+integration* for that distribution. Inside WSL:
+
+```bash
+docker info
+cd /mnt/c/Users/<you>/…/stratigraph-server/dev-stack
+./fcn-up.sh
+```
+
+> **Keep the checkout inside the WSL filesystem if you can** (`~/…` rather than
+> `/mnt/c/…`). The compose builds from the checkout, and a bind mount across the
+> Windows/Linux boundary is slow enough to be mistaken for a broken build.
+
+---
+
+## WHAT DOES NOT WORK YET, said plainly
+
+**The CA and the browser, on Linux.** `./fcn-trust-ca.sh` now does both stores —
+the system one (`update-ca-certificates`, which is what `curl` reads) and
+Chrome's own NSS store in `~/.pki/nssdb`. **Firefox has a third**, per profile,
+and the script prints the instructions instead of guessing which profile is
+open: writing into the wrong one is how an hour is lost.
+
+**The CA and the browser, on Windows — this is the trap.** The script runs
+inside WSL or Git Bash, and the browser that has to trust the CA is
+**Windows'**. They are two different certificate stores, and nothing done from
+the Linux side touches the Windows one. So the script does not pretend: it
+copies the `.crt` where Windows can see it (`%USERPROFILE%`) and prints the
+exact command, which has to be given in an **Administrator** prompt:
+
+```powershell
+Import-Certificate -FilePath "%USERPROFILE%\caddy-em-root.crt" `
+  -CertStoreLocation Cert:\LocalMachine\Root
+```
+
+After that, **close the browser completely** and reopen it (Chrome and Edge read
+the Windows store at startup). And note the consequence, because it is the hour
+people lose: `curl` **inside WSL** still refuses, because it reads the Linux
+store — run the Linux branch inside WSL too if you need both.
+
+**Nothing else is platform-specific.** `fcn-up.sh` and `fcn-down.sh` were the
+other two Mac-only spots (`scutil --get LocalHostName`, `colima stop`) and both
+now ask `platform.sh`. What is **not** verified is a full run on Linux or on
+Windows: `tests/test_un_nodo_che_si_accende_altrove.py` executes the scripts
+with a faked `uname` and asserts which commands they call — 23 assertions,
+including that colima is *not* called where it does not exist — but nobody has
+yet brought the stack up on either. That is the next measurement, and it needs
+the machine rather than the test.
 
 > **`docker compose` or `docker-compose`?** Recent Docker ships compose as a
 > *plugin* (`docker compose`, two words). A Homebrew `docker` sometimes does not,

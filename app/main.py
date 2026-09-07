@@ -512,6 +512,33 @@ class NodeTool(BaseModel):
     manual: str = ""
 
 
+class NodeFace(BaseModel):
+    """One face of THIS server: a page or a route a caller can reach.
+
+    Published here — and not only on `/v1/admin/health` — because a bar shared
+    by four pages has to know where its siblings are, and the alternative is
+    each page carrying the paths in its own source. That is what
+    `rooms_ui/rooms.js` was doing until 7 October 2026.
+
+    **Nothing is disclosed by this that was not already.** `/docs` lists every
+    route this build serves, `/admin/`'s existence is in it, and what `/admin/`
+    CONTAINS stays behind `/v1/admin/whoami`. Publishing the path of a locked
+    door is not unlocking it; hiding it only means nobody can find the handle.
+    """
+
+    path: str
+    #: for a dictionary, so a bar can be drawn in somebody's language
+    key: str = ""
+    label: str
+    what: str
+    #: what a VIEWER must be able to do to use it: "" or "operator"
+    needs: str = ""
+    #: "yes" for the faces a person opens; "" for the ones a machine calls
+    page: str = ""
+    #: absolute, when this node has a public name; "" when it never said
+    url: str = ""
+
+
 class NodeOffers(BaseModel):
     """What this node is, and what it offers."""
 
@@ -541,6 +568,10 @@ class NodeOffers(BaseModel):
     #: and kept apart on purpose: one is what this node runs, the other is what
     #: you run.
     tools: List[NodeTool] = Field(default_factory=list)
+    #: THE FACES OF THIS SERVER — `ENTRANCES`, the same list `/v1/admin/health`
+    #: carries. Here so that a page can find its siblings without owning their
+    #: addresses; `offers` above is the other direction, the neighbours.
+    faces: List[NodeFace] = Field(default_factory=list)
 
 
 #: Where the desktop tools come from. Overridable per deployment (`EM_TOOLS_*`)
@@ -596,6 +627,10 @@ def node_offers() -> NodeOffers:
                         manual=os.environ.get(man_var, man_default).strip())
                for name, label, dl_var, dl_default, man_var, man_default
                in _TOOLS],
+        # …and this server's own faces, from the ONE list. `entrances` is defined
+        # below next to the mounts it describes — imported at call time, which is
+        # why this route can name it before Python has read that far.
+        faces=[NodeFace(**face) for face in entrances(ho.public_base())],
     )
 
 
@@ -4072,23 +4107,54 @@ if _ROOMS_UI.is_dir():
 #
 # NOT a new endpoint: this rides on `/v1/admin/health`, which is already the
 # operator's infrastructure map.
+#: `key` names the face for a dictionary (`node_admin/i18n.js`, `face.*`) so a
+#: bar can be drawn in somebody's language without this list carrying prose in
+#: six of them. `needs` is what a VIEWER must be able to do to use the face, and
+#: it is structured rather than said in `what`: a bar has to decide whether to
+#: draw a row, and deciding it by reading a sentence would be a bar that guesses.
+#: `page` separates the four faces a person opens from the four a machine calls
+#: — a bar shows the first kind, `/v1/admin/health` shows all of them.
 ENTRANCES: List[Dict[str, str]] = [
-    {"path": "/rooms/", "label": "The front door",
+    {"path": "/rooms/", "key": "door", "needs": "", "page": "yes",
+     "label": "The front door",
      "what": "rooms, studies and monuments — where somebody who came to work "
              "starts, and where somebody who came to look around starts too"},
-    {"path": "/admin/", "label": "Node console",
+    # ── THE TWO VERBS THAT WERE MOUNTED AND NOT LISTED ────────────────────────
+    #
+    # Added 2026-10-07, and the omission is worth keeping written down: the two
+    # doors were mounted eight lines above this list, the comment on that mount
+    # says the faces are enumerated «three lines under the `mount` calls», and
+    # they were not in here. Meanwhile `rooms_ui/rooms.js` carried `"../work/"`
+    # and `"../tools/"` in its own source — so the list that exists to stop a
+    # fourth copy of «where the node's faces are» had a fourth copy beside it.
+    # `test_node_map.py` could not catch it: it proves every LISTED path is
+    # routed, never that every mounted page is listed.
+    {"path": "/work/", "key": "work", "needs": "", "page": "yes",
+     "label": "Work",
+     "what": "enter a room, create one, bring a file in — and the room's board: "
+             "who is here, what is waiting, what it still owes"},
+    {"path": "/tools/", "key": "tools", "needs": "", "page": "yes",
+     "label": "Tools",
+     "what": "what runs on this node, and what you install on your own machine "
+             "to talk to it"},
+    {"path": "/admin/", "key": "admin", "needs": "operator", "page": "yes",
+     "label": "Node console",
      "what": "every room on this node, the storage behind them, the lifecycle "
              "of the ones nobody claims. Operator capability required"},
-    {"path": "/docs", "label": "OpenAPI",
+    {"path": "/docs", "key": "docs", "needs": "", "page": "",
+     "label": "OpenAPI",
      "what": "every route this build serves, with its shapes — the answer to "
              "«what can I call» that does not need a person"},
-    {"path": "/health", "label": "Public probe",
+    {"path": "/health", "key": "probe", "needs": "", "page": "",
+     "label": "Public probe",
      "what": "is the process up and what can this build do. Unauthenticated, "
              "for an orchestrator"},
-    {"path": "/v1/node", "label": "What this node offers",
+    {"path": "/v1/node", "key": "offers", "needs": "", "page": "",
+     "label": "What this node offers",
      "what": "the neighbours and their states, reduced — no internal hostname, "
              "no latency. What the front door composes itself from"},
-    {"path": "/v1/auth-config", "label": "How to sign in",
+    {"path": "/v1/auth-config", "key": "signin", "needs": "", "page": "",
+     "label": "How to sign in",
      "what": "the realm, the client and the endpoints a browser needs for "
              "OIDC + PKCE. Empty of secrets by construction"},
 ]
