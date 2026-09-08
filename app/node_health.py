@@ -398,12 +398,12 @@ def _probe_catalog(base: Optional[str]) -> Check:
 
 
 def _probe_field_assistant(base: Optional[str]) -> Check:
-    """The field assistant, which — like the Catalog — is a service BESIDE
+    """StratiField, which — like the Catalog — is a service BESIDE
     StratiGraph Server and not one it calls. Same rule: probed only when a
     deployment names it, and absent means absent rather than assumed."""
     if not base:
         return Check(name="stratigraph-chatbot", state=ABSENT,
-                     detail="no field assistant named on this node "
+                     detail="no StratiField named on this node "
                             "(set EM_CHATBOT_INTERNAL to watch one)")
     asked = base.rstrip("/") + "/health"
     status, payload, error = _fetch(asked, expect_json=True)
@@ -412,11 +412,11 @@ def _probe_field_assistant(base: Optional[str]) -> Check:
     if error:
         return Check(name="stratigraph-chatbot", state=UNREACHABLE, target=target,
                      browser=console, probe=asked,
-                     detail=f"the field assistant did not answer — {error}")
+                     detail=f"StratiField did not answer — {error}")
     if status != 200:
         return Check(name="stratigraph-chatbot", state=DEGRADED, target=target,
                      browser=console, probe=asked,
-                     detail=f"the field assistant answered {status}")
+                     detail=f"StratiField answered {status}")
     facts: Dict[str, Any] = {}
     if isinstance(payload, dict):
         # `capabilities` is the field the field assistant grew on 2026-09-02:
@@ -434,12 +434,12 @@ def _probe_field_assistant(base: Optional[str]) -> Check:
     if facts.get("accepts_dictation") is False:
         return Check(name="stratigraph-chatbot", state=DEGRADED, target=target,
                      browser=console, probe=asked,
-                     detail="the field assistant is up but has no identity "
+                     detail="StratiField is up but has no identity "
                             "provider, so it can accept no dictation",
                      facts=facts)
     return Check(name="stratigraph-chatbot", state=OK, target=target,
                  browser=console, probe=asked,
-                 detail="the field assistant answered its health probe",
+                 detail="StratiField answered its health probe",
                  facts=facts)
 
 
@@ -649,7 +649,10 @@ def _reduce_capabilities(facts: Dict[str, Any]) -> List[Dict[str, Any]]:
 OFFERED = (
     ("stratigraph-catalog", "Catalogue", "EM_CATALOG_INTERNAL", "EM_CATALOG_PUBLIC"),
     ("iiif", "Images (IIIF)", "EM_IIIF_INTERNAL", "EM_IIIF_PUBLIC"),
-    ("stratigraph-chatbot", "Field assistant", "EM_CHATBOT_INTERNAL",
+    #: StratiField. The KEY stays `stratigraph-chatbot` — it is the service's
+    #: technical name and the repository's; only the label a person reads
+    #: changed (8 September 2026).
+    ("stratigraph-chatbot", "StratiField", "EM_CHATBOT_INTERNAL",
      "EM_FIELD_ASSISTANT_URL"),
     ("nodeodm", "Photogrammetric engine", "NODEODM_URL", ""),
 )

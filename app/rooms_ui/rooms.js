@@ -221,19 +221,8 @@ function roomCard(room) {
     notes: (room.missing_refs || []).length
       ? [t("rooms.missingRefs", { refs: room.missing_refs.join(", ") })] : [],
     build(actions, said, box) {
-      // The three consumers, from the server's own list (`handoff.CONSUMERS`).
-      // Written out rather than looped from the answer because the answer
-      // arrives only when a button is pressed, and a row with no buttons until
-      // you press one is a row with no buttons.
-      for (const [tool, label] of [["emstudio", "EMStudio"],
-                                   ["blender", "EMtools"],
-                                   ["chatbot", "Field assistant"]]) {
-        const group = toolGroup(label, [[t("door.desktop"),
-          t("door.desktop.title", { tool: label }),
-          () => void openIn(room, tool, box, said)]]);
-        group.dataset.tool = tool;
-        actions.append(group);
-      }
+      // COPY and SHARE go in synchronously, because they need no answer from
+      // the server: the row is never empty while the doors are being asked for.
       const copy = el("button", "ghost", t("door.copy"));
       copy.addEventListener("click", () => void copyLink(room, said));
       actions.append(copy);
@@ -242,35 +231,97 @@ function roomCard(room) {
       const share = el("a", "share-open", t("share.title"));
       share.href = shareUrl(room.room_id);
       actions.append(share);
-      // Asked once, up front, so the browser doors are there before anybody
-      // presses anything. A failure is silent HERE on purpose: it costs only the
-      // extra door, and a red line on every card because one node has no
-      // EM_PUBLIC_BASE would be noise about a room that is fine.
-      void addBrowserDoors(room, box);
+      // …and the TOOL doors come from the server's answer, all of them.
+      //
+      // Until 8 September 2026 the three tools were written out here by hand and
+      // each one was given a `desktop` button unconditionally. Measured that
+      // morning on a real node: two of the three produced `stratigraph://open?…`
+      // and Safari answered «the address is not valid» — EMtools registers no
+      // handler (its own note in `handoff.py` said so in prose) and StratiField
+      // has no desktop application at all.
+      //
+      // The reason written here for the hand-made list — «the answer arrives
+      // only when a button is pressed» — had stopped being true: `addBrowserDoors`
+      // already asked for it up front. So there was one fetch, and half the row
+      // ignored it.
+      void addDoors(room, box, said);
     },
   });
 }
 
-/** Draw "browser" beside "desktop" for every tool that has a web build.
+/** Draw EVERY door this room has, for every tool, from ONE answer.
  *
- *  What decides is the SERVER's answer (`tools[t].browser`), never this page:
- *  whether a web app is deployed is a fact about the deployment, and a client
- *  that assumed one would offer a button that 404s. */
-async function addBrowserDoors(room, box) {
+ *  What decides is the SERVER's answer, never this page — and now that holds for
+ *  all three doors and not just one:
+ *
+ *    `scheme`   the tool's software registers `stratigraph://`  → follow it
+ *    `paste`    there is a desktop app and it does NOT register → copy it, and
+ *               say where to paste it. A DIFFERENT ACTION, said differently.
+ *    `browser`  a setting names a web build                     → open it
+ *
+ *  Whether a web app is deployed, and whether a scheme is claimed, are facts
+ *  about the software and the deployment. A client that assumed either would
+ *  offer a button that fails after the click — which is worse than a button that
+ *  is not there. That rule was written here for `browser` and ignored for
+ *  `desktop`, on the same line of the screen.
+ *
+ *  A tool with none of the three gets NO GROUP: an empty tool name with no
+ *  buttons says less than nothing.
+ *
+ *  Failure is silent HERE on purpose: it costs the doors, and a red line on
+ *  every card because one node has no `EM_PUBLIC_BASE` would be noise about a
+ *  room that is fine. The doors are asked for once, up front, so they are there
+ *  before anybody presses anything. */
+async function addDoors(room, box, said) {
   let targets;
   try { targets = await handoff(room); } catch { return; }
+  const actions = box.querySelector(".actions") || box;
   for (const [tool, target] of Object.entries(targets.tools || {})) {
-    if (!target.browser) continue;          // no web build: no button, no lie
-    const group = box.querySelector(`.tool[data-tool="${tool}"]`);
-    if (!group || group.querySelector(".browser")) continue;
-    const button = el("button", "browser", t("door.browser"));
-    button.title = t("door.browser.title", { tool: target.label, url: target.browser });
-    button.addEventListener("click", () => {
-      // A plain navigation with the same two parameters the scheme carries and
-      // the same absence of a token: the web build signs itself in.
-      window.open(target.browser, "_blank", "noopener");
-    });
-    group.append(button);
+    const doors = [];
+    if (target.scheme) {
+      doors.push([t("door.desktop"),
+                  t("door.desktop.title", { tool: target.label }),
+                  // `followScheme` STAYS, and here it is finally a net over a
+                  // door that can open: whether the person INSTALLED the app is
+                  // a fact about this machine, and nobody can know it from here.
+                  () => followScheme(target.scheme, box, said)]);
+    }
+    if (target.paste) {
+      doors.push([t("door.paste"),
+                  t("door.paste.title", { tool: target.label }),
+                  () => void pasteLink(target, box, said)]);
+    }
+    if (target.browser) {
+      doors.push([t("door.browser"),
+                  t("door.browser.title", { tool: target.label,
+                                            url: target.browser }),
+                  // A plain navigation with the same two parameters the scheme
+                  // carries and the same absence of a token: the web build signs
+                  // itself in.
+                  () => window.open(target.browser, "_blank", "noopener")]);
+    }
+    if (!doors.length) continue;            // no door: no group, no lie
+    const group = toolGroup(target.label, doors);
+    group.dataset.tool = tool;
+    actions.append(group);
+  }
+}
+
+/** The link, on the clipboard, with the sentence that says where it goes.
+ *
+ *  This is EMtools' door and it is not «open»: the add-on reads the link out of
+ *  its own «Open room from link…», so the useful act is putting it where a
+ *  person can paste it — and saying so. A button that looked like it opened
+ *  something produced «the address is not valid» in Safari. */
+async function pasteLink(target, box, said) {
+  showLink(box, target.paste);
+  try {
+    await navigator.clipboard.writeText(target.paste);
+    note(said, t("door.paste.copied", { tool: target.label }));
+  } catch {
+    // No clipboard permission: the link is on screen anyway, which is the part
+    // that matters.
+    note(said, t("door.paste.manual", { tool: target.label }));
   }
 }
 
@@ -307,13 +358,6 @@ function followScheme(link, box, said) {
     if (left) return;
     note(said, t("door.nothingOpened", { scheme: link.split(":")[0] }), true);
   }, 1800);
-}
-
-async function openIn(room, tool, box, said) {
-  let targets;
-  try { targets = await handoff(room); }
-  catch (error) { note(said, error.message, true); return; }
-  followScheme(targets.scheme, box, said);
 }
 
 async function copyLink(room, said) {

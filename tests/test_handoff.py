@@ -47,9 +47,18 @@ def test_the_scheme_is_the_ECOSYSTEMS_not_one_apps():
 
 def test_the_link_carries_a_place_and_never_a_permission():
     targets = ho.open_targets("saggio-b")
-    for url in [targets["scheme"], targets["web"],
-                *[t["scheme"] for t in targets["tools"].values()],
-                *[t["web"] for t in targets["tools"].values()]]:
+    #: OGNI porta di OGNI strumento, qualunque sia il suo nome. Prima erano
+    #: elencate a mano (`t["scheme"]`, `t["web"]`) e dall'8 settembre 2026 gli
+    #: strumenti non hanno più le stesse porte — `paste` e `browser` esistono
+    #: solo dove c'è la prova. Enumerare le chiavi invece di nominarle è anche
+    #: più forte: una porta NUOVA finisce sotto questa asserzione da sé, senza
+    #: che nessuno si ricordi di aggiungerla.
+    porte = ("scheme", "paste", "browser", "web")
+    ogni = [targets["scheme"], targets["web"]]
+    for tool in targets["tools"].values():
+        ogni += [v for k, v in tool.items() if k in porte]
+    assert len(ogni) > 4, f"troppo poche porte per provare qualcosa: {ogni}"
+    for url in ogni:
         low = url.lower()
         for secret in SECRETS:
             assert f"{secret}=" not in low, f"{secret} appears in {url}"
@@ -480,14 +489,40 @@ def test_the_answer_names_the_address_and_not_the_setting(monkeypatch):
     assert "web_env" not in raw
 
 
-def test_the_room_browser_draws_a_browser_door_only_from_the_ANSWER():
-    """The page must not decide this for itself — whether a web build exists is
-    a fact about the deployment."""
+def test_the_room_browser_draws_EVERY_door_only_from_the_ANSWER():
+    """The page must not decide any of this for itself.
+
+    UPDATED 8 September 2026, and the old version is the reason: it asserted the
+    literal line `if (!target.browser) continue`, i.e. it measured the SOURCE
+    TEXT of one door. The rule it was defending — «whether a web build exists is
+    a fact about the deployment» — now covers all three doors, and the line it
+    named no longer exists. A test that breaks when a rule is EXTENDED was
+    measuring the wording.
+
+    What is asserted instead: the page names no door it did not read from the
+    answer, and it builds no link out of its own head.
+    """
     page = (_REPO / "app" / "rooms_ui" / "rooms.js").read_text(encoding="utf-8")
-    assert "if (!target.browser) continue" in page
-    assert "window.open(target.browser" in page
-    # …and it never builds one out of its own head
-    assert "?server=" not in page
+    #: IL PAGLIAIO SI TOGLIE PRIMA — la regola imparata il 4 ottobre: questo file
+    #: PARLA di `stratigraph://` nella sua prosa («hand-built stratigraph://»),
+    #: e un'asserzione sull'assenza di quella stringa morderebbe un commento
+    #: onesto invece del codice.
+    codice = "\n".join(
+        r for r in page.splitlines()
+        if not r.lstrip().startswith(("*", "/*", "//", "*/")))
+    assert "stratigraph://" in page, "la prosa non parla più dello schema?"
+
+    #: ogni porta viene da `target.<nome>`, e non da una lista scritta qui
+    for door in ("scheme", "paste", "browser"):
+        assert f"target.{door}" in codice, (
+            f"la porta {door} non viene dalla risposta")
+    #: …e la lista degli strumenti NON è nel client
+    for tool in ("emstudio", "blender", "chatbot"):
+        assert f'"{tool}"' not in codice, (
+            f"{tool} è cablato nel client: gli strumenti li dice il server")
+    #: …e non costruisce link da sé
+    assert "?server=" not in codice
+    assert "stratigraph://" not in codice
 
 
 import urllib.parse  # noqa: E402  — used by the browser-door tests above

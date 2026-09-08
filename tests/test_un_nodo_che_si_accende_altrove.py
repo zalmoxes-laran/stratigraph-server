@@ -1311,3 +1311,461 @@ def test_L_INSTALLER_COL_FLAG_clona_anche_s3dgraphy(tmp_path):
     _uname(bin2, "linux")
     _installa(dev2, bin2, tmp2)
     assert "s3Dgraphy" not in _chiamati(tmp2), _chiamati(tmp2)
+
+
+# ═══ 13 · LE PORTE CHE NOMINANO UN'ALTRA MACCHINA ════════════════════════════
+#
+# LA PROVA GENERALE, quella che enuncia la regola invece di elencare i casi:
+#
+#   Dato `PRIMARY = fcn.local`, ogni indirizzo che questa stack consegna a un
+#   browser nomina `fcn.local`. Non `em.localhost`, non `localhost`, non un IP.
+#
+# Origine: primo uso vero del nodo `fcn.local` da un altro computer, 8 settembre
+# 2026. Da `https://fcn.local:8443/em/rooms/` il pulsante «StratiField ·
+# browser» apriva `https://em.localhost:8443/chat/` — cioè il portatile di chi
+# aveva cliccato, non il nodo che stava guardando.
+#
+# ## PERCHÉ SULL'AMBIENTE RESO E NON SUL SORGENTE
+#
+# Perché finora si è chiesto al testo. `fcn-up.sh` esportava `EM_IIIF_PUBLIC`
+# con cura e la riga del compose la cablava: un lettore del sorgente vedeva
+# l'export e concludeva che la variabile seguiva il nome. Le due righe cablate
+# esistevano proprio perché nessuno aveva chiesto alla COSA.
+#
+# Quindi: si esegue `fcn-up.sh fcn.local` per davvero (con i finti delle notti
+# precedenti), il finto compose intercetta l'`up` e **ri-chiama il compose vero
+# con `config`** usando lo stesso ambiente e gli stessi `-f`, e si guardano i
+# valori resi. L'elenco delle variabili esportate NON è ripetuto qui: è
+# `fcn-up.sh` a deciderlo, che è la proprietà «un posto solo».
+
+PRIMARIO = "fcn.local"
+
+#: Chi è ESENTE, e ognuna con la sua ragione. Un'esenzione senza ragione è un
+#: buco nella regola, quindi stanno qui in un dizionario e non in un `if`.
+ESENTI = {
+    #: `EM_SITE` è l'ELENCO di host che Caddy serve: contiene `em.localhost`
+    #: perché il nodo continua a rispondere anche su quel nome, e deve.
+    "EM_SITE": "è la lista dei nomi che Caddy serve, non un indirizzo consegnato",
+    #: Categoria 3, dichiarata nel compose: la 9001 è la console di
+    #: amministrazione di MinIO, legata a 127.0.0.1 e NON servita da Caddy
+    #: (misurato: `/minio/` → 404). `localhost` è giusto perché in un browser
+    #: `localhost` è la macchina di chi guarda, e quella è l'unica da cui si
+    #: apre. Nominarla `fcn.local:9001` sarebbe una bugia.
+    "EM_MINIO_CONSOLE_URL": "console su loopback, non pubblicata né proxata",
+}
+
+#: Gli indirizzi INTERNI non sono consegnati a un browser: sono nomi della rete
+#: di container. La distinzione è già nel codice (`node_health.py:645`, «one is a
+#: machine we dial, the other is a name we hand out»), e questa prova la usa
+#: invece di re-inventarla.
+def _e_interno(nome: str, valore: str, servizi) -> bool:
+    """Un indirizzo della rete di container, non uno consegnato a un browser.
+
+    Due modi di riconoscerlo, e nessuno dei due è un elenco scritto a mano:
+
+      · il NOME lo dichiara (`*_INTERNAL`, e i tre che il codice usa così);
+      · l'HOST è un servizio di questo compose — `http://minio:9000`,
+        `http://keycloak:8080`. I nomi dei servizi vengono dal reso, quindi un
+        servizio nuovo è coperto da sé. Trovato eseguendo: la prima versione
+        guardava solo il suffisso e inciampava su
+        `CANTALOUPE_S3SOURCE_ENDPOINT` e `MINIO_ENDPOINT`.
+    """
+    if (nome.endswith("_INTERNAL") or nome.endswith("_INTERNAL_BASE")
+            or nome in ("OIDC_JWKS_URI", "NODEODM_URL", "EM_TRANSFORMER_URL")):
+        return True
+    v = (valore or "").strip()
+    if v.startswith(("http://", "https://")):
+        host = v.split("//", 1)[1].split("/", 1)[0].split(":", 1)[0]
+        if host in servizi:
+            return True
+    return False
+
+
+#: Un valore che un browser aprirebbe: uno schema http(s), o un percorso
+#: assoluto. Tutto il resto (una porta, un id, un percorso di filesystem) non è
+#: un indirizzo e non riguarda questa regola.
+def _e_indirizzo(v: str) -> bool:
+    v = (v or "").strip()
+    if v.startswith(("http://", "https://")):
+        return True
+    #: `/chat/` sì; `/srv/chatbot-data/x.json` no — un percorso di filesystem
+    #: non arriva in un browser, e si riconosce perché nomina una cartella del
+    #: container.
+    if v.startswith("/") and not v.startswith(("/srv/", "/opt/", "/var/",
+                                               "/tmp/", "/etc/", "/data")):
+        return True
+    return False
+
+
+NOMI_SBAGLIATI = ("em.localhost", "localhost", "127.0.0.1", "0.0.0.0")
+
+
+def _reso_con_primario(tmp_path, primario: str = PRIMARIO):
+    """Esegue `fcn-up.sh <primario>` e ritorna l'ambiente che il compose rende.
+
+    Il finto compose, quando vede `up`, ri-chiama quello VERO con `config`: così
+    l'ambiente misurato è quello che `fcn-up.sh` ha davvero passato, e l'elenco
+    delle variabili non è ripetuto in questa prova.
+    """
+    import yaml
+    dev = _clone_finto(tmp_path,
+                       fratelli=("stratigraph-chatbot", "stratigraph-catalog"))
+    shutil.copy(DEV / ".env.dev.example", dev / ".env.dev")
+    bin_ = _finti(tmp_path, docker_ok=True, plugin=False, autonomo=True)
+    _uname(bin_, "linux")
+    vero = shutil.which("docker-compose") or shutil.which("docker")
+    if not vero:
+        pytest.skip("nessun compose: l'ambiente reso non si può misurare qui")
+    uscita = tmp_path / "reso.yml"
+    #: il finto `docker-compose`: `config` passa, e `up` diventa un `config`
+    #: sugli STESSI `-f`, con l'ambiente che fcn-up.sh ha esportato
+    fc = bin_ / "docker-compose"
+    fc.write_text(
+        "#!/usr/bin/env bash\n"
+        f'echo "docker-compose $*" >> "{tmp_path}/chiamati.txt"\n'
+        #: si tiene TUTTO fino a `up`, e si taglia da lì. `fcn-up.sh` chiama
+        #: `… --profile https up -d --build`, quindi `--profile https` sta
+        #: prima e va conservato: senza, il servizio `caddy` non entra nel reso
+        #: e `EM_SITE` non c'è — che è come ho scoperto questa riga.
+        'args=(); for a in "$@"; do\n'
+        '  [ "$a" = "up" ] && break\n'
+        '  args+=("$a")\n'
+        'done\n'
+        'for a in "$@"; do\n'
+        f'  if [ "$a" = "config" ]; then exec {vero!r} "$@"; fi\n'
+        'done\n'
+        f'exec {vero!r} "${{args[@]}}" config > "{uscita}" 2>/dev/null\n')
+    fc.chmod(0o755)
+    done = subprocess.run(["bash", str(dev / "fcn-up.sh"), primario],
+                          capture_output=True, text=True, cwd=str(dev),
+                          env={**os.environ, "HOME": str(tmp_path),
+                               "PATH": f"{bin_}{os.pathsep}{os.environ['PATH']}"})
+    assert done.returncode == 0, done.stderr + done.stdout
+    assert uscita.is_file() and uscita.stat().st_size, (
+        f"il compose non ha reso niente:\n{done.stdout}\n{done.stderr}")
+    doc = yaml.safe_load(uscita.read_text())
+    servizi = set((doc.get("services") or {}))
+    reso = {}
+    for nome, sv in (doc.get("services") or {}).items():
+        for k, v in (sv.get("environment") or {}).items():
+            if v is None:
+                continue
+            reso.setdefault(k, str(v))
+    return reso, servizi, done
+
+
+@needs_bash
+def test_OGNI_INDIRIZZO_CONSEGNATO_A_UN_BROWSER_nomina_il_nodo(tmp_path):
+    """LA PROVA GENERALE. Enuncia la regola, non elenca i casi.
+
+    Prima dell'8 settembre 2026 questa sarebbe stata rossa su quattro variabili:
+    `EM_IIIF_PUBLIC` e `EM_KEYCLOAK_CONSOLE_URL` (cablate, nessuna via d'uscita)
+    e `EM_CATALOG_PUBLIC` e `EM_FIELD_ASSISTANT_URL` (escape presente, default
+    assoluto, nessun esportatore).
+    """
+    reso, servizi, _ = _reso_con_primario(tmp_path)
+    assert len(reso) > 20, f"troppo poche variabili per provare qualcosa: {reso}"
+
+    guardate, colpe = [], []
+    for nome, valore in sorted(reso.items()):
+        if (nome in ESENTI or _e_interno(nome, valore, servizi)
+                or not _e_indirizzo(valore)):
+            continue
+        guardate.append(nome)
+        basso = valore.lower()
+        if valore.startswith("/"):
+            continue                    #: relativo: segue l'host per costruzione
+        if PRIMARIO in basso:
+            continue                    #: assoluto e nomina il nodo
+        colpe.append(f"{nome} = {valore}")
+    assert guardate, "nessuna variabile guardata: il filtro è troppo stretto"
+    assert not colpe, (
+        "questi indirizzi non nominano il nodo:\n  " + "\n  ".join(colpe))
+
+    #: …e nessuno dei nomi sbagliati compare, in nessuna forma
+    for nome in guardate:
+        v = reso[nome].lower()
+        if v.startswith("/"):
+            continue
+        for cattivo in NOMI_SBAGLIATI:
+            assert cattivo not in v, f"{nome} nomina {cattivo}: {reso[nome]}"
+
+
+@needs_bash
+def test_E_LE_QUATTRO_CHE_SBAGLIAVANO_sono_quelle_che_si_guardano(tmp_path):
+    """La prova che la prova generale morde dove serve.
+
+    Una regola che non nomina i suoi casi difficili può passare filtrando via
+    proprio quelli. Qui si asserisce che le quattro variabili dell'episodio
+    dell'8 settembre sono davvero fra quelle guardate o relative — non escluse.
+    """
+    reso, _servizi, _ = _reso_con_primario(tmp_path)
+    for nome in ("EM_IIIF_PUBLIC", "EM_KEYCLOAK_CONSOLE_URL",
+                 "EM_CATALOG_PUBLIC", "EM_FIELD_ASSISTANT_URL"):
+        assert nome in reso, f"{nome} non è più resa: la prova non la copre"
+        assert nome not in ESENTI, f"{nome} è stata esentata"
+        assert _e_indirizzo(reso[nome]), f"{nome} = {reso[nome]!r} non è un indirizzo"
+        v = reso[nome]
+        assert v.startswith("/") or PRIMARIO in v, f"{nome} = {v}"
+
+
+@needs_bash
+def test_E_IL_PERCORSO_DI_IIIF_e_quello_che_risponde(tmp_path):
+    """Questa asserzione esiste perché una mutazione ha dato ZERO rosse.
+
+    Rimettere `/iiif` al posto di `/iiif/3` in `fcn-up.sh` non rompeva niente:
+    la prova generale guarda l'HOST e quello restava giusto. Ma il percorso era
+    sbagliato, misurato l'8 settembre 2026:
+
+        https://em.localhost:8443/iiif    → 404
+        https://em.localhost:8443/iiif/3  → 200
+
+    ed è la forma che `app/main.py:1863` scrive come attesa. Era invisibile
+    perché il compose cablava la riga e l'export era morto — leggere la
+    variabile senza correggere il percorso avrebbe trasformato un valore morto
+    in un valore vivo e sbagliato, che è peggio.
+    """
+    reso, _servizi, _ = _reso_con_primario(tmp_path)
+    v = reso["EM_IIIF_PUBLIC"]
+    assert v.endswith("/iiif/3"), (
+        f"EM_IIIF_PUBLIC = {v!r}: `/iiif` dà 404, l'Image API 3 di Cantaloupe "
+        f"sta su `/iiif/3` (e `app/main.py:1863` scrive quella forma)")
+    #: …e la stessa forma la dice il messaggio d'errore del nodo, così le due
+    #: non possono divergere in silenzio
+    fonte = (DEV.parent / "app" / "main.py").read_text(encoding="utf-8")
+    assert "/iiif/3" in fonte
+
+
+@needs_bash
+def test_LE_ESENZIONI_sono_ancora_quelle_che_credo(tmp_path):
+    """Un'esenzione è un buco nella regola: quando smette di servire va via.
+
+    `EM_SITE` deve continuare a contenere ENTRAMBI i nomi (il nodo risponde
+    anche su `em.localhost`, e deve), e `EM_MINIO_CONSOLE_URL` deve continuare a
+    essere loopback — se un giorno Caddy servisse la console di MinIO, quella
+    esenzione andrebbe togliendo, non tenuta per abitudine.
+    """
+    reso, _servizi, _ = _reso_con_primario(tmp_path)
+    assert PRIMARIO in reso["EM_SITE"] and "em.localhost" in reso["EM_SITE"]
+    assert reso["EM_MINIO_CONSOLE_URL"].startswith("http://localhost:")
+
+
+# ═══ 14 · UNA PORTA PER STRUMENTO, E OGNUNA SU UNA PROVA ═════════════════════
+#
+# Misurato l'8 settembre 2026 su `fcn.local`: la riga della stanza offriva sei
+# porte e tre si comportavano male, in tre modi diversi. La causa era una sola —
+# `rooms_ui/rooms.js` disegnava la porta `desktop` per tutti e tre gli strumenti
+# senza chiedere niente a nessuno, mentre `addBrowserDoors`, sulla stessa riga
+# dello schermo, disegnava quella `browser` solo dalla risposta del server e lo
+# diceva in un commento:
+#
+#     `if (!target.browser) continue;` — no web build: no button, no lie
+#
+# La regola era enunciata per una porta e ignorata per l'altra.
+#
+# La tabella misurata, che è quasi l'inverso di quella che la pagina disegnava:
+#
+#   strumento     desktop (schema registrato)   browser (build web deployato)
+#   EMStudio      sì  (bundle Tauri)            solo dove qualcuno l'ha messo
+#   EMtools       no  (il link si INCOLLA)      mai: Blender non è un'app web
+#   StratiField   no  (non esiste un'app)       sì, ed è la porta vera
+#
+# Ogni riga ha esattamente UNA porta che funziona su un nodo di campo.
+
+import importlib.util as _ilu2
+
+_spec_h = _ilu2.spec_from_file_location("handoff_mod",
+                                        DEV.parent / "app" / "handoff.py")
+HO = _ilu2.module_from_spec(_spec_h)
+_spec_h.loader.exec_module(HO)
+
+ROOMS_JS = (DEV.parent / "app" / "rooms_ui" / "rooms.js")
+TAURI = (DEV.parent.parent / "EMStudio" / "apps" / "desktop" / "src-tauri")
+
+
+def _porte(env=None):
+    """Le porte per strumento, dalla risposta del server."""
+    vecchio = dict(os.environ)
+    try:
+        os.environ.pop("EM_EMSTUDIO_WEB_URL", None)
+        os.environ["EM_PUBLIC_BASE"] = "https://fcn.local:8443/em"
+        os.environ["EM_FIELD_ASSISTANT_URL"] = "/chat/"
+        if env:
+            os.environ.update(env)
+        d = HO.open_targets("test-casa")
+    finally:
+        os.environ.clear()
+        os.environ.update(vecchio)
+    return {n: {k for k in ("scheme", "paste", "browser") if k in v}
+            for n, v in d["tools"].items()}
+
+
+def test_UNA_PORTA_PER_STRUMENTO_su_un_nodo_fresco():
+    """Un nodo fresco: nessun build web dichiarato tranne StratiField, che è
+    un container di questa stack e c'è sempre."""
+    p = _porte()
+    assert p == {"emstudio": {"scheme"},
+                 "blender": {"paste"},
+                 "chatbot": {"browser"}}, p
+
+
+def test_E_CON_UN_BUILD_WEB_EMSTUDIO_ne_ha_DUE():
+    """Sulla macchina di chi sviluppa la porta `browser` torna, e non si perde
+    niente: è l'altra metà della decisione di §4."""
+    p = _porte({"EM_EMSTUDIO_WEB_URL": "/em/studio/"})
+    assert p["emstudio"] == {"scheme", "browser"}, p
+    #: …e gli altri due non cambiano
+    assert p["blender"] == {"paste"} and p["chatbot"] == {"browser"}
+
+
+def test_NESSUNO_SCHEMA_PER_CHI_NON_LO_REGISTRA():
+    """La porta `scheme` esiste SOLO dove il software la registra.
+
+    E `paste` non è un ripiego per tutti: StratiField non ha un'applicazione
+    desktop, quindi non ha nemmeno dove incollare un link. Tre stati, non un
+    booleano — un booleano avrebbe dato a StratiField una porta «incolla questo
+    da qualche parte» che non porta in nessun posto.
+    """
+    p = _porte()
+    assert "scheme" not in p["blender"] and "scheme" not in p["chatbot"]
+    assert "paste" not in p["chatbot"], (
+        "StratiField non ha un'app desktop: non c'è niente in cui incollare")
+    #: e il link di `paste` è lo STESSO del `scheme`, sotto un nome che dice
+    #: cosa farne. `_porte` mette e rimette l'ambiente, quindi la risposta va
+    #: chiesta DENTRO quella finestra e non dopo — fuori, `EM_PUBLIC_BASE` non
+    #: c'è e il nodo rifiuta di scrivere un link (giustamente).
+    vecchio = dict(os.environ)
+    try:
+        os.environ["EM_PUBLIC_BASE"] = "https://fcn.local:8443/em"
+        d = HO.open_targets("test-casa")
+    finally:
+        os.environ.clear(); os.environ.update(vecchio)
+    assert d["tools"]["blender"]["paste"] == d["scheme"]
+
+
+def test_EMSTUDIO_REGISTRA_LO_SCHEMA_e_lo_dice_il_suo_repo():
+    """La prova che il fatto è MISURATO e non ripetuto da una lista.
+
+    `desktop: "registered"` in `CONSUMERS` è vero perché il bundle di EMStudio
+    lo dichiara. Questa prova guarda il repository di EMStudio: se quella
+    dichiarazione sparisse, la porta `scheme` di EMStudio diventerebbe una
+    bugia — e qui diventa rossa.
+    """
+    if not TAURI.is_dir():
+        pytest.skip("EMStudio non è affiancato: la dichiarazione non si misura")
+    #: SI PARSA, non si cerca come sottostringa — e la ragione è misurata: la
+    #: prima versione di questa prova cercava `"deepLinkProtocols" in testo`, e
+    #: la mutazione che rinominava la chiave in `deepLinkProtocolsDISATTIVATO`
+    #: la lasciava VERDE, perché la sottostringa c'è ancora. Una prova che una
+    #: mutazione non rompe non stava provando niente.
+    conf = _json.loads((TAURI / "tauri.conf.json").read_text(encoding="utf-8"))
+    protocolli = (conf.get("bundle") or {}).get("deepLinkProtocols") or []
+    schemi = {s for voce in protocolli for s in (voce.get("schemes") or [])}
+    assert "stratigraph" in schemi, (
+        f"il bundle di EMStudio non registra più `stratigraph`: {schemi}")
+    #: …e il plugin che lo fa valere a runtime
+    assert "tauri-plugin-deep-link" in (TAURI / "Cargo.toml").read_text(
+        encoding="utf-8")
+    rs = (TAURI / "src" / "main.rs").read_text(encoding="utf-8")
+    assert "tauri_plugin_deep_link::init()" in rs
+    assert "register_all()" in rs
+    #: E LA DISTINZIONE CHE NON VA PERSA: `register_all()` può fallire a
+    #: runtime e il codice si limita a stamparlo, quindi «registrato nel
+    #: bundle» non è «registrato su questo computer» — per cui `followScheme`
+    #: resta la rete giusta.
+    assert "could not register" in rs
+
+
+def test_E_CONSUMERS_CONCORDA_col_repo_di_EMStudio():
+    """I due fatti non devono poter divergere in silenzio."""
+    if not TAURI.is_dir():
+        pytest.skip("EMStudio non è affiancato")
+    conf = _json.loads((TAURI / "tauri.conf.json").read_text(encoding="utf-8"))
+    protocolli = (conf.get("bundle") or {}).get("deepLinkProtocols") or []
+    dichiara = any("stratigraph" in (v.get("schemes") or []) for v in protocolli)
+    registra = HO.CONSUMERS["emstudio"].get("desktop") == "registered"
+    assert dichiara == registra, (
+        f"EMStudio dichiara lo schema: {dichiara}; CONSUMERS dice: {registra}")
+
+
+def test_IL_CLIENT_NON_DISEGNA_UNA_PORTA_CHE_IL_SERVER_NON_HA_DATO():
+    """§6 mutazione 3: la prova non deve misurare solo il server.
+
+    Il pagliaio si toglie prima — questo file parla degli strumenti nella sua
+    prosa.
+    """
+    page = ROOMS_JS.read_text(encoding="utf-8")
+    codice = "\n".join(r for r in page.splitlines()
+                       if not r.lstrip().startswith(("*", "/*", "//", "*/")))
+    #: nessun nome di strumento nel codice: l'elenco lo dà il server
+    for tool in ("emstudio", "blender", "chatbot"):
+        assert f'"{tool}"' not in codice, f"{tool} è cablato nel client"
+    #: ogni porta è dietro la presenza del suo campo nella risposta
+    for door in ("scheme", "paste", "browser"):
+        assert f"target.{door}" in codice, f"{door} non viene dalla risposta"
+        assert f"if (target.{door})" in codice, (
+            f"{door} è disegnata senza chiedere se c'è")
+    #: e uno strumento senza porte non lascia un gruppo vuoto
+    assert "if (!doors.length) continue" in codice
+
+
+def test_L_ETICHETTA_E_STRATIFIELD_e_la_CHIAVE_e_chatbot():
+    """§5. La chiave tecnica non cambia: è il nome del consumatore e del repo."""
+    assert HO.CONSUMERS["chatbot"]["label"] == "StratiField"
+    assert "chatbot" in HO.CONSUMERS
+    #: …e nessuna etichetta dice più «Field assistant» dove la vede una persona
+    salute = (DEV.parent / "app" / "node_health.py").read_text(encoding="utf-8")
+    i18n = (DEV.parent / "app" / "node_admin" / "i18n.js").read_text(
+        encoding="utf-8")
+    assert '"Field assistant"' not in salute
+    assert '"Field assistant"' not in i18n
+    assert '"Assistente di campo"' not in i18n, (
+        "la quinta occorrenza, quella italiana, che una grep inglese non vede")
+    assert i18n.count('"service.stratigraph-chatbot": "StratiField"') == 2, \
+        "en e it"
+
+
+@needs_bash
+def test_UN_NODO_FRESCO_NON_DICHIARA_un_build_web_di_EMSTUDIO(tmp_path):
+    """§4, e questa asserzione esiste perché una mutazione ha dato ZERO rosse.
+
+    Rimettere il default `/em/studio` a `:528` non rompeva niente: la prova
+    generale ammette i valori relativi, e `/em/studio` è relativo. Ma la
+    proprietà che quel default viola è un'altra — **un nodo fresco non deve
+    AFFERMARE che qui c'è un build web di EMStudio**, perché non c'è e non ci
+    sarà: EMStudio è un quarto repository con un dev server che si avvia a mano,
+    e la porta dava il 502 con la spiegazione lunga.
+
+    È lo stesso difetto che `rooms.js` vieta al client («a client that assumed
+    one would offer a button that 404s»), un piano più sotto: qui ad assumere il
+    deploy era il deployment.
+
+    Misurato sull'ambiente RESO, con `.env.dev` copiato da `.env.dev.example` —
+    cioè la macchina di chi ha appena clonato.
+    """
+    reso, _servizi, _ = _reso_con_primario(tmp_path)
+    for nome in ("EM_EMSTUDIO_WEB_URL", "EM_CATALOG_EMSTUDIO_URL"):
+        assert reso.get(nome, "") == "", (
+            f"{nome} = {reso.get(nome)!r} su un nodo fresco: è l'affermazione "
+            f"«qui c'è un build web di EMStudio», e non c'è. Lo mette "
+            f"`.env.dev`, che è il file di chi sa di aver avviato npm run dev.")
+    #: …e le due righe di `.env.dev.example` restano COMMENTATE, che è dove la
+    #: decisione vive. `EM_CATALOG_EMSTUDIO_URL` era scoperta: nominava
+    #: `localhost:5173`, cioè la macchina di chi CLICCA — lo stesso difetto
+    #: dell'episodio dell'8 settembre, un piano più sotto.
+    esempio = (DEV / ".env.dev.example").read_text(encoding="utf-8")
+    for nome in ("EM_EMSTUDIO_WEB_URL", "EM_CATALOG_EMSTUDIO_URL",
+                 "EM_FIELD_ASSISTANT_URL"):
+        attive = [r for r in esempio.splitlines()
+                  if r.strip().startswith(nome + "=")]
+        assert not attive, f"{nome} è attiva in .env.dev.example: {attive}"
+
+
+def test_E_SULLA_MACCHINA_DI_CHI_SVILUPPA_la_porta_browser_torna():
+    """L'altra metà, e per questo non si perde niente.
+
+    Chi ha avviato il dev server scommenta la riga, riceve entrambe le porte, e
+    continua a ricevere il 502 didattico quando si dimentica di avviarlo.
+    """
+    p = _porte({"EM_EMSTUDIO_WEB_URL": "/em/studio/"})
+    assert p["emstudio"] == {"scheme", "browser"}

@@ -69,23 +69,78 @@ ACTION = "open"
 #: fails after the click, which is worse than a button that is not there.
 #:
 #: `blender` has no `web_env` and never will — Blender is not a web app.
-CONSUMERS: Dict[str, Dict[str, str]] = {
+#:
+#: ── AND `registers_scheme`, WHICH IS THE OTHER HALF OF THE SAME RULE ─────────
+#:
+#: `web_env` made "open in browser" a fact instead of an offer. The desktop door
+#: had no such fact and was drawn for all three tools unconditionally
+#: (`rooms_ui/rooms.js:228`), which on 8 September 2026 meant two of the three
+#: buttons produced `stratigraph://open?…` and Safari answered «the address is
+#: not valid». The note on `blender` had ALREADY WRITTEN DOWN that no handler is
+#: registered — the module that knows the consumers said so in prose while the
+#: page drew the button anyway.
+#:
+#: THREE STATES AND NOT A BOOLEAN, because the three tools are three different
+#: facts and a flag would have flattened two of them into one:
+#:
+#:   "registered"  the software claims `stratigraph://` — hand it the link
+#:   "pasted"      there IS a desktop application and it does NOT claim the
+#:                 scheme: the link goes into 'Open room from link…'
+#:   absent        there is no desktop application at all, so no door
+#:
+#: A boolean would have given StratiField a "paste this somewhere" door, and
+#: there is nowhere to paste it — which is the same class of lie as a button
+#: that 404s.
+#:
+#: Measured, per tool, before it was written here:
+#:
+#:   emstudio  registered — EMStudio/apps/desktop/src-tauri/tauri.conf.json:38
+#:                   `bundle.deepLinkProtocols: [{"schemes": ["stratigraph"]}]`
+#:                   Cargo.toml:25 `tauri-plugin-deep-link = "2"`
+#:                   src/main.rs:302 `.plugin(tauri_plugin_deep_link::init())`
+#:                   src/main.rs:319 `app.deep_link().register_all()`
+#:   blender   pasted     — a Blender add-on, and the link is read out of
+#:                           'Open room from link…' (its own note said so)
+#:   chatbot   absent     — StratiField has no desktop application
+#:
+#: TWO ABSENCES THAT MUST NOT BE CONFUSED, and this flag is only the first:
+#:
+#:   · *no handler is registered by the software* — a fact about the software,
+#:     and the server knows it. That is this flag.
+#:   · *the person has not installed it on this machine* — a fact about the
+#:     machine, and nobody here can know it. That is what `followScheme` in the
+#:     room browser is for, and it stays.
+#:
+#: `EMStudio/apps/desktop/src-tauri/src/main.rs:319` makes the distinction
+#: concrete: `register_all()` can fail at runtime and the code only prints it,
+#: so "registered by the bundle" is not "registered on this computer".
+CONSUMERS: Dict[str, Dict[str, Any]] = {
     "emstudio": {
         "label": "EMStudio",
         "note": "opens the room and joins it live (desktop registers the scheme; "
                 "the web build reads the same parameters off its own URL)",
         "web_env": "EM_EMSTUDIO_WEB_URL",
+        "desktop": "registered",
     },
     "blender": {
         "label": "EMtools (Blender)",
         "note": "joins the room from the link and adopts its document — no "
                 "handler is registered for the scheme, so the link is pasted "
                 "into 'Open room from link…'",
+        "desktop": "pasted",
     },
     "chatbot": {
-        "label": "Field assistant",
+        # StratiField, and the label is the only thing that said otherwise: the
+        # prose of this codebase has called it that for a while (`ws.py`,
+        # `oplog.py`, `roomview.py`, `keeping.py`, `main.py`). The KEY stays
+        # `chatbot` — it is the consumer's technical name and the repository's.
+        "label": "StratiField",
         "note": "configures the field node to write into this room",
         "web_env": "EM_FIELD_ASSISTANT_URL",
+        # No `desktop` key AT ALL: there is no desktop application, so there is
+        # neither a scheme to follow nor anywhere to paste a link. Its real door
+        # is `browser`, and it is the only one of the three for which that is
+        # true.
     },
 }
 
@@ -194,6 +249,39 @@ def web_url(server: str, room: str) -> str:
     return f"{str(server).rstrip('/')}/open?{query}"
 
 
+def _tool_doors(name: str, link: str, web: str, base: str,
+                room: str) -> Dict[str, Any]:
+    """The doors THIS tool actually has, and no others.
+
+    One place decides, for both doors, on the same kind of evidence:
+
+        scheme   only when `desktop == "registered"`
+        paste    only when `desktop == "pasted"` — a different ACTION, said
+                 differently rather than dressed as a button that opens an app
+        browser  only if a setting names a web build (`web_env`)
+
+    A tool with no `desktop` key gets neither, because there is no desktop
+    application to hand a link to or to paste one into.
+
+    The `web` link (this server's own `/open` page) is offered to every tool,
+    because that page explains itself and needs nothing installed.
+    """
+    spec = CONSUMERS[name]
+    doors: Dict[str, Any] = {k: v for k, v in spec.items()
+                             if v and k not in ("web_env", "desktop")}
+    doors["web"] = web
+    desktop = spec.get("desktop")
+    if desktop == "registered":
+        doors["scheme"] = link
+    elif desktop == "pasted":
+        # The SAME string, under a name that says what to do with it.
+        doors["paste"] = link
+    browser = browser_url(name, base, room)
+    if browser:
+        doors["browser"] = browser
+    return {k: v for k, v in doors.items() if v}
+
+
 def open_targets(room: str, *, server: Optional[str] = None,
                  tools: Optional[List[str]] = None) -> Dict[str, Any]:
     """How to open this room, per tool.
@@ -219,18 +307,27 @@ def open_targets(room: str, *, server: Optional[str] = None,
         "scheme": link,
         "web": web,
         # Three ways in, and each one is a fact rather than an offer:
-        #   scheme  — the desktop handler (registered or not: that is the OS's)
+        #   scheme  — the desktop handler, and ONLY for a tool whose software
+        #             registers it. `desktop` decides, the same way `web_env`
+        #             decides `browser`: absent = no button, no lie.
+        #             Whether the person INSTALLED it is the machine's business
+        #             and still unknown here — the room browser's `followScheme`
+        #             is the net for that, and it stays.
         #   web     — this server's own /open page, which explains itself
         #   browser — the tool's OWN web build, present only when a setting
         #             names one. Absent = that tool has no web build here, and
         #             the UI draws no button for it.
-        # `web_env` is dropped: the NAME of a setting is this deployment's
-        # business, and an answer a browser reads should carry the address, not
-        # the knob that produced it.
-        "tools": {name: {k: v for k, v in
-                         {**CONSUMERS[name], "scheme": link, "web": web,
-                          "browser": browser_url(name, base, room)}.items()
-                         if v and k != "web_env"}
+        #
+        # `paste` is the honest door for a tool that joins from a link it cannot
+        # be handed: EMtools reads it out of 'Open room from link…'. It is a
+        # DIFFERENT ACTION from opening something, so it is said differently
+        # rather than dressed as a button that looks like it opens an app.
+        #
+        # `web_env` and `desktop` are both dropped from the answer: the
+        # NAME of a setting is this deployment's business, and a flag a browser
+        # would have to interpret is a rule living in two places. What goes out
+        # is the ADDRESS, or nothing.
+        "tools": {name: _tool_doors(name, link, web, base, room)
                   for name in wanted},
         "carries_token": False,
         "note": "the link names a place, not a permission: the tool signs in by "

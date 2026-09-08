@@ -55,6 +55,73 @@ x-s3dgraphy-version: &s3dgraphy_version "${S3DGRAPHY_VERSION:-1.6.0.dev17}"
 # costruisce da un fratello nuovo e scordarsi l'indirizzo non è un silenzio.
 #
 # La chiave è il NOME DELLA CARTELLA, che è il basename del `context:`.
+# ══════════════════════════════════════════════════════════════════════════════
+# GLI INDIRIZZI PUBBLICI — LA REGOLA, E STA SCRITTA QUI UNA VOLTA SOLA
+#
+# `fcn-up.sh <host>` rinomina il nodo. Misurato l'8 settembre 2026, primo uso
+# vero di `fcn.local` da un altro computer: la regola era applicata a cinque
+# variabili su nove, e la porta «Field assistant · browser» ha aperto una pagina
+# **sul portatile di chi ha cliccato** invece che sul nodo che stava guardando.
+#
+# Due categorie, e ogni variabile pubblica appartiene a UNA delle due.
+#
+# ## 1 · STESSO NODO → IL DEFAULT È RELATIVO
+#
+# `/chat/`, `/catalog`, `/auth/admin/`, `/em/studio`. Un percorso relativo
+# SEGUE l'host per costruzione: la pagina che lo usa è servita dallo stesso
+# Caddy, quindi non c'è niente da riscrivere al rinomino e non c'è nessun
+# export da ricordarsi. La regola è già scritta altrove in questo codice —
+# `app/node_health.py:645`, «this process serves them, so a page it also serves
+# reaches them relatively and nobody has to configure that» — e questa è la
+# stessa regola estesa alle facce che stanno dietro lo stesso proxy.
+#
+# ## 2 · LO CONSUMA UN'ALTRA MACCHINA, O ENTRA IN UN TOKEN → ASSOLUTO
+#
+# E allora lo costruisce `fcn-up.sh` **e questo file deve leggerlo**: sempre
+# `${VAR:-…}`, mai cablato. Cablarlo è peggio di una dimenticanza — `fcn-up.sh`
+# esportava `EM_IIIF_PUBLIC` con cura e la riga qui sotto non la guardava.
+# Uno script che assegna una variabile che nessuno legge è la forma più
+# tranquilla di bugia: non fallisce, non avverte, e chi legge lo script crede
+# che il problema sia risolto.
+#
+# ## IL CENSIMENTO, CON LA CATEGORIA E IL PERCHÉ
+#
+#   EM_SITE                   assoluto · È l'elenco di host che Caddy serve
+#   EM_DEV_DOMAIN             assoluto · è un NOME, non un URL
+#   OIDC_PUBLIC_ORIGIN        assoluto · l'origine che Keycloak timbra
+#   OIDC_ISSUER               assoluto · finisce dentro `iss`, verificato stretto
+#   EM_PUBLIC_BASE            assoluto · è il link che un'ALTRA macchina segue
+#   EM_IIIF_PUBLIC            assoluto · entra nei manifest IIIF che i viewer
+#                                        di altri scaricano (`main.py:1780`)
+#   EM_CATALOG_PUBLIC         RELATIVO · faccia sullo stesso nodo
+#   EM_KEYCLOAK_CONSOLE_URL   RELATIVO · faccia sullo stesso nodo
+#   EM_FIELD_ASSISTANT_URL    RELATIVO · faccia sullo stesso nodo ← la porta
+#                                        che ha aperto l'altra macchina
+#   EM_EMSTUDIO_WEB_URL       RELATIVO · e SENZA default: vedi la sua riga
+#   EM_CATALOG_EMSTUDIO_URL   RELATIVO · idem, e `fcn-up.sh` non lo esporta più
+#
+# ## 3 · E UNA CHE NON STA IN NESSUNA DELLE DUE, DETTA INVECE DI FORZATA
+#
+#   EM_MINIO_CONSOLE_URL      `http://localhost:9001`, E DEVE RESTARE COSÌ
+#
+# La 9001 è la console di amministrazione di MinIO, con le credenziali di root:
+# è legata a `127.0.0.1` di proposito (vedi la sua riga, più sopra) e Caddy NON
+# la serve — misurato, `/minio/` dà 404. Quindi:
+#
+#   · relativa non può essere: sul nodo non c'è nessun percorso che la serva;
+#   · seguire il nome primario sarebbe una BUGIA: `fcn.local:9001` non è
+#     pubblicata, e un indirizzo che non risponde stampato come se rispondesse è
+#     il difetto che questa notte sta chiudendo, non uno da aggiungere.
+#
+# `localhost` qui è giusto proprio perché in un browser `localhost` è sempre
+# stata la macchina di chi guarda, e quella è l'unica macchina da cui quella
+# porta si apre. La prova generale la esclude NOMINANDOLA, con questa ragione.
+#
+# Undici in categoria 1 o 2, una in categoria 3. Nessuna forzata.
+#
+# La prova generale sta in `tests/test_un_nodo_che_si_accende_altrove.py` e non
+# legge questo testo: rende l'ambiente con `compose config` e guarda i valori.
+
 x-sibling-repos:
   stratigraph-server: https://github.com/zalmoxes-laran/stratigraph-server.git
   stratigraph-chatbot: https://github.com/StratiGraph-ECCCH/stratigraph-chatbot.git
@@ -477,7 +544,19 @@ services:
       #
       # E `localhost` era sbagliato due volte: in un manifest consegnato a un
       # altro, `localhost` e' la macchina di chi legge.
-      EM_IIIF_PUBLIC: "https://em.localhost:${HTTPS_PORT:-8443}/iiif/3"
+      # ASSOLUTO (categoria 2, vedi la regola in cima): questo valore entra nei
+      # manifest IIIF, che scaricano i viewer di ALTRE macchine — `main.py:1780`.
+      #
+      # Era CABLATO, senza via d'uscita, mentre `fcn-up.sh:63` lo esportava con
+      # cura: l'export era morto. E c'era un secondo difetto sotto il primo,
+      # misurato l'8 settembre — l'export diceva `/iiif` e qui c'è `/iiif/3`:
+      #
+      #     https://em.localhost:8443/iiif    → 404
+      #     https://em.localhost:8443/iiif/3  → 200   (e `main.py:1863` lo dice)
+      #
+      # Cioè leggere la variabile SENZA correggere l'export avrebbe rotto IIIF:
+      # da un valore morto a un valore vivo e sbagliato. Corretti entrambi.
+      EM_IIIF_PUBLIC: "${EM_IIIF_PUBLIC:-https://em.localhost:${HTTPS_PORT:-8443}/iiif/3}"
       # INTERNAL: how em-server itself dials the image server, to read info.json
       # and learn each image's real size. NOT the same address — inside this
       # network `localhost` is em-server. Using the public form here measures
@@ -499,7 +578,10 @@ services:
       # which would be a fifth place to keep aligned. Unset on a deployment that
       # does not publish that face: the page then shows it with no link, rather
       # than with a guessed one.
-      EM_CATALOG_PUBLIC: "${EM_CATALOG_PUBLIC:-https://em.localhost:${HTTPS_PORT:-8443}/catalog}"
+      # RELATIVO (categoria 1): è una faccia sullo stesso nodo, dietro lo stesso
+      # Caddy. L'escape c'era già e nessuno lo usava; il default era un URL
+      # assoluto, quindi restava `em.localhost` dopo il rinomino.
+      EM_CATALOG_PUBLIC: "${EM_CATALOG_PUBLIC:-/catalog}"
       # --- this node's own PUBLIC address, for handoff links -------------------
       # What `stratigraph://open?server=…` names. Behind Caddy the server lives
       # under /em, and the link has to say so or the tool that follows it dials a
@@ -525,20 +607,52 @@ services:
       # right whether this stack is reached on `em.localhost:8443` or on a
       # colleague's hostname. `.env.dev` still overrides it — and E.D.'s copy is
       # his to change.
-      EM_EMSTUDIO_WEB_URL: "${EM_EMSTUDIO_WEB_URL:-/em/studio}"
+      # RELATIVO (categoria 1) quando c'è — MA SENZA DEFAULT, e l'assenza è la
+      # correzione.
+      #
+      # Un default qui è un'AFFERMAZIONE: «su questo nodo c'è un build web di
+      # EMStudio». Su un nodo di campo non c'è e non ci sarà — EMStudio è un
+      # quarto repository con un dev server che si avvia a mano, e la porta
+      # «browser» dava il 502 con la spiegazione lunga. È lo stesso difetto che
+      # `rooms_ui/rooms.js:256` VIETA al client («a client that assumed one would
+      # offer a button that 404s»), un piano più sotto: stavolta ad assumere il
+      # deploy è il deployment.
+      #
+      # Lo mette `.env.dev`, che è il file dello sviluppatore — chi sa di aver
+      # avviato `npm run dev`. `.env.dev.example` lo tiene commentato di
+      # proposito, così un clone fresco NON lo dichiara.
+      #
+      # E non si perde niente: EMStudio è l'unico dei tre strumenti che ha
+      # comunque una porta vera, quella desktop, perché il suo bundle registra
+      # davvero lo schema (misurato in EMStudio/apps/desktop/src-tauri/).
+      EM_EMSTUDIO_WEB_URL: "${EM_EMSTUDIO_WEB_URL:-}"
       # --- the NODE MAP's browser addresses ------------------------------------
       # HERE they are real and known, which is exactly why they are set here and
       # empty in the production template: on this stack Keycloak's console and
       # MinIO's console are published on the same origin as everything else, and
       # an operator opening the map wants to click through to them. On somebody
       # else's host neither is a given — see `heriverse-ansible`.
-      EM_KEYCLOAK_CONSOLE_URL: "https://em.localhost:${HTTPS_PORT:-8443}/auth/admin/"
+      # RELATIVO (categoria 1). Era CABLATA: nessuna variabile d'ambiente poteva
+      # cambiarla, quindi la console di Keycloak nella mappa del nodo nominava
+      # `em.localhost` anche su un nodo che si chiama altrimenti.
+      EM_KEYCLOAK_CONSOLE_URL: "${EM_KEYCLOAK_CONSOLE_URL:-/auth/admin/}"
       EM_MINIO_CONSOLE_URL: "http://localhost:${MINIO_CONSOLE_PORT:-9001}"
       # …but the field assistant is NOT one of those: it is a container in this
       # stack, up whenever the stack is, served by Caddy at /chat/. The reason
       # for the empty default above does not apply to it, and leaving it empty
       # cost a door that works and a public address `/v1/node` could publish.
-      EM_FIELD_ASSISTANT_URL: "${EM_FIELD_ASSISTANT_URL:-https://em.localhost:${HTTPS_PORT:-8443}/chat/}"
+      # RELATIVO (categoria 1) — ED È LA PORTA CHE HA APERTO L'ALTRA MACCHINA.
+      #
+      # Misurato l'8 settembre: da `https://fcn.local:8443/em/rooms/` il pulsante
+      # «StratiField · browser» apriva `https://em.localhost:8443/chat/`, cioè il
+      # portatile di chi aveva cliccato. Il chatbot lì ha fatto il suo mestiere
+      # onestamente («questo nodo scrive altrove»): il difetto era del LINK.
+      #
+      # L'escape c'era e nessuno lo usava; il default era assoluto. Confronta con
+      # `EM_EMSTUDIO_WEB_URL` qui sopra, che era relativo — due impostazioni
+      # sorelle, e solo una sopravviveva al rinomino, senza una ragione scritta
+      # da nessuna parte. Adesso la ragione è scritta, ed è la stessa per le due.
+      EM_FIELD_ASSISTANT_URL: "${EM_FIELD_ASSISTANT_URL:-/chat/}"
       # --- the photogrammetric engine ----------------------------------------
       # An ENDPOINT, not a host: today the `nodeodm` service beside us, tomorrow
       # a ClusterODM broker in front of a CPU worker and a GPU one — the same
@@ -884,7 +998,17 @@ services:
       # the internal request and the derivation is wrong in a different way. The
       # env var stays available as an override for a proxy that does not
       # forward; it is not how a correct deployment gets a correct answer.
-      EM_CATALOG_EMSTUDIO_URL: "${EM_CATALOG_EMSTUDIO_URL:-/em/studio}"
+      # RELATIVO quando c'è — MA SENZA DEFAULT, per la STESSA ragione di
+      # `EM_EMSTUDIO_WEB_URL` nel servizio del nodo: un default qui afferma «su
+      # questo nodo c'è un build web di EMStudio», e su un nodo di campo non c'è.
+      #
+      # ESTENSIONE DICHIARATA (8 settembre 2026): il prompt di questa notte
+      # decideva la cosa per `EM_EMSTUDIO_WEB_URL`; questa è la sua sorella, e
+      # lasciarle diverse avrebbe rifatto esattamente il difetto che §1 chiude —
+      # due impostazioni sorelle con comportamenti diversi e nessuna ragione
+      # scritta. Il catalogo gestisce già l'assenza onestamente:
+      # `deeplink.py:120-124` mette `"web": None` quando nessuno ha detto niente.
+      EM_CATALOG_EMSTUDIO_URL: "${EM_CATALOG_EMSTUDIO_URL:-}"
       # --- the reading page: a DIRECTORY, mounted just below -----------------
       # The reader is no longer one self-contained file (that tax is what made
       # its 3D engine +800 kB of inlined base64), so em-catalog serves the whole

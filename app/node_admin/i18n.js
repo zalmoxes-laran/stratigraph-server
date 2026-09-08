@@ -69,7 +69,7 @@ const STRINGS = {
     // it is shown only when something is wrong.
     "service.stratigraph-catalog": "Catalogue",
     "service.iiif": "Images (IIIF)",
-    "service.stratigraph-chatbot": "Field assistant",
+    "service.stratigraph-chatbot": "StratiField",
     "service.nodeodm": "Photogrammetric engine",
     "here.manual": "manual →",
     "rooms.title": "Rooms",
@@ -225,6 +225,14 @@ const STRINGS = {
     "door.desktop.title": "Open {tool} on this machine (stratigraph:// handler)",
     "door.browser.title": "Open {tool} in a new tab ({url})",
     "door.emjson.title": "The container, to import by hand",
+    // «paste» IS NOT «open», and the words have to say so: EMtools reads the
+    // link out of its own «Open room from link…», so the useful act is putting
+    // it where a person can paste it. A button labelled «desktop» produced «the
+    // address is not valid» in Safari on 8 September 2026.
+    "door.paste": "copy for EMtools",
+    "door.paste.title": "{tool} does not register stratigraph:// — copy the link and paste it into «Open room from link…»",
+    "door.paste.copied": "Link copied. In {tool}: «Open room from link…», then paste.",
+    "door.paste.manual": "The link is below. In {tool}: «Open room from link…», then paste it.",
     "door.copy": "Copy link",
     "door.copied": "Link copied — it carries no token.",
     "door.nothingOpened": "Nothing opened — no handler for {scheme}:// on this machine. Copy the link and open it inside the tool.",
@@ -279,7 +287,7 @@ const STRINGS = {
     "here.capability.needs": "serve",
     "service.stratigraph-catalog": "Catalogo",
     "service.iiif": "Immagini (IIIF)",
-    "service.stratigraph-chatbot": "Assistente di campo",
+    "service.stratigraph-chatbot": "StratiField",
     "service.nodeodm": "Motore fotogrammetrico",
     "here.manual": "manuale →",
     "rooms.title": "Le stanze",
@@ -422,6 +430,10 @@ const STRINGS = {
     "door.desktop.title": "Apri {tool} su questa macchina (handler stratigraph://)",
     "door.browser.title": "Apri {tool} in una scheda ({url})",
     "door.emjson.title": "Il contenitore, da importare a mano",
+    "door.paste": "copia per EMtools",
+    "door.paste.title": "{tool} non registra stratigraph:// — copia il link e incollalo in «Open room from link…»",
+    "door.paste.copied": "Link copiato. In {tool}: «Open room from link…», poi incolla.",
+    "door.paste.manual": "Il link è qui sotto. In {tool}: «Open room from link…», poi incollalo.",
     "door.copy": "Copia link",
     "door.copied": "Link copiato — non porta nessun token.",
     "door.nothingOpened": "Non si è aperto nulla: su questa macchina non c'è un handler per {scheme}://. Copia il link e aprilo dentro lo strumento.",

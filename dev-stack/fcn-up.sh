@@ -60,8 +60,37 @@ export EM_SITE="$addrs"
 export EM_DEV_DOMAIN="$PRIMARY"
 
 # ── 3 · gli URL PUBBLICI puntano all'host primario ───────────────────────────
-export EM_IIIF_PUBLIC="https://${PRIMARY}:${HTTPS_PORT}/iiif"
-export EM_CATALOG_EMSTUDIO_URL="https://${PRIMARY}:${HTTPS_PORT}"
+# `/iiif/3` E NON `/iiif`: misurato l'8 settembre 2026, `/iiif` dà 404 e
+# `/iiif/3` dà 200 — è l'Image API 3 di Cantaloupe, e `app/main.py:1863` scrive
+# la forma attesa (`https://host/iiif/3`). Questo export era MORTO perché il
+# compose cablava la riga, quindi il percorso sbagliato non si era mai visto:
+# leggere la variabile senza correggere qui avrebbe rotto IIIF.
+export EM_IIIF_PUBLIC="https://${PRIMARY}:${HTTPS_PORT}/iiif/3"
+# ── §3 · QUESTO EXPORT È STATO TOLTO, e la sua assenza è la correzione ──────
+#
+# Era:  export EM_CATALOG_EMSTUDIO_URL="https://${PRIMARY}:${HTTPS_PORT}"
+#
+# cioè un'ORIGINE NUDA, senza percorso. Il catalogo la consuma come base di
+# EMStudio (`stratigraph-catalog/app/deeplink.py:120-124`):
+#
+#     web = _base("EM_CATALOG_EMSTUDIO_URL")
+#     "web": f"{web}/?study={quoted}&emjson=…"
+#
+# quindi il link diventava `https://<host>:8443/?study=…`, la HOME del nodo.
+# Misurato dal vivo l'8 settembre, chiedendolo al catalogo che gira:
+#
+#     web = https://em.localhost:8443/?study=studio-x&emjson=…   → 302
+#     https://em.localhost:8443/em/studio/?study=studio-x        → 200
+#
+# E NON serviva un host primario per rompersi: `PRIMARY` vale `em.localhost`
+# quando non si passa niente, l'ambiente di shell batte `--env-file`, quindi
+# questo export vinceva SEMPRE sul default `/em/studio` del compose. Il rinomino
+# non peggiorava questa variabile: era già rotta in entrambe le direzioni.
+#
+# La correzione è togliere l'export, non aggiustarlo: è un indirizzo sullo stesso
+# nodo, quindi sta in categoria 1 e il default relativo del compose lo segue da
+# sé. Un export assoluto era esattamente lo sbaglio che la regola nomina.
+# (Nessuna riga cambiata in stratigraph-catalog.)
 # ⚠ VERIFICA: l'issuer OIDC dipende da come Caddy espone Keycloak nel Caddyfile.dev
 export OIDC_ISSUER="https://${PRIMARY}:${HTTPS_PORT}/auth/realms/${DEV_REALM}"
 # …and the origin Keycloak stamps into every token, so `iss` is ONE string

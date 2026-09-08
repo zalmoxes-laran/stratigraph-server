@@ -375,7 +375,19 @@ def test_a_STUDY_S_DESKTOP_DOOR_says_when_nothing_opened():
     # …and the door still on this face goes through it. The study's door left with
     # the studies zone; the MECHANISM is what mattered and it is still single, so
     # the next door added here inherits the honesty instead of re-deciding it.
-    assert "followScheme(targets.scheme" in CODE, "the room's door"
+    #
+    # UPDATED 8 September 2026: this asserted the literal call
+    # `followScheme(targets.scheme`, and the doors now come one per tool from the
+    # server's answer (`target.scheme`, only for a tool whose software registers
+    # the scheme). The mechanism is what this test is for, so what it names is
+    # the mechanism: `followScheme` is called with a scheme link that came from
+    # the ANSWER, and from nowhere else.
+    assert "followScheme(target.scheme" in CODE, "the room's door"
+    # …and the net is still on the door that can actually open — the one door
+    # whose tool registers the scheme. `followScheme` is never called on a
+    # `paste` link, because there is nothing to wait for.
+    assert "followScheme(target.paste" not in CODE
+    assert "followScheme(target.browser" not in CODE
     assert CODE.count("followScheme(") == 2, (
         "one definition and one caller. A second caller is welcome — a second "
         "IMPLEMENTATION is what this test exists to refuse.")
