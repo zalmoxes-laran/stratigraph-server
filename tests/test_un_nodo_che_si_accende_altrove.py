@@ -34,7 +34,9 @@ from __future__ import annotations
 import os
 import pathlib
 import shutil
+import stat
 import subprocess
+import sys
 
 import pytest
 
@@ -1340,64 +1342,32 @@ def test_L_INSTALLER_COL_FLAG_clona_anche_s3dgraphy(tmp_path):
 
 PRIMARIO = "fcn.local"
 
-#: Chi è ESENTE, e ognuna con la sua ragione. Un'esenzione senza ragione è un
-#: buco nella regola, quindi stanno qui in un dizionario e non in un `if`.
-ESENTI = {
-    #: `EM_SITE` è l'ELENCO di host che Caddy serve: contiene `em.localhost`
-    #: perché il nodo continua a rispondere anche su quel nome, e deve.
-    "EM_SITE": "è la lista dei nomi che Caddy serve, non un indirizzo consegnato",
-    #: Categoria 3, dichiarata nel compose: la 9001 è la console di
-    #: amministrazione di MinIO, legata a 127.0.0.1 e NON servita da Caddy
-    #: (misurato: `/minio/` → 404). `localhost` è giusto perché in un browser
-    #: `localhost` è la macchina di chi guarda, e quella è l'unica da cui si
-    #: apre. Nominarla `fcn.local:9001` sarebbe una bugia.
-    "EM_MINIO_CONSOLE_URL": "console su loopback, non pubblicata né proxata",
-}
+#: ── UN LETTORE SOLO, E NON È QUESTO FILE ───────────────────────────────────
+#:
+#: Le esenzioni e i predicati stavano QUI, e dall'8 settembre 2026 stanno in
+#: `dev-stack/check_addresses.py` (le esenzioni in
+#: `x-public-addresses.exempt`, dentro il compose, accanto alla regola che le
+#: spiega). Questa prova li IMPORTA.
+#:
+#: La ragione è misurata, non stilistica: la regola era scritta, provata, e
+#: applicata all'ambiente che il repository si ASPETTA. Sul Pi il catalogo ha
+#: servito `http://localhost:5173` perché quella macchina aveva un `.env.dev`
+#: già esistente. Perché la stessa regola valesse all'AVVIO doveva essere
+#: leggibile da un programma — e allora questa prova non può tenerne una copia,
+#: sennò le due possono divergere e la copia verde è quella che non conta.
+_spec_ca = _ilu.spec_from_file_location("check_addresses",
+                                        DEV / "check_addresses.py")
+CA = _ilu.module_from_spec(_spec_ca)
+_spec_ca.loader.exec_module(CA)
 
-#: Gli indirizzi INTERNI non sono consegnati a un browser: sono nomi della rete
-#: di container. La distinzione è già nel codice (`node_health.py:645`, «one is a
-#: machine we dial, the other is a name we hand out»), e questa prova la usa
-#: invece di re-inventarla.
-def _e_interno(nome: str, valore: str, servizi) -> bool:
-    """Un indirizzo della rete di container, non uno consegnato a un browser.
-
-    Due modi di riconoscerlo, e nessuno dei due è un elenco scritto a mano:
-
-      · il NOME lo dichiara (`*_INTERNAL`, e i tre che il codice usa così);
-      · l'HOST è un servizio di questo compose — `http://minio:9000`,
-        `http://keycloak:8080`. I nomi dei servizi vengono dal reso, quindi un
-        servizio nuovo è coperto da sé. Trovato eseguendo: la prima versione
-        guardava solo il suffisso e inciampava su
-        `CANTALOUPE_S3SOURCE_ENDPOINT` e `MINIO_ENDPOINT`.
-    """
-    if (nome.endswith("_INTERNAL") or nome.endswith("_INTERNAL_BASE")
-            or nome in ("OIDC_JWKS_URI", "NODEODM_URL", "EM_TRANSFORMER_URL")):
-        return True
-    v = (valore or "").strip()
-    if v.startswith(("http://", "https://")):
-        host = v.split("//", 1)[1].split("/", 1)[0].split(":", 1)[0]
-        if host in servizi:
-            return True
-    return False
+_e_interno = CA.e_interno
+_e_indirizzo = CA.e_indirizzo
+NOMI_SBAGLIATI = CA.ALTRUI
 
 
-#: Un valore che un browser aprirebbe: uno schema http(s), o un percorso
-#: assoluto. Tutto il resto (una porta, un id, un percorso di filesystem) non è
-#: un indirizzo e non riguarda questa regola.
-def _e_indirizzo(v: str) -> bool:
-    v = (v or "").strip()
-    if v.startswith(("http://", "https://")):
-        return True
-    #: `/chat/` sì; `/srv/chatbot-data/x.json` no — un percorso di filesystem
-    #: non arriva in un browser, e si riconosce perché nomina una cartella del
-    #: container.
-    if v.startswith("/") and not v.startswith(("/srv/", "/opt/", "/var/",
-                                               "/tmp/", "/etc/", "/data")):
-        return True
-    return False
-
-
-NOMI_SBAGLIATI = ("em.localhost", "localhost", "127.0.0.1", "0.0.0.0")
+def _esenti(reso) -> dict:
+    """Le esenzioni DICHIARATE, dal compose reso — non da una lista qui."""
+    return CA.esenzioni(reso)
 
 
 def _reso_con_primario(tmp_path, primario: str = PRIMARIO):
@@ -1445,13 +1415,8 @@ def _reso_con_primario(tmp_path, primario: str = PRIMARIO):
         f"il compose non ha reso niente:\n{done.stdout}\n{done.stderr}")
     doc = yaml.safe_load(uscita.read_text())
     servizi = set((doc.get("services") or {}))
-    reso = {}
-    for nome, sv in (doc.get("services") or {}).items():
-        for k, v in (sv.get("environment") or {}).items():
-            if v is None:
-                continue
-            reso.setdefault(k, str(v))
-    return reso, servizi, done
+    reso = {k: v for k, (v, _s) in CA.ambiente(doc).items()}
+    return reso, servizi, done, doc
 
 
 @needs_bash
@@ -1463,8 +1428,9 @@ def test_OGNI_INDIRIZZO_CONSEGNATO_A_UN_BROWSER_nomina_il_nodo(tmp_path):
     e `EM_CATALOG_PUBLIC` e `EM_FIELD_ASSISTANT_URL` (escape presente, default
     assoluto, nessun esportatore).
     """
-    reso, servizi, _ = _reso_con_primario(tmp_path)
+    reso, servizi, _, doc = _reso_con_primario(tmp_path)
     assert len(reso) > 20, f"troppo poche variabili per provare qualcosa: {reso}"
+    ESENTI = _esenti(doc)
 
     guardate, colpe = [], []
     for nome, valore in sorted(reso.items()):
@@ -1499,7 +1465,8 @@ def test_E_LE_QUATTRO_CHE_SBAGLIAVANO_sono_quelle_che_si_guardano(tmp_path):
     proprio quelli. Qui si asserisce che le quattro variabili dell'episodio
     dell'8 settembre sono davvero fra quelle guardate o relative — non escluse.
     """
-    reso, _servizi, _ = _reso_con_primario(tmp_path)
+    reso, _servizi, _, doc = _reso_con_primario(tmp_path)
+    ESENTI = _esenti(doc)
     for nome in ("EM_IIIF_PUBLIC", "EM_KEYCLOAK_CONSOLE_URL",
                  "EM_CATALOG_PUBLIC", "EM_FIELD_ASSISTANT_URL"):
         assert nome in reso, f"{nome} non è più resa: la prova non la copre"
@@ -1525,7 +1492,7 @@ def test_E_IL_PERCORSO_DI_IIIF_e_quello_che_risponde(tmp_path):
     variabile senza correggere il percorso avrebbe trasformato un valore morto
     in un valore vivo e sbagliato, che è peggio.
     """
-    reso, _servizi, _ = _reso_con_primario(tmp_path)
+    reso, _servizi, _, _doc = _reso_con_primario(tmp_path)
     v = reso["EM_IIIF_PUBLIC"]
     assert v.endswith("/iiif/3"), (
         f"EM_IIIF_PUBLIC = {v!r}: `/iiif` dà 404, l'Image API 3 di Cantaloupe "
@@ -1545,7 +1512,7 @@ def test_LE_ESENZIONI_sono_ancora_quelle_che_credo(tmp_path):
     essere loopback — se un giorno Caddy servisse la console di MinIO, quella
     esenzione andrebbe togliendo, non tenuta per abitudine.
     """
-    reso, _servizi, _ = _reso_con_primario(tmp_path)
+    reso, _servizi, _, _doc = _reso_con_primario(tmp_path)
     assert PRIMARIO in reso["EM_SITE"] and "em.localhost" in reso["EM_SITE"]
     assert reso["EM_MINIO_CONSOLE_URL"].startswith("http://localhost:")
 
@@ -1743,7 +1710,7 @@ def test_UN_NODO_FRESCO_NON_DICHIARA_un_build_web_di_EMSTUDIO(tmp_path):
     Misurato sull'ambiente RESO, con `.env.dev` copiato da `.env.dev.example` —
     cioè la macchina di chi ha appena clonato.
     """
-    reso, _servizi, _ = _reso_con_primario(tmp_path)
+    reso, _servizi, _, _doc = _reso_con_primario(tmp_path)
     for nome in ("EM_EMSTUDIO_WEB_URL", "EM_CATALOG_EMSTUDIO_URL"):
         assert reso.get(nome, "") == "", (
             f"{nome} = {reso.get(nome)!r} su un nodo fresco: è l'affermazione "
@@ -1769,3 +1736,677 @@ def test_E_SULLA_MACCHINA_DI_CHI_SVILUPPA_la_porta_browser_torna():
     """
     p = _porte({"EM_EMSTUDIO_WEB_URL": "/em/studio/"})
     assert p["emstudio"] == {"scheme", "browser"}
+
+
+# ═══ 15 · I FILE CHE ESISTONO GIÀ ════════════════════════════════════════════
+#
+# L'8 settembre 2026, sul Pi, dopo `./fcn-up.sh fcn.local`:
+#
+#     docker exec em-dev-catalog python3 -c "… deeplink.open_targets(…)"
+#       web → http://localhost:5173/?study=studio-x&emjson=x
+#
+# cioè la macchina di chi clicca. La riga colpevole era stata commentata in
+# `.env.dev.example` la notte prima, e l'export che la mascherava era stato
+# tolto la notte prima — entrambe le cose giuste. Ma il Pi aveva un `.env.dev`
+# **già esistente**, germogliato da quell'esempio quando la riga era attiva.
+#
+# CORREGGERE IL SEME NON TOCCA LA PIANTA. La regola c'era, era scritta una
+# volta, era provata — sull'ambiente che il repository si ASPETTA. Mancava
+# applicata all'ambiente che su quella macchina ESISTE, all'avvio.
+#
+# La proprietà, e va provata nei DUE versi perché è precisamente la specie D:
+#
+#   All'avvio, ogni valore reso che nomina una macchina diversa dal primario e
+#   non è nella lista delle esenzioni dichiarate viene DETTO — e su un avvio
+#   pulito non viene detto niente.
+
+
+def _reso_json(dev: pathlib.Path, env_file: pathlib.Path, esporta=None):
+    """Il `config --format json` di QUEL compose con QUEL .env.dev.
+
+    `--format json` e non YAML perché è quello che usa `check_addresses.py`, e
+    la ragione è misurata: il `python3` di sistema di Debian 12 non ha `yaml` e
+    su questi nodi non si installa niente con pip.
+    """
+    compose = shutil.which("docker-compose") or shutil.which("docker")
+    if not compose:
+        pytest.skip("nessun compose: l'ambiente reso non si può misurare qui")
+    cmd = [compose]
+    if compose.endswith("docker"):
+        cmd.append("compose")
+    cmd += ["--env-file", str(env_file), "-f", "docker-compose.dev.yml",
+            "--profile", "https", "config", "--format", "json"]
+    fuori = subprocess.run(cmd, capture_output=True, text=True, cwd=str(dev),
+                           env={**os.environ, **(esporta or {})})
+    assert fuori.returncode == 0 and fuori.stdout.strip(), fuori.stderr[:400]
+    return _json.loads(fuori.stdout)
+
+
+#: L'ambiente che `fcn-up.sh fcn.local` esporta. Non è una copia della sua
+#: lista: è il MINIMO che serve a rendere l'avvio pulito, e se `fcn-up.sh`
+#: cambiasse i suoi export la prova dell'avvio pulito (che esegue lo script
+#: vero) resterebbe quella autorevole.
+ESPORTATI = {
+    "EM_SITE": f"https://em.localhost, https://{PRIMARIO}",
+    "EM_DEV_DOMAIN": PRIMARIO,
+    "EM_IIIF_PUBLIC": f"https://{PRIMARIO}:8443/iiif/3",
+    "OIDC_ISSUER": f"https://{PRIMARIO}:8443/auth/realms/em-dev",
+    "OIDC_PUBLIC_ORIGIN": f"https://{PRIMARIO}:8443",
+    "EM_PUBLIC_BASE": f"https://{PRIMARIO}:8443/em",
+}
+
+
+def test_UN_ENV_DEV_PULITO_non_fa_stampare_niente(tmp_path):
+    """IL SECONDO VERSO, e senza questo fra un mese l'avviso stampa sempre.
+
+    Un avviso che compare a ogni avvio non lo legge nessuno — ed è esattamente
+    la ragione per cui questo difetto è arrivato fino a stamattina.
+    """
+    dev = _clone_finto(tmp_path)
+    env = dev / ".env.dev"
+    shutil.copy(DEV / ".env.dev.example", env)
+    doc = _reso_json(dev, env, ESPORTATI)
+    trovati = CA.sospetti(doc, PRIMARIO, env)
+    assert trovati == [], f"ha parlato su un avvio pulito: {trovati}"
+    assert CA.racconta(trovati, PRIMARIO) == [], "zero righe, non «tutto bene»"
+
+
+def test_UN_ENV_DEV_GIA_ESISTENTE_viene_DETTO_con_file_e_riga(tmp_path):
+    """IL PRIMO VERSO: la situazione del Pi, riprodotta.
+
+    Un `.env.dev` nato dall'esempio quando la riga era attiva — che è tutto
+    quello che serve, perché nessuno riscrive i file di configurazione di
+    nessuno.
+    """
+    dev = _clone_finto(tmp_path)
+    env = dev / ".env.dev"
+    testo = (DEV / ".env.dev.example").read_text(encoding="utf-8")
+    #: la riga come stava PRIMA che venisse commentata (8 settembre, :121)
+    testo = testo.replace("# EM_CATALOG_EMSTUDIO_URL=http://localhost:5173",
+                          "EM_CATALOG_EMSTUDIO_URL=http://localhost:5173")
+    env.write_text(testo)
+    riga_attesa = next(n for n, r in enumerate(testo.splitlines(), 1)
+                       if r.startswith("EM_CATALOG_EMSTUDIO_URL="))
+
+    doc = _reso_json(dev, env, ESPORTATI)
+    trovati = CA.sospetti(doc, PRIMARIO, env)
+    nomi = {t["nome"] for t in trovati}
+    assert "EM_CATALOG_EMSTUDIO_URL" in nomi, f"non l'ha detto: {trovati}"
+    solo = next(t for t in trovati if t["nome"] == "EM_CATALOG_EMSTUDIO_URL")
+    assert solo["valore"] == "http://localhost:5173"
+    #: …e DOVE sta, che è la metà utile: il file e la riga
+    assert ".env.dev" in solo["da"] and f"riga {riga_attesa}" in solo["da"], solo
+    #: …e lo dice come «la macchina di chi guarda»
+    righe = CA.racconta(trovati, PRIMARIO)
+    assert any("chi guarda" in r for r in righe), righe
+    assert any(f"riga {riga_attesa}" in r for r in righe), righe
+
+
+def test_E_IIIF_ATTIVO_SENZA_L_EXPORT_viene_detto(tmp_path):
+    """§5 mutazione 1, come prova stabile.
+
+    `.env.dev.example:137` tiene ATTIVO `EM_IIIF_PUBLIC=http://localhost:8182/
+    iiif/3` — la porta di cantaloupe. Oggi `fcn-up.sh:63` la sovrascrive; il
+    giorno che quell'export sparisse come è appena sparito l'altro, i manifest
+    nominerebbero `localhost:8182`. Non è ipotetico: è la stessa dinamica
+    appena successa, a sei ore di distanza.
+    """
+    dev = _clone_finto(tmp_path)
+    env = dev / ".env.dev"
+    shutil.copy(DEV / ".env.dev.example", env)
+    #: SENZA l'export di EM_IIIF_PUBLIC — tutto il resto sì
+    senza = {k: v for k, v in ESPORTATI.items() if k != "EM_IIIF_PUBLIC"}
+    doc = _reso_json(dev, env, senza)
+    trovati = CA.sospetti(doc, PRIMARIO, env)
+    solo = next((t for t in trovati if t["nome"] == "EM_IIIF_PUBLIC"), None)
+    assert solo, f"non ha detto EM_IIIF_PUBLIC: {[t['nome'] for t in trovati]}"
+    assert "8182" in solo["valore"]
+    assert ".env.dev" in solo["da"], solo
+
+
+def test_LE_ESENZIONI_hanno_tutte_una_RAGIONE_scritta(tmp_path):
+    """§5 mutazione 2: un'esenzione senza ragione è un buco nella regola.
+
+    Le esenzioni sono DATI, in `x-public-addresses.exempt`, e la ragione non è
+    decorazione: è la sola cosa che distingue una scelta da una dimenticanza.
+    """
+    dev = _clone_finto(tmp_path)
+    env = dev / ".env.dev"
+    shutil.copy(DEV / ".env.dev.example", env)
+    esenti = CA.esenzioni(_reso_json(dev, env, ESPORTATI))
+    assert esenti, "nessuna esenzione: `x-public-addresses.exempt` è sparito?"
+    for nome, ragione in esenti.items():
+        assert len(ragione) >= 30, (
+            f"{nome} è esentata con «{ragione}»: una ragione di meno di trenta "
+            f"caratteri non è una ragione, è un'etichetta")
+    #: …e nessuna delle quattro dell'episodio del 7 settembre è fra le esenti
+    for nome in ("EM_IIIF_PUBLIC", "EM_KEYCLOAK_CONSOLE_URL",
+                 "EM_CATALOG_PUBLIC", "EM_FIELD_ASSISTANT_URL",
+                 "EM_CATALOG_EMSTUDIO_URL", "EM_EMSTUDIO_WEB_URL"):
+        assert nome not in esenti, f"{nome} è stata esentata"
+
+
+def test_IL_CONTROLLO_NON_APRE_MAI_IN_SCRITTURA(tmp_path):
+    """Il PRIMO vincolo, provato eseguendo e non leggendo.
+
+    Un file di configurazione è di chi l'ha scritto. Il giorno che uno script
+    riscrive `.env.dev` da solo, nessuno si fida più di quello che c'è dentro.
+
+    Provato mettendo il `.env.dev` in sola lettura: se il controllo lo aprisse
+    in scrittura fallirebbe, e invece parla e non lo tocca.
+    """
+    dev = _clone_finto(tmp_path)
+    env = dev / ".env.dev"
+    testo = (DEV / ".env.dev.example").read_text(encoding="utf-8").replace(
+        "# EM_CATALOG_EMSTUDIO_URL=http://localhost:5173",
+        "EM_CATALOG_EMSTUDIO_URL=http://localhost:5173")
+    env.write_text(testo)
+    doc = _reso_json(dev, env, ESPORTATI)
+    prima = env.read_bytes()
+    env.chmod(0o444)
+    try:
+        trovati = CA.sospetti(doc, PRIMARIO, env)
+        assert any(t["nome"] == "EM_CATALOG_EMSTUDIO_URL" for t in trovati)
+    finally:
+        env.chmod(0o644)
+    assert env.read_bytes() == prima, "ha toccato il .env.dev"
+
+
+@needs_bash
+def test_FCN_UP_LO_DICE_nel_blocco_finale_e_non_blocca(tmp_path):
+    """E lo dice lo SCRIPT, non solo la funzione — sottospecie B.
+
+    E non blocca: il nodo sale, e l'avviso sta dove sta quello della CA.
+    """
+    dev = _clone_finto(tmp_path,
+                       fratelli=("stratigraph-chatbot", "stratigraph-catalog"))
+    testo = (DEV / ".env.dev.example").read_text(encoding="utf-8").replace(
+        "# EM_CATALOG_EMSTUDIO_URL=http://localhost:5173",
+        "EM_CATALOG_EMSTUDIO_URL=http://localhost:5173")
+    (dev / ".env.dev").write_text(testo)
+    bin_ = _finti(tmp_path, docker_ok=True, plugin=False, autonomo=True)
+    _uname(bin_, "linux")
+    #: il finto compose delega `config` a quello vero, quindi il reso è quello
+    #: che `fcn-up.sh` ha davvero passato
+    done = _accendi(dev, bin_, tmp_path, args=(PRIMARIO,))
+    assert done.returncode == 0, "ha bloccato l'avvio: " + done.stderr
+    assert "FCN acceso" in done.stdout, done.stdout
+    assert "EM_CATALOG_EMSTUDIO_URL" in done.stdout, done.stdout
+    assert "localhost:5173" in done.stdout
+    assert ".env.dev riga" in done.stdout, "non dice il file e la riga"
+    #: …e i container sono stati alzati comunque
+    assert "up -d --build" in _chiamati(tmp_path)
+
+
+@needs_bash
+def test_E_SU_UN_AVVIO_PULITO_lo_script_TACE(tmp_path):
+    dev = _clone_finto(tmp_path,
+                       fratelli=("stratigraph-chatbot", "stratigraph-catalog"))
+    shutil.copy(DEV / ".env.dev.example", dev / ".env.dev")
+    bin_ = _finti(tmp_path, docker_ok=True, plugin=False, autonomo=True)
+    _uname(bin_, "linux")
+    done = _accendi(dev, bin_, tmp_path, args=(PRIMARIO,))
+    assert done.returncode == 0, done.stderr
+    for parola in ("indirizzo/i reso/i", "chi guarda", "localhost:5173"):
+        assert parola not in done.stdout, (
+            f"ha detto «{parola}» su un avvio pulito:\n{done.stdout}")
+
+
+# ═══ 16 · UN FILE DI ROOT, E IL RIMEDIO CHE NON È SUDO ═══════════════════════
+#
+# Il primo `./fcn-up.sh fcn.local` sul Pi è morto qui:
+#
+#     File "…/dev-stack/render_realm.py", line 208, in main
+#         destinazione.write_text(json.dumps(reso, indent=2) + "\n")
+#     PermissionError: [Errno 13] Permission denied:
+#         'keycloak/realm-em-dev.fcn.local.json'
+#     ✖ non so insegnare `fcn.local` al realm di Keycloak. … Mi fermo qui.
+#
+# La frase finale è giusta e non si tocca: fermarsi prima di alzare Caddy su un
+# nome che il realm non conosce è il comportamento che il 7 settembre abbiamo
+# pagato per ottenere. Ma sopra c'erano dieci righe di traceback, e chi le legge
+# alle otto di mattina pensa che sia rotto lo script.
+#
+# E IL RIMEDIO NON È OVVIO: il permesso di cancellare un file viene dalla
+# DIRECTORY, non dal file. Uno script che dicesse «serve sudo» manderebbe la
+# persona a cercare una password per niente.
+
+RR2 = RR  # lo stesso modulo di §9, per leggibilità qui
+
+
+def test_LA_DIRECTORY_KEYCLOAK_permette_l_unlink_senza_sudo():
+    """La regola POSIX su cui si appoggia il messaggio, verificata e non copiata.
+
+    Il permesso di unlink viene da `w`+`x` sulla DIRECTORY. Con lo sticky bit
+    servirebbe essere proprietari del file **o** della directory — e la
+    directory è dell'utente, quindi anche in quel caso l'unlink passa.
+    """
+    d = DEV / "keycloak"
+    st = d.stat()
+    assert stat.S_ISDIR(st.st_mode)
+    assert st.st_uid == os.getuid(), (
+        f"`keycloak/` non è dell'utente (uid {st.st_uid}): il messaggio che dice "
+        f"«non serve sudo» andrebbe rivisto")
+    assert not (st.st_mode & stat.S_ISVTX), "sticky bit: rileggi il ragionamento"
+    assert os.access(d, os.W_OK | os.X_OK), "unlink NON permesso"
+
+
+def test_UNA_DESTINAZIONE_NON_SCRIVIBILE_da_UNA_FRASE_e_zero_traceback(tmp_path):
+    """§5 mutazione 4, e la proprietà che conta è l'ASSENZA del traceback."""
+    kc = tmp_path / "keycloak"
+    kc.mkdir()
+    shutil.copy(DEV / "keycloak" / "realm-em-dev.json", kc)
+    bersaglio = kc / "realm-em-dev.fcn.local.json"
+    bersaglio.write_text("{}")
+    bersaglio.chmod(0o444)
+
+    done = subprocess.run(
+        ["python3", str(DEV / "render_realm.py"), "--host", "fcn.local",
+         "--in", "keycloak/realm-em-dev.json"],
+        capture_output=True, text=True, cwd=str(tmp_path))
+    assert done.returncode == 4, done.stderr
+    #: NESSUN traceback
+    for spia in ("Traceback", "PermissionError", 'File "', "line "):
+        assert spia not in done.stderr, f"c'è ancora un traceback: {spia}"
+    #: …e una frase che dice dove e cosa
+    assert "non posso scrivere il realm reso" in done.stderr
+    assert "NON serve sudo" in done.stderr, "manda a cercare una password?"
+    assert "viene dalla DIRECTORY" in done.stderr, "non spiega perché"
+    #: …e mai la parola sudo come RIMEDIO
+    assert "sudo mv" not in done.stderr and "sudo rm" not in done.stderr
+
+
+def test_E_IL_COMANDO_CHE_STAMPA_funziona_davvero(tmp_path):
+    """La frase deve contenere il comando che funziona — provato eseguendolo.
+
+    Non «un comando plausibile»: quello stampato, eseguito, e poi il render che
+    riesce. È la differenza fra un messaggio d'aiuto e un messaggio d'aiuto che
+    aiuta.
+    """
+    kc = tmp_path / "keycloak"
+    kc.mkdir()
+    shutil.copy(DEV / "keycloak" / "realm-em-dev.json", kc)
+    bersaglio = kc / "realm-em-dev.fcn.local.json"
+    bersaglio.write_text("{}")
+    bersaglio.chmod(0o444)
+
+    def rendi():
+        return subprocess.run(
+            ["python3", str(DEV / "render_realm.py"), "--host", "fcn.local",
+             "--in", "keycloak/realm-em-dev.json"],
+            capture_output=True, text=True, cwd=str(tmp_path))
+
+    primo = rendi()
+    comandi = [r.strip() for r in primo.stderr.splitlines()
+               if r.strip().startswith("mv ")]
+    assert comandi, f"nessun comando da eseguire:\n{primo.stderr}"
+    eseguito = subprocess.run(["bash", "-c", comandi[0]],
+                              capture_output=True, text=True, cwd=str(tmp_path))
+    assert eseguito.returncode == 0, (
+        f"il comando STAMPATO non funziona: {comandi[0]}\n{eseguito.stderr}")
+    #: …e adesso il render riesce
+    secondo = rendi()
+    assert secondo.returncode == 0, secondo.stderr
+    assert bersaglio.is_file() and _json.loads(bersaglio.read_text())
+
+
+def test_UN_FILE_DI_ALTRI_lo_dice_esplicitamente(monkeypatch, tmp_path):
+    """Il ramo «non è mio», che con un file vero non posso costruire.
+
+    Creare un file di root vuole `sudo`, e questi script non lo chiamano e
+    nemmeno le prove. Quindi si sposta l'altro capo: si finge che l'uid
+    dell'utente sia un altro, e si guarda se la frase lo dice. Dichiarato invece
+    di saltato — è la sola parte di §2 che non ho misurato su un file davvero
+    altrui.
+    """
+    kc = tmp_path / "keycloak"
+    kc.mkdir()
+    bersaglio = kc / "realm-em-dev.fcn.local.json"
+    bersaglio.write_text("{}")
+    bersaglio.chmod(0o444)
+    monkeypatch.setattr(RR2.os, "getuid", lambda: 999999)
+    righe = RR2._perche_non_si_scrive(bersaglio)
+    unito = "\n".join(righe)
+    assert "non è mio" in unito, unito
+    assert "NON serve sudo" in unito, "il rimedio resta quello giusto"
+
+
+def test_LA_CARTELLA_NON_SCRIVIBILE_dice_UN_ALTRA_cosa(tmp_path):
+    """Tre casi, tre rimedi: qui il proprietario serve davvero, e si dice."""
+    kc = tmp_path / "keycloak"
+    kc.mkdir()
+    shutil.copy(DEV / "keycloak" / "realm-em-dev.json", kc)
+    kc.chmod(0o555)
+    try:
+        righe = RR2._perche_non_si_scrive(kc / "realm-em-dev.fcn.local.json")
+        unito = "\n".join(righe)
+        assert "non è scrivibile" in unito, unito
+        assert "ls -ld" in unito, "non dice come guardare"
+        #: e qui NON promette che basta un mv
+        assert "NON serve sudo" not in unito
+    finally:
+        kc.chmod(0o755)
+
+
+@needs_bash
+def test_E_FCN_UP_NON_ALZA_NIENTE_quando_il_realm_non_si_scrive(tmp_path):
+    """La frase finale resta, e i container non partono.
+
+    Questo è il pezzo di §2 che non si tocca: fermarsi prima di alzare Caddy su
+    un nome che il realm non conosce.
+    """
+    dev = _clone_finto(tmp_path,
+                       fratelli=("stratigraph-chatbot", "stratigraph-catalog"))
+    shutil.copy(DEV / ".env.dev.example", dev / ".env.dev")
+    bersaglio = dev / "keycloak" / f"realm-em-dev.{PRIMARIO}.json"
+    bersaglio.write_text("{}")
+    bersaglio.chmod(0o444)
+    bin_ = _finti(tmp_path, docker_ok=True, plugin=False, autonomo=True)
+    _uname(bin_, "linux")
+    done = _accendi(dev, bin_, tmp_path, args=(PRIMARIO,))
+    assert done.returncode != 0
+    assert "non so insegnare" in done.stderr, "la frase finale è sparita"
+    assert "Traceback" not in done.stderr, done.stderr
+    assert "NON serve sudo" in done.stderr
+    assert "up -d --build" not in _chiamati(tmp_path), "ha alzato i container"
+
+
+# ═══ 17 · UNA FRASE CHE AFFERMA IL SISTEMA SBAGLIATO ═════════════════════════
+#
+# `fcn-up.sh:330`, stampato **su Debian**:
+#
+#     · ⚠ LA CA NON È FIDATA su questo Mac: il browser rifiuterà la pagina…
+#
+# Piccolo, ed è la famiglia: una frase che afferma un fatto sulla macchina senza
+# chiederglielo. `platform.sh` ha `sg_os` da due notti.
+
+@needs_bash
+@pytest.mark.parametrize("sistema,atteso,vietato", [
+    ("macos", "su questo Mac", None),
+    ("linux", "su questa macchina", "Mac"),
+    ("wsl", "dentro WSL", "Mac"),
+    ("windows", "su questo Windows", "Mac"),
+])
+def test_L_AVVISO_DELLA_CA_non_afferma_il_sistema_sbagliato(
+        tmp_path, sistema, atteso, vietato):
+    """E la sonda della CA deve FALLIRE, sennò l'avviso non si stampa affatto:
+    il finto `curl` risponde 0 su `em.localhost` (perché il resto dello script
+    lo interroga) e 7 sull'indirizzo del primario, che è quello della sonda."""
+    dev = _clone_finto(tmp_path,
+                       fratelli=("stratigraph-chatbot", "stratigraph-catalog"))
+    shutil.copy(DEV / ".env.dev.example", dev / ".env.dev")
+    bin_ = _finti(tmp_path, docker_ok=True, plugin=False, autonomo=True,
+                  nomi=("curl",))
+    _uname(bin_, sistema)
+    c = bin_ / "curl"
+    #: la sonda della CA è `curl` SENZA `-k` sul primario: qui fallisce sempre,
+    #: che è la macchina su cui la CA non è ancora fidata
+    c.write_text('#!/usr/bin/env bash\n'
+                 f'echo "curl $*" >> "{tmp_path}/chiamati.txt"\n'
+                 'exit 7\n')
+    c.chmod(0o755)
+    env = {"WSL_DISTRO_NAME": "Ubuntu"} if sistema == "wsl" else {}
+    done = subprocess.run(["bash", str(dev / "fcn-up.sh")],
+                          capture_output=True, text=True, cwd=str(dev),
+                          env={**os.environ, "HOME": str(tmp_path), **env,
+                               "PATH": f"{bin_}{os.pathsep}{os.environ['PATH']}"})
+    assert done.returncode == 0, done.stderr
+    assert "LA CA NON È FIDATA" in done.stdout, done.stdout
+    assert atteso in done.stdout, done.stdout
+    if vietato:
+        riga = next(r for r in done.stdout.splitlines()
+                    if "LA CA NON È FIDATA" in r)
+        assert vietato not in riga, riga
+
+
+@needs_bash
+@pytest.mark.parametrize("sistema,offre", [("macos", True), ("linux", False),
+                                           ("wsl", False), ("windows", False)])
+def test_LA_SORELLA_nello_stesso_blocco_e_COLIMA(tmp_path, sistema, offre):
+    """L'altra frase dello stesso blocco che afferma un fatto sulla macchina.
+
+    `Giù: ./fcn-down.sh (o --stop / --wipe / --colima)` offriva `--colima` su
+    ogni sistema. `fcn-down.sh` gestisce già la richiesta con grazia («niente
+    Colima su questo sistema»), ma l'OFFERTA è un'affermazione — ed è la stessa
+    specie della frase sul Mac, sulla riga sotto.
+    """
+    dev = _clone_finto(tmp_path,
+                       fratelli=("stratigraph-chatbot", "stratigraph-catalog"))
+    shutil.copy(DEV / ".env.dev.example", dev / ".env.dev")
+    bin_ = _finti(tmp_path, docker_ok=True, plugin=False, autonomo=True)
+    _uname(bin_, sistema)
+    env = {"WSL_DISTRO_NAME": "Ubuntu"} if sistema == "wsl" else {}
+    done = subprocess.run(["bash", str(dev / "fcn-up.sh")],
+                          capture_output=True, text=True, cwd=str(dev),
+                          env={**os.environ, "HOME": str(tmp_path), **env,
+                               "PATH": f"{bin_}{os.pathsep}{os.environ['PATH']}"})
+    assert done.returncode == 0, done.stderr
+    riga = next(r for r in done.stdout.splitlines() if r.startswith("Giù:"))
+    assert ("--colima" in riga) == offre, riga
+    #: e le due che esistono sempre restano
+    assert "--stop" in riga and "--wipe" in riga, riga
+
+
+def test_L_AIUTO_NON_CHIAMA_BONJOUR_un_meccanismo_di_tutti():
+    """La terza sorella, fuori dal blocco: `--help` la stampa.
+
+    `Bonjour` è il nome Apple di mDNS; su Linux il demone è avahi. Un nome di
+    una piattaforma presentato come universale è la stessa specie, un gradino
+    più in basso.
+    """
+    testo = (DEV / "fcn-up.sh").read_text(encoding="utf-8")
+    aiuto = [r for r in testo.splitlines()[:20] if r.startswith("#")]
+    unito = "\n".join(aiuto)
+    assert "mDNS" in unito, "l'aiuto non nomina più il meccanismo"
+    #: `Bonjour` può comparire, ma solo accanto ad avahi — cioè come UNO dei due
+    if "Bonjour" in unito:
+        assert "avahi" in unito, (
+            "l'aiuto dice Bonjour senza dire avahi: su Linux è quello il demone")
+
+
+# ═══ 18 · IL DEEPLINK DEL CATALOGO, CHIESTO ALLA PORTA ═══════════════════════
+#
+# §4 del prompt dell'8 settembre chiudeva due segnalazioni sbagliate, e questa
+# prova è quella che permette di cancellarne una invece di lasciarla aperta.
+#
+# La segnalazione era: «il deeplink dello schema esce come
+# `stratigraph://open?study=…`, senza l'indirizzo del catalogo». Falsa, e la
+# causa dell'errore è la sottospecie B: era stata chiamata `open_targets()` a
+# mano in Python, senza il parametro che la ROTTA passa. Si era chiesto alla
+# funzione invece che alla porta.
+#
+# Restava una misura non fatta, perché il catalogo sul Pi è vuoto
+# (`/catalog/studies` → `count: 0`): la porta non era stata interrogata
+# davvero. Qui lo è, con una fixture.
+
+CAT = DEV.parent.parent / "stratigraph-catalog"
+
+
+#: IL DRIVER GIRA IN UN INTERPRETE PULITO, e non è pignoleria: il catalogo ha
+#: un pacchetto `app` e un `conftest.py`, esattamente come questo repository.
+#: Dentro pytest `import app` e `import conftest` risolvono ai NOSTRI, che sono
+#: già in `sys.modules`, e nessun gioco di `sys.path` lo cambia — misurato:
+#: `AttributeError: module 'conftest' has no attribute 'study_document'`.
+#: Quindi si esegue, come per gli script di shell, e si legge il JSON.
+_DRIVER = r"""
+import json, os, sys, pathlib
+sys.path.insert(0, str(pathlib.Path.cwd()))
+sys.path.insert(0, str(pathlib.Path.cwd() / "tests"))
+from fastapi.testclient import TestClient
+from app import main as m
+from app.index import SqliteCatalogIndex
+from app.store import InMemoryContainerStore
+from app import aliases
+import conftest as cf
+
+m.STORE, m.INDEX = InMemoryContainerStore(), SqliteCatalogIndex(":memory:")
+aliases.reset()
+with TestClient(m.app) as c:
+    fatto = c.post("/catalog/studies", json=cf.study_document())
+    assert fatto.status_code < 400, fatto.text[:300]
+    #: la chiave è `id`, misurata sulla risposta vera: `study_id` non c'è, e
+    #: uno `or` di comodo in una prova nasconde un cambio di grammatica.
+    sid = fatto.json()["id"]
+    aperto = c.get("/catalog/study/" + sid + "/open")
+    assert aperto.status_code == 200, aperto.text[:300]
+    print("--JSON--")
+    print(json.dumps({"study_id": sid, "aperto": aperto.json()}))
+"""
+
+
+def _catalogo_alla_porta(env: dict):
+    """Il catalogo con uno store che nessun altro ha scritto, e uno studio vero.
+
+    Interroga la PORTA (`GET /catalog/study/{id}/open`), non la funzione: la
+    segnalazione dell'8 settembre era sbagliata proprio perché `open_targets()`
+    era stata chiamata a mano, senza il parametro che la rotta passa.
+    """
+    if not (CAT / "app" / "main.py").is_file():
+        pytest.skip("stratigraph-catalog non è affiancato: la porta non si "
+                    "può interrogare")
+    ambiente = dict(os.environ)
+    for k, v in env.items():
+        if v is None:
+            ambiente.pop(k, None)
+        else:
+            ambiente[k] = v
+    done = subprocess.run([sys.executable, "-c", _DRIVER],
+                          capture_output=True, text=True, cwd=str(CAT),
+                          env=ambiente)
+    if done.returncode != 0:
+        pytest.skip(f"il catalogo non gira qui: {done.stderr.strip()[-300:]}")
+    corpo = done.stdout.split("--JSON--", 1)
+    assert len(corpo) == 2, done.stdout[-400:]
+    d = _json.loads(corpo[1])
+    return d["study_id"], d["aperto"]
+
+
+def test_LO_SCHEMA_DEL_CATALOGO_porta_ANCHE_l_indirizzo_del_catalogo():
+    """La segnalazione ritirata, chiusa misurando.
+
+    `app/main.py` alla rotta `/study/{id}/open` passa
+    `catalog_base=_public_base(request)`: configurazione quando c'è, altrimenti
+    la richiesta — «chi ha chiesto può raggiungere quello che ha chiesto».
+    """
+    sid, d = _catalogo_alla_porta({"EM_CATALOG_EMSTUDIO_URL": None,
+                                   "EM_CATALOG_PUBLIC_URL": None})
+    schema = d["apps"]["emstudio"]["scheme"]
+    assert schema.startswith("stratigraph://open?")
+    assert "study=" in schema
+    assert "catalog=" in schema, (
+        f"il parametro `catalog` NON c'è: {schema} — e la segnalazione dell'8 "
+        f"settembre sarebbe stata giusta")
+    #: …e senza configurazione la porta `web` è ASSENTE, non inventata
+    assert d["apps"]["emstudio"]["web"] is None
+    #: …e il contenitore c'è sempre: EMStudio apre un em.json che gli si passa
+    assert f"/catalog/study/{sid}/emjson" in d["apps"]["emstudio"]["emjson"]
+
+
+@pytest.mark.parametrize("valore,atteso", [
+    ("http://localhost:5173", "http://localhost:5173/?study="),   # il Pi
+    ("/em/studio", "/em/studio/?study="),                         # il compose
+])
+def test_E_LA_PORTA_WEB_segue_la_configurazione(valore, atteso):
+    """Le tre configurazioni raccontano tutta la storia dell'8 settembre.
+
+    Con il valore che il Pi aveva in un `.env.dev` già esistente, la porta `web`
+    nomina `localhost:5173` — la macchina di chi clicca. Con il default
+    relativo del compose nomina `/em/studio/`, che segue l'host del nodo.
+    Nessuna delle due è dedotta: sono due risposte della stessa porta.
+    """
+    _sid, d = _catalogo_alla_porta({"EM_CATALOG_EMSTUDIO_URL": valore})
+    web = d["apps"]["emstudio"]["web"]
+    assert web.startswith(atteso), web
+    #: …e l'em.json resta assoluto, perché lo scarica un'ALTRA applicazione
+    assert "emjson=http" in web
+
+
+# ═══ 19 · DUE PROPRIETÀ CHE UNA MUTAZIONE A ZERO ROSSE HA SCOPERTO ═══════════
+#
+# Il censimento dell'8 settembre ha dato due mutazioni verdi, e la regola dice
+# che una mutazione verde non ha provato niente. Erano entrambe vere:
+#
+#   MUT 7  il controllo BLOCCA l'avvio quando trova qualcosa  → 0 rosse
+#   MUT 10 il banco tiene la SUA copia delle esenzioni        → 0 rosse
+#
+# La 7: `fcn-up.sh` chiama il controllo dentro `$( … | … || true )`, quindi il
+# suo codice di uscita non può uscire. La proprietà «non blocca» è difesa DUE
+# volte e le prove misuravano solo lo strato esterno — che è una buona difesa e
+# una cattiva prova.
+#
+# La 10 è la più importante, perché è il disegno di tutta la serata: la copia
+# che ho messo nella mutazione aveva le STESSE CHIAVI di quella vera, quindi la
+# prova generale si comportava identica. «Una lista sola» non era provata.
+
+
+def test_IL_CONTROLLO_NON_BLOCCA_mai_qualunque_cosa_trovi(tmp_path):
+    """Il SECONDO vincolo, sul contratto del controllo e non su quello dello
+    script — dove `|| true` lo maschererebbe comunque.
+
+    Provato sui due versi e su un caso rotto: un reso che non si legge affatto
+    deve comunque ritornare 0, perché il nodo deve salire.
+    """
+    dev = _clone_finto(tmp_path)
+    env = dev / ".env.dev"
+    testo = (DEV / ".env.dev.example").read_text(encoding="utf-8").replace(
+        "# EM_CATALOG_EMSTUDIO_URL=http://localhost:5173",
+        "EM_CATALOG_EMSTUDIO_URL=http://localhost:5173")
+    env.write_text(testo)
+    sporco = tmp_path / "sporco.json"
+    sporco.write_text(_json.dumps(_reso_json(dev, env, ESPORTATI)))
+
+    #: 1 · con qualcosa da dire
+    rc = CA.main(["--primario", PRIMARIO, "--reso", str(sporco),
+                  "--env-file", str(env)])
+    assert rc == 0, "blocca quando trova qualcosa"
+
+    #: 2 · con niente da dire
+    pulito = tmp_path / "pulito.json"
+    shutil.copy(DEV / ".env.dev.example", env)
+    pulito.write_text(_json.dumps(_reso_json(dev, env, ESPORTATI)))
+    assert CA.main(["--primario", PRIMARIO, "--reso", str(pulito),
+                    "--env-file", str(env)]) == 0
+
+    #: 3 · e con un reso ILLEGGIBILE, che è il caso in cui la tentazione di
+    #: fallire è più forte: un controllo rotto non deve tenere giù un nodo.
+    rotto = tmp_path / "rotto.json"
+    rotto.write_text("questo non è json")
+    assert CA.main(["--primario", PRIMARIO, "--reso", str(rotto),
+                    "--env-file", str(env)]) == 0
+
+
+def test_LE_ESENZIONI_VENGONO_DAL_COMPOSE_e_non_da_una_copia(tmp_path):
+    """«Una lista sola», provata invece che dichiarata.
+
+    La proprietà non è «le esenzioni sono giuste»: è che **se il compose cambia,
+    la vista del banco cambia**. Una copia con le stesse chiavi passerebbe ogni
+    altra prova di questo file — misurato, MUT 10 a zero rosse.
+
+    Quindi si mette una voce SONDA nel compose di una copia dell'albero e si
+    guarda se arriva fin qui.
+    """
+    dev = _clone_finto(tmp_path)
+    env = dev / ".env.dev"
+    shutil.copy(DEV / ".env.dev.example", env)
+    y = dev / "docker-compose.dev.yml"
+    y.write_text(y.read_text().replace(
+        "  exempt:\n",
+        "  exempt:\n    EM_SONDA_INESISTENTE: >-\n"
+        "      una voce messa da una prova per vedere se le esenzioni arrivano\n"
+        "      davvero dal compose e non da una copia scritta altrove\n", 1))
+
+    doc = _reso_json(dev, env, ESPORTATI)
+    esenti = _esenti(doc)
+    assert "EM_SONDA_INESISTENTE" in esenti, (
+        "l'esenzione messa nel compose non arriva al banco: da qualche parte "
+        "c'è una copia della lista")
+    #: …e la voce vera è ancora là, cioè la sonda non ha sostituito il file
+    assert "EM_MINIO_CONSOLE_URL" in esenti
+
+    #: E L'ALTRO VERSO: togliendole tutte, il banco non ne inventa
+    y.write_text(y.read_text().replace("x-public-addresses:\n  # Le variabili",
+                                       "x-public-addresses-DISATTIVATO:\n  # Le variabili", 1))
+    doc2 = _reso_json(dev, env, ESPORTATI)
+    assert _esenti(doc2) == {}, (
+        "senza `x-public-addresses` il banco ha ancora delle esenzioni: sono "
+        "scritte da qualche parte dentro di lui")

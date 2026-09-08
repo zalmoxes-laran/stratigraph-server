@@ -119,8 +119,43 @@ x-s3dgraphy-version: &s3dgraphy_version "${S3DGRAPHY_VERSION:-1.6.0.dev17}"
 #
 # Undici in categoria 1 o 2, una in categoria 3. Nessuna forzata.
 #
+# ## LE ESENZIONI SONO DATI, NON PROSA — E C'È UN LETTORE SOLO
+#
+# `x-public-addresses.exempt`, qui sotto. Lo leggono DUE cose e nessuna delle due
+# ne tiene una copia:
+#
+#   · `dev-stack/check_addresses.py`, che `fcn-up.sh` chiama all'avvio e che DICE
+#     quali valori resi nominano una macchina diversa dal primario;
+#   · `tests/test_un_nodo_che_si_accende_altrove.py`, la prova generale, che
+#     importa quello script invece di reimplementare i suoi predicati.
+#
+# Il motivo per cui sono dati e non prosa è misurato: l'8 settembre 2026 il
+# catalogo sul Pi ha servito `http://localhost:5173` — la macchina di chi
+# clicca — perché il Pi aveva un `.env.dev` **già esistente**, germogliato da
+# `.env.dev.example` quando quella riga era attiva. Correggere l'esempio non
+# tocca niente di ciò che è già germogliato: il seme era a posto e la pianta no.
+# La regola serviva applicata all'AMBIENTE CHE ESISTE, all'avvio, e per quello
+# doveva essere leggibile da un programma.
+#
+# Ogni voce porta la sua RAGIONE, e non è decorazione: un'esenzione senza ragione
+# scritta è un buco nella regola, e la prova la rifiuta.
+#
 # La prova generale sta in `tests/test_un_nodo_che_si_accende_altrove.py` e non
 # legge questo testo: rende l'ambiente con `compose config` e guarda i valori.
+
+x-public-addresses:
+  # Le variabili che NON devono seguire il nome primario, con il perché.
+  # Chi aggiunge una voce qui sta allargando un buco nella regola: la ragione è
+  # obbligatoria, e `test_LE_ESENZIONI_hanno_tutte_una_ragione` la pretende.
+  exempt:
+    EM_SITE: >-
+      è l'ELENCO dei nomi che Caddy serve — contiene em.localhost perché il nodo
+      continua a rispondere anche su quel nome, e deve
+    EM_MINIO_CONSOLE_URL: >-
+      categoria 3: la 9001 è la console di amministrazione di MinIO, legata a
+      127.0.0.1 e NON servita da Caddy (misurato, /minio/ dà 404). localhost è
+      giusto perché in un browser è la macchina di chi guarda, e quella è
+      l'unica da cui quella porta si apre
 
 x-sibling-repos:
   stratigraph-server: https://github.com/zalmoxes-laran/stratigraph-server.git

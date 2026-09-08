@@ -55,8 +55,10 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 import pathlib
 import re
+import stat
 import sys
 from typing import Any, Dict, List, Tuple
 
@@ -172,6 +174,67 @@ def rendi(realm: Dict[str, Any], *, host: str, porta: int,
     return fuori, aggiunte
 
 
+def _perche_non_si_scrive(destinazione: pathlib.Path) -> List[str]:
+    """Le righe da dire quando non si può scrivere là, o [] quando si può.
+
+    Tre casi diversi con tre rimedi diversi, e vale la pena distinguerli:
+
+      · il FILE esiste e non è mio     → si sposta, e NON serve sudo
+      · il FILE esiste e non è scrivibile ma è mio → `chmod` basta
+      · la DIRECTORY non è scrivibile  → là sì che serve il proprietario
+
+    Il primo è quello che è successo, ed è quello in cui il rimedio ovvio
+    (`sudo`) è quello sbagliato.
+    """
+    cartella = destinazione.parent if str(destinazione.parent) else pathlib.Path(".")
+    if not cartella.is_dir():
+        return [f"la cartella {cartella} non c'è."]
+
+    dir_scrivibile = os.access(cartella, os.W_OK | os.X_OK)
+
+    if destinazione.exists():
+        if os.access(destinazione, os.W_OK):
+            return []
+        righe = [f"il file c'è già e non è scrivibile da me."]
+        try:
+            st = destinazione.stat()
+            mio = st.st_uid == os.getuid()
+            righe.append(
+                f"uid del file: {st.st_uid}"
+                + ("" if mio else f", io sono {os.getuid()} — non è mio")
+                + f", modo {stat.filemode(st.st_mode)}.")
+        except OSError:
+            mio = True
+        if dir_scrivibile:
+            #: IL PUNTO: il permesso di unlink viene dalla directory.
+            righe += [
+                "",
+                f"La cartella `{cartella}` è mia e scrivibile, e il permesso di",
+                "cancellare un file viene dalla DIRECTORY, non dal file: quindi",
+                "NON serve sudo. Sposta il vecchio e rilancia:",
+                "",
+                f"    mv {destinazione} {destinazione}.bak-$(date +%Y%m%d)",
+                "",
+            ]
+            if mio:
+                righe.append(f"(o, se preferisci: chmod u+w {destinazione})")
+        else:
+            righe += [
+                "",
+                f"E la cartella `{cartella}` non è scrivibile da me, quindi",
+                "nemmeno spostarlo posso. Qui serve il suo proprietario:",
+                f"    ls -ld {cartella}",
+            ]
+        return righe
+
+    if not dir_scrivibile:
+        return [
+            f"la cartella `{cartella}` non è scrivibile da me.",
+            f"    ls -ld {cartella}",
+        ]
+    return []
+
+
 def main(argv: List[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Rende il realm del dev-stack per un host primario.")
@@ -205,6 +268,29 @@ def main(argv: List[str] | None = None) -> int:
 
     destinazione = pathlib.Path(
         a.uscita or sorgente.with_suffix(f".{a.host}.json"))
+
+    #: ── SI PUÒ SCRIVERE LÀ? CHIESTO PRIMA, NON SCOPERTO DAL TRACEBACK ──────
+    #:
+    #: Misurato sul Pi l'8 settembre 2026: il primo `./fcn-up.sh fcn.local` è
+    #: morto con dieci righe di traceback Python e un `PermissionError` su
+    #: `keycloak/realm-em-dev.fcn.local.json`, che era di **root** — l'unico
+    #: file di root in tutto il repository. Chi lo legge alle otto di mattina
+    #: pensa che sia rotto lo script.
+    #:
+    #: E IL RIMEDIO NON È OVVIO, che è la ragione per cui questa frase esiste:
+    #: il permesso di CANCELLARE un file viene dalla DIRECTORY, non dal file.
+    #: `keycloak/` è dell'utente e non ha lo sticky bit — verificato, non
+    #: copiato: `drwxr-xr-x`, uid dell'utente, `S_ISVTX` falso. Quindi quel
+    #: file si sposta o si cancella **senza sudo**, e uno script che dicesse
+    #: «serve sudo» manderebbe la persona a cercare una password per niente.
+    problema = _perche_non_si_scrive(destinazione)
+    if problema:
+        print(f"✖ non posso scrivere il realm reso in {destinazione}.",
+              file=sys.stderr)
+        for riga in problema:
+            print(f"  {riga}", file=sys.stderr)
+        return 4
+
     destinazione.write_text(json.dumps(reso, indent=2) + "\n")
     if not a.zitto:
         n = sum(len(v) for v in aggiunte.values())

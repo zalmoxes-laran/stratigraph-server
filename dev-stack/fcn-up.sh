@@ -2,14 +2,15 @@
 # fcn-up — accendi il Field Computing Node: Caddy+https su hostname (mai IP nudo),
 # e tira su l'intera stack StratiGraph.
 #
-#   ./fcn-up.sh                 # locale: https://em.localhost:8443 (+ serve anche il nome Bonjour .local)
+#   ./fcn-up.sh                 # locale: https://em.localhost:8443 (+ serve anche il nome mDNS .local)
 #   ./fcn-up.sh mac.local       # host PRIMARIO = un hostname risolvibile (per l'altro computer)
 #   ./fcn-up.sh --demo          # …e POPOLA: studi, stanze, immagini IIIF. Idempotente.
 #   ./fcn-up.sh --local-s3d     # s3Dgraphy dal CHECKOUT LOCALE (editi e testi live)
 #   ./fcn-up.sh mac.local --local-s3d
 #
 # NB: la CA interna di Caddy NON fa certificati per un IP nudo → per l'altro computer
-# serve un HOSTNAME (il nome Bonjour `<mac>.local`, o /etc/hosts, o un dominio vero),
+# serve un HOSTNAME (il nome mDNS `<host>.local` — Bonjour su macOS, avahi su
+# Linux — oppure /etc/hosts, oppure un dominio vero),
 # non 172.x.x.x. E la rete deve vedersi (hotspot che isola i client → travel-router/Tailscale).
 #
 # DATI: i volumi (studi, stanze, bucket asset+corpus, realm, CA di Caddy) PERSISTONO fra i
@@ -52,7 +53,7 @@ PRIMARY="${ARG_HOST:-em.localhost}"                 # dove punta il browser (URL
 # interna di Caddy non fa certificati per un IP nudo). `scutil` su macOS,
 # `hostname -s` altrove — la differenza sta in `platform.sh`, non qui.
 BONJOUR="$(sg_local_hostname)"; [ -n "$BONJOUR" ] && BONJOUR="${BONJOUR}.local"
-# Caddy serve em.localhost SEMPRE, + il primario e il nome Bonjour se diversi (hostname, mai IP)
+# Caddy serve em.localhost SEMPRE, + il primario e il nome mDNS se diversi (hostname, mai IP)
 addrs="https://em.localhost"
 [ "$PRIMARY" != "em.localhost" ] && addrs="$addrs, https://$PRIMARY"
 [ -n "$BONJOUR" ] && [ "$BONJOUR" != "em.localhost" ] && [ "$BONJOUR" != "$PRIMARY" ] && addrs="$addrs, https://$BONJOUR"
@@ -327,9 +328,49 @@ $( # RILEVATO, mai eseguito: fcn-trust-ca.sh chiede una password di sistema, e u
    # Se l'host non risponde affatto stampa comunque l'avviso: un promemoria in più
    # costa una riga, un blocco silenzioso costa un pomeriggio.
    if ! curl -s -o /dev/null --max-time 4 "https://${PRIMARY}:${HTTPS_PORT}/em/v1/health"; then
-     echo "  · ⚠ LA CA NON È FIDATA su questo Mac: il browser rifiuterà la pagina e"
+     # «su questo Mac» stampato su Debian, misurato sul Pi l'8 settembre 2026.
+     # Piccolo, ed è la famiglia: una frase che afferma un fatto sulla macchina
+     # senza chiederglielo. `sg_os` lo sa, e sta in `platform.sh` da due notti.
+     # `if`/`elif` E NON `case`: questo blocco vive dentro un `$( … )` di un
+     # heredoc, e là il `)` di un pattern (`macos)`) CHIUDE la sostituzione.
+     # `bash -n` non lo vede, perché un heredoc si analizza solo quando si
+     # espande — trovato eseguendo, con 13 prove rosse in una volta.
+     sistema="$(sg_os)"
+     dove="su questa macchina"
+     if [ "$sistema" = "macos" ]; then dove="su questo Mac"
+     elif [ "$sistema" = "wsl" ]; then dove="dentro WSL — e il negozio che conta è quello di Windows"
+     elif [ "$sistema" = "windows" ]; then dove="su questo Windows"
+     fi
+     echo "  · ⚠ LA CA NON È FIDATA ${dove}: il browser rifiuterà la pagina e"
      echo "      un service worker non si registrerà. Rimedio, UNA volta:  ./fcn-trust-ca.sh"
      echo "      (chiede la password di sistema, per questo non lo faccio io.)"
+   fi )
+$( # ── GLI INDIRIZZI RESI, CHIESTI ALL'AMBIENTE CHE ESISTE ─────────────────
+   #
+   # La regola sugli indirizzi pubblici era scritta, provata e applicata — ma
+   # all'ambiente che il repository si ASPETTA. L'8 settembre 2026, sul Pi,
+   # dopo `./fcn-up.sh fcn.local`, il catalogo ha servito
+   #
+   #     web → http://localhost:5173/?study=studio-x&emjson=x
+   #
+   # cioè la macchina di chi clicca, perché quella macchina aveva un `.env.dev`
+   # GIÀ ESISTENTE, germogliato dall'example quando la riga era attiva.
+   # Correggere il seme non tocca la pianta.
+   #
+   # Quindi qui si chiede all'ambiente RESO. `check_addresses.py` legge le
+   # esenzioni da `x-public-addresses.exempt` nel compose — la stessa lista che
+   # legge la prova generale, non una copia — DICE e non corregge, non blocca, e
+   # su un avvio pulito non stampa niente.
+   #
+   # `|| true` due volte: sotto `set -euo pipefail` un compose che non conosce
+   # `--format json` farebbe morire il nodo dopo che è salito, per un controllo.
+   if [ -f check_addresses.py ]; then
+     reso_json="$("${COMPOSE[@]}" config --format json 2>/dev/null || true)"
+     if [ -n "$reso_json" ]; then
+       printf '%s' "$reso_json" \
+         | python3 check_addresses.py --primario "$PRIMARY" --reso - \
+                   --env-file .env.dev 2>/dev/null | sed 's/^/  /' || true
+     fi
    fi )
   · dati: studi/stanze/asset/corpus PERSISTONO fra i riavvii (volumi named). ./fcn-down.sh li
     tiene; solo ./fcn-down.sh --wipe li cancella.
@@ -337,5 +378,5 @@ $( # RILEVATO, mai eseguito: fcn-trust-ca.sh chiede una password di sistema, e u
     due macchine si vedano in rete (hotspot che isola → travel-router · Internet-Sharing · Tailscale).
     Per usarlo come primario:  ./fcn-up.sh ${BONJOUR:-<mac>.local}
 $( [ "$LOCAL_S3D" = "yes" ] && echo "  · dopo aver editato s3Dgraphy:  ${COMPOSE[0]}${COMPOSE[1]:+ ${COMPOSE[1]}} -f docker-compose.dev.yml -f docker-compose.local-s3d.yml restart stratigraph-server stratigraph-catalog" )
-Giù:  ./fcn-down.sh   (o --stop / --wipe / --colima)
+Giù:  ./fcn-down.sh   (o --stop / --wipe$( [ "$(sg_os)" = "macos" ] && command -v colima >/dev/null 2>&1 && echo " / --colima" ) )
 EOF
