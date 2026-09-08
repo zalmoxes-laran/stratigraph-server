@@ -183,3 +183,52 @@ sg_compose_array() {
   local IFS=' '
   read -r -a COMPOSE <<< "$trovato"
 }
+
+#: L'indirizzo di questa macchina sulla LAN, o "". Serve SOLO come ripiego da
+#: stampare quando un nome non regge — mai come indirizzo da usare: la CA
+#: interna di Caddy non firma per un IP nudo, quindi con l'IP il TLS non
+#: funziona e il nome serve comunque. È per la riga di `/etc/hosts` da mettere
+#: sull'ALTRA macchina.
+#:
+#: Rilevato, non assunto: `ipconfig getifaddr` su macOS (che vuole il nome
+#: dell'interfaccia, e quello lo chiede a `route`), `ip route get` su Linux e
+#: WSL. Mai `hostname -I`, che su una macchina con Docker elenca anche gli
+#: indirizzi dei bridge e ne dà uno che nessun altro può raggiungere.
+sg_lan_ip() {
+  case "$(sg_os)" in
+    macos)
+      local iface
+      iface="$(route -n get 1.1.1.1 2>/dev/null \
+               | awk '/interface:/{print $2; exit}')"
+      [ -n "$iface" ] && ipconfig getifaddr "$iface" 2>/dev/null || true
+      ;;
+    linux|wsl)
+      #: `src` è l'indirizzo che il kernel userebbe per uscire: quello vero.
+      ip route get 1.1.1.1 2>/dev/null \
+        | sed -n 's/.*[[:space:]]src[[:space:]]\([0-9.]*\).*/\1/p' | head -1
+      ;;
+    *) echo "" ;;
+  esac
+}
+
+#: Un indirizzo https risponde? Stampa `si` | `nome` | `muto` e ritorna 0/1.
+#:
+#:   si     ha risposto
+#:   nome   il nome non si risolve       (curl 6)
+#:   muto   si risolve e non risponde    (tutto il resto)
+#:
+#: Tre esiti e non due, perché sono tre frasi diverse da dire a chi legge — e
+#: perché «non risolve» è la sola per cui il rimedio è una riga di `/etc/hosts`
+#: e non un container da guardare.
+#:
+#: `-k`: qui si misura la RAGGIUNGIBILITÀ, non la fiducia nella CA — quella ha
+#: già la sua sonda, senza `-k`, alla fine di `fcn-up.sh`.
+sg_reaches() {
+  local url="$1" rc
+  curl -sk -o /dev/null --max-time "${2:-4}" "$url"; rc=$?
+  case "$rc" in
+    0)  echo si;   return 0 ;;
+    6)  echo nome; return 1 ;;
+    *)  echo muto; return 1 ;;
+  esac
+}

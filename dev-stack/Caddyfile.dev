@@ -286,9 +286,20 @@
 		handle @emstudio {
 			respond "{err.status_code} — EMStudio's dev server is not answering on the host (:5173).
 
+THESE TWO ROUTES ARE DEVELOPER-ONLY, and on a field node they are SUPPOSED to
+say this: EMStudio is a fourth repository with its own dev server, started by
+hand. A node that never runs it is not broken.
+
 Start it:   cd EMStudio/frontend && npm run dev
 It serves /em/studio/ (the editor) and /em/studio/reader.html (the reader),
 and this origin proxies straight through to it.
+
+Until 2026-09-07 this 502 hid a SECOND cause, and on Linux it was the only one:
+`host.docker.internal` does not exist inside a container on native Docker
+Engine — Docker Desktop and Colima provide it, a Debian box does not — so the
+route could not resolve its upstream even with Vite running. The compose now
+declares it (`extra_hosts: host.docker.internal:host-gateway`), so this message
+means what it says again.
 
 In production these two routes are served from the built files instead
 (heriverse-ansible role/templates/Caddyfile.j2), so this message belongs to

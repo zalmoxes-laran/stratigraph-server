@@ -177,15 +177,88 @@ distribution and therefore that of the `hosts:` line in *its* `nsswitch.conf`.
 The `/etc/hosts` line above covers both without needing to know the answer,
 which is why it is the recommendation rather than a rule in the code.
 
+**Two ports cannot answer on a node, and now they say why.** Measured on the Pi
+with the stack up:
+
+```
+/em/v1/health  200     /catalog/ui/  200
+/em/rooms/     200     /chat/        200
+/em/admin/     200     /em/studio/   502     /em/read/  502
+```
+
+Those two 502s are **correct**: `Caddyfile.dev` sends them to
+`host.docker.internal:5173`, EMStudio's Vite dev server, which is a *fourth*
+repository started by hand. A node that never runs it is not broken — and the
+502 page now says exactly that.
+
+Underneath there was a second cause that a Mac never shows:
+
+```
+docker exec em-dev-caddy getent hosts host.docker.internal → does not resolve
+grep extra_hosts / host-gateway docker-compose.dev.yml     → nothing
+```
+
+**Docker Desktop and Colima provide that name; native Docker Engine does not.**
+So on the Pi those routes would have stayed 502 *even with Vite running* — the
+route could not resolve its upstream. The compose now declares it
+(`extra_hosts: host.docker.internal:host-gateway`, harmless where the name
+already exists, and here it resolves to 192.168.5.2), so the 502 means what it
+says again.
+
+**A primary host name is learned by Caddy AND by the realm — as of 8 September.**
+`./fcn-up.sh fcn.local` used to get a certificate for that name, serve the page
+to another machine over trusted TLS, and then kill the login with
+
+```
+We are sorry…   Invalid parameter: redirect_uri
+```
+
+because the `em-console` client's 28 redirect URIs are hard-wired to
+`em.localhost:8443` and `localhost`. `render_realm.py` now **mirrors** the
+canonical authority's URIs for the given name — the *paths* stay the ones
+already declared and reviewed, only the host changes — and refuses a wildcard in
+the host part, which would be an open redirect rather than a development
+shortcut. The rendered realm is gitignored; the committed one stays the truth,
+and `${REALM_FILE}` defaults to it so `./fcn-up.sh` with no argument behaves
+exactly as before.
+
+**The name printed for the other computer is now probed before it is printed.**
+Measured: avahi is running and publishing on the Pi, and from a Mac on the same
+LAN `ping fcn.local` says `cannot resolve`. The cause is not the Pi — it is an
+access point that does not forward multicast between clients, which is the norm
+on consumer APs. So the line said an address that does not work as if it did.
+Now `fcn-up.sh` tries it and says which of two things it found; and the limit of
+the probe is stated too, because from here you can only measure that *this*
+machine resolves the name. When it does not hold, the useful line is the
+fallback: this machine's IP and the `/etc/hosts` line **for the other machine** —
+the name is taught, not bypassed, because the internal CA does not sign for a
+bare IP.
+
 **Nothing else is platform-specific.** `fcn-up.sh` and `fcn-down.sh` were the
 other two Mac-only spots (`scutil --get LocalHostName`, `colima stop`) and both
 now ask `platform.sh`. What is **not** verified is a full run on Linux or on
 Windows: `tests/test_un_nodo_che_si_accende_altrove.py` executes the scripts
-with a faked `uname` and asserts which commands they call — **35 assertions**,
-including that colima is *not* called where it does not exist and that the right
-compose is chosen on a machine that has only one of the two — but nobody has yet
-brought the stack up on either. That is the next measurement, and it needs the
-machine rather than the test.
+with a faked `uname` and asserts which commands they call — **61 assertions** —
+including that colima is *not* called where it does not exist, that the right
+compose is chosen on a machine that has only one of the two, and that the
+installer stops before any network when a sibling repository is missing.
+
+**And on 7 September 2026 the stack came up on Linux/arm64 for the first time**,
+so the «nobody has brought it up» line is gone for that platform and stays for
+Windows:
+
+```
+paul@fcn        Debian GNU/Linux 12 (bookworm)   arm64 / aarch64
+                Raspberry Pi 5 Model B Rev 1.0   7.9 GiB RAM
+                microSD 29 G, 19 G free          (no SSD)
+docker 29.8.0   compose v5.5.1 (THE PLUGIN)      buildx 0.37.0
+→ seven healthy containers, five of seven ports at 200
+```
+
+`sg_compose` found the plugin and did not die on line one — the first real run
+of the preferred branch, which does not exist on the Mac this was written on.
+And the `aarch64` wheels exist for everything: nothing compiled from source.
+**Windows is still unproven.**
 
 > **`docker compose` or `docker-compose`? The scripts no longer care.** Recent
 > Docker ships compose as a *plugin* (`docker compose`, two words); a Homebrew
@@ -211,6 +284,58 @@ machine rather than the test.
 > elsewhere in this README still use the hyphen, because that is what answers
 > here; use whichever `sg_compose` picks on yours (`. ./platform.sh &&
 > sg_compose`).
+
+---
+
+## Install — the step that was missing, and it comes first
+
+**`docker-compose.dev.yml` builds from THREE repositories side by side.** Clone
+only `stratigraph-server` — which is what this README describes — and the first
+`up` ends with
+
+```
+unable to prepare context: path "/home/paul/stratigraph-chatbot" not found
+```
+
+Measured on the Pi: **that message arrived after five images had been pulled.**
+A check costing one `test -d` came after all the work it made pointless.
+
+```bash
+cd dev-stack
+./fcn-install.sh                # check and prepare, then it tells you what to run
+./fcn-install.sh fcn.local      # …and teach THAT name to the realm too
+./fcn-install.sh --dry-run      # say what it would do, change nothing
+```
+
+What it guarantees, in order of cost:
+
+| | |
+|---|---|
+| the three repositories side by side | **clones** the missing ones |
+| `.env.dev` exists | prints the line; does **not** create it |
+| Docker answers, a compose exists | names what is missing; installs nothing |
+| `em.localhost` resolves | prints the `/etc/hosts` line; does **not** write it |
+| the primary name is known to the realm | renders it before `up` |
+
+**It never runs `sudo`**, never adds an apt repository, never touches
+`/etc/hosts` and never starts or stops a container. Adding a package source to
+somebody's machine is that person's act; so is a line in `/etc/hosts`. The
+script says the line — the same doctrine as `fcn-trust-ca.sh`, which prints the
+system command instead of running it.
+
+**Idempotent.** Run it again on a machine that is fine and it changes nothing
+and says so.
+
+**Where the repository addresses live: one place.** Which directories are needed
+comes from the compose's own `context:` lines; where they are cloned from comes
+from `x-sibling-repos` in the *same file*. There is no list inside the installer
+— a test asserts there is no `github.com` in its code — and if a new `context:`
+has no URL beside it, the gate goes red instead of the installer cloning
+nothing.
+
+> `fcn-up.sh` carries the same `test -d` check, because it is the command people
+> actually type. A check that exists only on the documented path protects only
+> the documented path.
 
 ---
 

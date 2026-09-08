@@ -24,3 +24,9 @@ dev-stack/.env.dev
 
 # macOS
 .DS_Store
+
+# Il realm RESO per un host primario (`./fcn-up.sh fcn.local` → keycloak/
+# realm-em-dev.fcn.local.json). Il committato è `realm-em-dev.json` e resta la
+# verità; il reso è quello con le redirect URI per il nome che chi lancia lo
+# script ha scelto, e quel nome è di quella macchina — non di questo repository.
+dev-stack/keycloak/realm-em-dev.*.json

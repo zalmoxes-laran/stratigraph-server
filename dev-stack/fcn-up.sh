@@ -72,6 +72,44 @@ export OIDC_PUBLIC_ORIGIN="https://${PRIMARY}:${HTTPS_PORT}"
 export EM_PUBLIC_BASE="https://${PRIMARY}:${HTTPS_PORT}/em"
 
 # ── 4 · su (con l'override s3Dgraphy-locale se richiesto) ─────────────────────
+# ── 3-bis · IL REALM IMPARA IL NOME (prima di `up`, perché è un import) ──────
+#
+# Misurato sul Pi il 7 settembre 2026: `./fcn-up.sh fcn.local` fa emettere a
+# Caddy un certificato per quel nome, la pagina ARRIVA da un'altra macchina —
+# TLS a posto, CA fidata, Keycloak che risponde — e poi il login muore con
+#
+#     We are sorry…   Invalid parameter: redirect_uri
+#
+# perché le 28 redirect URI del client `em-console` sono cablate su
+# `em.localhost:8443` e su `localhost`. L'argomento «host primario» era
+# applicato a METÀ: Caddy lo imparava, il realm no. E `--help` lo offre dicendo
+# «per l'altro computer», cioè promette esattamente la cosa che non funziona.
+#
+# `render_realm.py` RISPECCHIA le URI dell'autorità canonica per il nome nuovo:
+# i percorsi restano quelli già dichiarati, cambia solo l'host, e un jolly nella
+# parte host è rifiutato — sarebbe un open redirect.
+#
+# Il file reso è ignorato da git e il compose lo monta via `${REALM_FILE}`, il
+# cui default è il file committato: senza argomenti, `up` monta esattamente
+# quello di prima.
+if [ "$PRIMARY" != "em.localhost" ]; then
+  REALM_RESO="keycloak/realm-em-dev.${PRIMARY}.json"
+  set +e
+  python3 render_realm.py --host "$PRIMARY" --porta "$HTTPS_PORT" \
+          --out "$REALM_RESO"
+  rc=$?
+  set -e
+  case "$rc" in
+    0) export REALM_FILE="./$REALM_RESO" ;;
+    3) : ;;                       #: già coperto: si monta il committato
+    *) echo "✖ non so insegnare \`$PRIMARY\` al realm di Keycloak." >&2
+       echo "  Caddy servirebbe quel nome e il login morirebbe con «Invalid" >&2
+       echo "  parameter: redirect_uri» DOPO che tutto il resto ha funzionato," >&2
+       echo "  che è il modo peggiore di fallire. Mi fermo qui." >&2
+       exit 1 ;;
+  esac
+fi
+
 # ── 4-zero · IL FILE CHE CHI CLONA NON HA ────────────────────────────────────
 #
 # `.env.dev` è in `.gitignore` (contiene i valori riempiti) e `.env.dev.example`
@@ -113,8 +151,57 @@ sg_compose_array || exit 1
 COMPOSE+=(--env-file .env.dev -f docker-compose.dev.yml)
 if [ "$LOCAL_S3D" = "yes" ]; then
   COMPOSE+=(-f docker-compose.local-s3d.yml)
+  #: E QUESTO È UN BIND MOUNT, NON UN `context:` — quindi il controllo dei
+  #: fratelli qui sotto NON lo vede, perché `config` non lo elenca fra i
+  #: contesti. Misurato l'8 settembre 2026: con la sorgente assente il mount
+  #: RIESCE e monta una cartella VUOTA, il container parte sano, e
+  #: `PYTHONPATH=/s3dgraphy-src` ricade sul wheel installato. Cioè
+  #: `--local-s3d` non fa NIENTE, in silenzio: si edita s3Dgraphy, si riavvia,
+  #: e non cambia niente. È la forma «funziona quasi», che costa ore.
+  if [ ! -d ../../s3Dgraphy/src ]; then
+    echo "✖ --local-s3d, ma \`../../s3Dgraphy/src\` non c'è." >&2
+    echo "  Non è un \`context:\`, è un bind mount: docker monterebbe una" >&2
+    echo "  cartella VUOTA, i container partirebbero sani e PYTHONPATH" >&2
+    echo "  ricadrebbe sul wheel — cioè --local-s3d non farebbe niente, e" >&2
+    echo "  senza dirlo." >&2
+    echo >&2
+    echo "      ./fcn-install.sh --local-s3d      (lo clona)" >&2
+    exit 1
+  fi
   echo "▶ modo s3Dgraphy LOCALE: StratiGraph Server/StratiGraph Catalog useranno ../../s3Dgraphy/src (edita e riavvia per testare)."
 fi
+# ── 4-bis · I FRATELLI, PRIMA DEI PULL ───────────────────────────────────────
+#
+# `fcn-install.sh` è il posto dove questo si prepara, ma `fcn-up.sh` è quello
+# che la gente lancia — è il comando che sta nel README e nell'aiuto. Su un
+# clone del solo `stratigraph-server`, misurato sul Pi il 7 settembre 2026:
+#
+#     unable to prepare context: path "/home/paul/stratigraph-chatbot" not found
+#
+# e quel messaggio è comparso DOPO cinque immagini scaricate. Il controllo costa
+# un `test -d` per repository e va fatto qui, non solo nell'installer: un
+# controllo che esiste solo sulla strada documentata protegge la strada
+# documentata.
+#
+# I percorsi li chiede al compose — un solo posto che li sa, e sono già
+# assoluti.
+mancanti=""
+for ctx in $("${COMPOSE[@]}" config 2>/dev/null              | sed -n 's/^[[:space:]]*context:[[:space:]]*//p' | sort -u); do
+  [ -d "$ctx" ] || mancanti="$mancanti $ctx"
+done
+if [ -n "$mancanti" ]; then
+  echo "✖ il compose costruisce da repository affiancati che non ci sono:" >&2
+  for m in $mancanti; do echo "     $m" >&2; done
+  echo >&2
+  echo "  Non comincio a scaricare immagini: sul Pi lo stesso guaio è comparso" >&2
+  echo "  dopo cinque pull, cioè dopo tutto il lavoro che rendeva inutile." >&2
+  echo >&2
+  echo "      ./fcn-install.sh$( [ "$LOCAL_S3D" = "yes" ] && echo " --local-s3d" )" >&2
+  echo >&2
+  echo "  li clona (gli indirizzi stanno in \`x-sibling-repos\`, nel compose)." >&2
+  exit 1
+fi
+
 "${COMPOSE[@]}" --profile https up -d --build
 
 # ── 4-bis · --demo: aspetta, poi popola ──────────────────────────────────────
@@ -166,7 +253,40 @@ cat <<EOF
   Console del nodo:     https://${PRIMARY}:${HTTPS_PORT}/em/admin/
   Catalogo:             https://${PRIMARY}:${HTTPS_PORT}/catalog/ui/
   Assistente di campo:  https://${PRIMARY}:${HTTPS_PORT}/chat/
-$( [ -n "$BONJOUR" ] && [ "$BONJOUR" != "$PRIMARY" ] && echo "  Per l'ALTRO computer: https://${BONJOUR}:${HTTPS_PORT}/em/v1/health   (via Bonjour/mDNS)" )
+$( # ── PER L'ALTRO COMPUTER: PROVATO, NON PROMESSO ─────────────────────────
+   #
+   # Misurato il 7 settembre 2026: avahi è attivo sul Pi e PUBBLICA, e da un Mac
+   # sulla stessa LAN `ping fcn.local` risponde `cannot resolve`. La causa non è
+   # il Pi: è l'access point che non propaga il multicast fra i client, che sugli
+   # AP di consumo è la norma. Quindi quella riga era un indirizzo che non
+   # funziona, stampato come se funzionasse — la stessa forma del `curl` senza
+   # `-f`.
+   #
+   # Adesso si prova, e si dice COSA si è trovato. E si dice anche il limite
+   # della sonda, che è il punto: da qui si può misurare solo che QUESTA macchina
+   # risolve il nome. Che lo risolva l'altra è la cosa che serve e che da qui non
+   # si vede.
+   if [ -n "$BONJOUR" ] && [ "$BONJOUR" != "$PRIMARY" ]; then
+     esito="$(sg_reaches "https://${BONJOUR}:${HTTPS_PORT}/em/v1/health" 4)"
+     if [ "$esito" = "si" ]; then
+       echo "  Per l'ALTRO computer: https://${BONJOUR}:${HTTPS_PORT}/em/v1/health"
+       echo "      ✔ questo nome risponde DA QUI. Che risponda dall'altra macchina"
+       echo "        dipende dal multicast fra i client del vostro access point,"
+       echo "        e molti AP di consumo non lo propagano: da qui non lo vedo."
+     else
+       echo "  Per l'ALTRO computer: ⚠ \`${BONJOUR}\` NON risponde nemmeno da qui"
+       echo "      ($([ "$esito" = "nome" ] && echo "il nome non si risolve" || echo "si risolve ma non risponde")) — non lo stampo come indirizzo buono."
+       ip="$(sg_lan_ip)"
+       if [ -n "$ip" ]; then
+         echo "      Il ripiego è insegnare il nome all'ALTRA macchina, UNA riga:"
+         echo "          $ip  ${BONJOUR}      → nel suo /etc/hosts"
+         echo "        (su Windows: C:\\Windows\\System32\\drivers\\etc\\hosts)"
+         echo "      E poi https://${BONJOUR}:${HTTPS_PORT}/em/v1/health da lì."
+         echo "      NON l'IP nudo: la CA interna di Caddy non firma per un IP,"
+         echo "      quindi il nome serve comunque — si insegna, non si aggira."
+       fi
+     fi
+   fi )
 
 Note:
   · la ROOT (/) è un cartello: elenca le rotte vere. Tutto il resto dà 404 (e non

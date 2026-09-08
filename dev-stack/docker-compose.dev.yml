@@ -35,6 +35,36 @@ name: em-dev
 # may still override it for a deliberate experiment; what it cannot do is drift.
 x-s3dgraphy-version: &s3dgraphy_version "${S3DGRAPHY_VERSION:-1.6.0.dev17}"
 
+# ══════════════════════════════════════════════════════════════════════════════
+# I REPOSITORY FRATELLI — dove stanno, e questo è l'unico posto che lo dice.
+#
+# Le voci `context:` qui sotto sono la verità su QUALI cartelle servono: sono
+# quelle che docker cerca, e `docker compose config` le stampa già risolte in
+# percorsi assoluti. Quello che il compose NON può contenere è da dove si
+# clonano — e `fcn-install.sh` lo legge da qui.
+#
+# Perché non si derivano dal `git remote` di stratigraph-server: misurato, i tre
+# repository stanno su DUE organizzazioni diverse
+# (`zalmoxes-laran` e `StratiGraph-ECCCH`), quindi sostituire il nome nel remote
+# darebbe un URL sbagliato per uno dei tre.
+#
+# Perché stanno QUI e non in un file dell'installer: perché una seconda lista
+# sarebbe la copia da tenere allineata. Così c'è UN file, e il cancello in
+# `tests/test_un_nodo_che_si_accende_altrove.py` diventa rosso se un
+# `context:` nuovo non ha il suo URL — cioè aggiungere un servizio che
+# costruisce da un fratello nuovo e scordarsi l'indirizzo non è un silenzio.
+#
+# La chiave è il NOME DELLA CARTELLA, che è il basename del `context:`.
+x-sibling-repos:
+  stratigraph-server: https://github.com/zalmoxes-laran/stratigraph-server.git
+  stratigraph-chatbot: https://github.com/StratiGraph-ECCCH/stratigraph-chatbot.git
+  stratigraph-catalog: https://github.com/zalmoxes-laran/stratigraph-catalog.git
+  # s3Dgraphy non ha un `context:`: serve solo con `--local-s3d`, che lo monta
+  # come volume (`docker-compose.local-s3d.yml`). L'installer lo clona solo se
+  # gli si chiede quel modo.
+  s3Dgraphy: https://github.com/zalmoxes-laran/s3Dgraphy.git
+
+
 services:
   # =======================================================================
   # OBJECT STORE — where the assets actually live (content-addressed)
@@ -231,6 +261,26 @@ services:
     image: caddy:2-alpine
     container_name: em-dev-caddy
     profiles: ["https"]
+    # ── IL NOME DELL'HOST, DICHIARATO INVECE DI SPERATO ───────────────────────
+    #
+    # `Caddyfile.dev` manda `/em/studio/*` e `/em/read/*` a
+    # `host.docker.internal:5173`, il dev server Vite di EMStudio, che gira
+    # sull'HOST. Misurato il 7 settembre 2026 sul Pi (Debian 12, Docker Engine
+    # nativo):
+    #
+    #     docker exec em-dev-caddy getent hosts host.docker.internal
+    #       → non risolve
+    #
+    # Su macOS quel nome lo forniscono Docker Desktop e Colima (qui risolve a
+    # 192.168.5.2, misurato); su Linux nativo NON esiste se non lo si dichiara.
+    # Quindi quelle due rotte, sul Pi, restavano 502 anche accendendo Vite: la
+    # rotta non poteva risolvere il suo destinatario, e il 502 era la risposta
+    # giusta alla domanda sbagliata.
+    #
+    # Una riga, e innocua dove il nome c'è già: `host-gateway` è la forma che
+    # Docker traduce nell'indirizzo dell'host su ogni piattaforma.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - stratigraph-server
       - cantaloupe
@@ -318,7 +368,15 @@ services:
       # frontend url.
       - "127.0.0.1:${KEYCLOAK_PORT:-8085}:8080"
     volumes:
-      - ./keycloak/realm-em-dev.json:/opt/keycloak/data/import/realm-em-dev.json:ro
+      # IL REALM CHE IMPARA IL NOME. Il default è il file committato, byte per
+      # byte come prima: `./fcn-up.sh` senza argomenti monta esattamente quello.
+      #
+      # Con un host primario (`./fcn-up.sh fcn.local`) `fcn-up.sh` rende un
+      # realm con le redirect URI per QUEL nome e punta qui — perché altrimenti
+      # Caddy impara il nome e il realm no, e il login muore con «Invalid
+      # parameter: redirect_uri» dopo che TLS, CA e Keycloak hanno funzionato.
+      # Misurato sul Pi il 7 settembre 2026.
+      - ${REALM_FILE:-./keycloak/realm-em-dev.json}:/opt/keycloak/data/import/realm-em-dev.json:ro
     healthcheck:
       # Keycloak 24 has no curl in the image; this is the shell's own /dev/tcp
       test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 && echo -e 'GET /auth/realms/em-dev HTTP/1.1\\nHost: localhost\\nConnection: close\\n\\n' >&3 && cat <&3 | head -1 | grep -q '200'"]
